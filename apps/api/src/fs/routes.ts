@@ -5,13 +5,11 @@ import {
   DownloadQuery,
   EntryResponse,
   type FsEntry,
-  FsEvent,
   ListResponse,
   MkdirRequest,
   MODIFIED_AT_HEADER,
   MoveManyRequest,
   MoveManyResponse,
-  type MoveManyResult,
   MoveRequest,
   OkResponse,
   PathQuery,
@@ -25,40 +23,32 @@ import {
   type CoreError,
   changeBaseName,
   contentDisposition,
+  type EntryStat,
   extensionOf,
   type FileEntry,
   isInlinePreviewable,
+  isReservedPath,
   isStorageError,
-  isUnderPath,
   mimeFromExtension,
   normalizePath,
-  parentPath,
-  parseRangeHeader,
   type StorageError,
   type StorageProvider,
 } from "@fdrive/core";
 import type { Context } from "hono";
 import type { z } from "zod";
-import {
-  type ActivityCallContext,
-  activityRequestContext,
-  recordActivity,
-  recordFsAction,
-} from "../activity/fs-context.js";
-import { activityStat, type PersonalActivityService } from "../activity/service.js";
+import { activityHeaders, activityRequestContext } from "../activity/fs-context.js";
+import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
-import { deleteWithActivityReceipt } from "../activity/trash.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
-import type { Principal, PrincipalVariables } from "../auth/principal.js";
+import type { PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
-import { DESKTOP_INTERNAL_ROOT } from "../desktop/internal-root.js";
 import { ApiHttpError } from "../errors.js";
-import type { EventBus } from "../events/bus.js";
+import { type FileOperations, fileActor, moveMany } from "../files/operations.js";
 import type { JobRunner } from "../jobs/runner.js";
 import type { MetadataService } from "../metadata/service.js";
 import { registerArchiveRoutes } from "./archive-routes.js";
 import { type FolderSizeRoutesDeps, registerFolderSizeRoutes } from "./folder-size.js";
-import { relocatePath, requireUnoccupiedTarget } from "./mutations.js";
+import { sendFile } from "./send-file.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -68,31 +58,18 @@ function routePath(fullPath: string): string {
 }
 
 export interface FsRoutesDeps {
-  /** Compares a complete authorized listing against tracked history. */
-  readonly activityObservations?: import("../activity/observations.js").ActivityObservations;
   /** Absent in fixtures that do not exercise personal history; every route works without it. */
   readonly activity?: PersonalActivityService;
-  readonly bus: EventBus;
-  readonly clock: () => Date;
+  /** Every change these routes make to files, and what follows it. */
+  readonly files: FileOperations;
   readonly jobRunner: JobRunner;
-  /** Directory archive jobs spool temp files into. */
-  readonly tmpDir: string;
   /** Total bytes a single extract job may read before it fails. */
   readonly jobMaxBytes: number;
   /**
-   * Decorates `fs/list` and `fs/stat` entries with tag/favorite metadata and keeps tag,
-   * favorite, and recent rows in sync with moves, renames, and deletes made
-   * through these routes. Optional so route tests that do not exercise
-   * metadata can omit it; `composition.ts` always wires the real service.
+   * Decorates `fs/list` and `fs/stat` entries with tag and favorite
+   * metadata. Optional so route tests that do not exercise it can omit it.
    */
-  readonly metadata?: MetadataService;
-  /**
-   * The storage provider's recycle folder virtual path, when configured
-   * Used to hide the provider-bound trash folder itself from `fs/list` and
-   * to route deletes made while a trash
-   * is available through `metadata.onTrashed` instead of `onDeleted`.
-   */
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
+  readonly metadata?: Pick<MetadataService, "decorate">;
   /**
    * Cap on a JSON request body's bytes, passed to `parseBody` for every
    * route this function registers (zip, mkdir, move, copy, rename,
@@ -107,7 +84,7 @@ export interface FsRoutesDeps {
 
 export type FsContext = Context<{ Variables: AppVariables & PrincipalVariables }>;
 
-function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
+export function parseQuery<T>(schema: z.ZodType<T>, query: Record<string, string | undefined>): T {
   const result = schema.safeParse(query);
   if (!result.success) {
     throw new ApiHttpError("bad_request", "invalid query", { issues: result.error.issues });
@@ -180,10 +157,9 @@ export function normalizeOrThrow(path: string): string {
   }
 }
 
-/** Maps a `StorageError` to the `ApiHttpError` of the matching kind ("unauthorized" becomes "reauth_required"). */
+/** Maps a `StorageError` to the `ApiHttpError` of the same kind. */
 export function toApiHttpError(error: StorageError): ApiHttpError {
-  const kind = error.kind === "unauthorized" ? "reauth_required" : error.kind;
-  return new ApiHttpError(kind, error.message, error.details);
+  return new ApiHttpError(error.kind, error.message, error.details);
 }
 
 /** Runs `fn`, mapping any `StorageError` it throws into the matching `ApiHttpError`. */
@@ -198,25 +174,10 @@ export async function runStorageCall<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-/**
- * Ensures nothing already exists at `target` before move, copy, or rename
- * ask the storage provider to relocate something there. The storage port
- * lets move and copy replace an occupied target unless told not to (the
- * local folder's copy does), and a route that let that happen would
- * silently destroy whatever used to be at `target`, so it checks first with
- * `statFile` instead, mirroring the same check `@fdrive/core`'s trash
- * restore relies on (see
- * `packages/core/src/trash/recycle-folder-trash.ts`).
- *
- * `statFile` succeeding means a file is already there: conflict. A
- * directory is reported as `StorageError("bad_request")` by every
- * `StorageProvider` implementation: also a conflict. `"not_found"` means
- * the target is free. Any other storage error is mapped through
- * `toApiHttpError` like every other storage call; anything that is not a
- * `StorageError` propagates unchanged.
- */
-export async function requireTargetFree(storage: StorageProvider, target: string): Promise<void> {
-  await runStorageCall(() => requireUnoccupiedTarget(storage, target));
+/** A header's value as a finite number, or `undefined` when absent or not one. */
+function finiteHeader(value: string | undefined): number | undefined {
+  const number = Number(value);
+  return value === undefined || !Number.isFinite(number) ? undefined : number;
 }
 
 export function serializeEntry(entry: FileEntry): FsEntry {
@@ -236,395 +197,46 @@ export function serializeEntry(entry: FileEntry): FsEntry {
  * spells it: a disk that ignores case or accent encoding (macOS) also finds
  * other spellings, and listings show the stored one.
  */
-export async function statEntry(storage: StorageProvider, path: string): Promise<FileEntry> {
-  const stat = await runStorageCall(() => storage.stat(path));
-  const stored = stat.path ?? path;
-  const name = baseName(stored);
-  return {
-    name,
-    path: stored,
-    kind: stat.kind,
-    size: stat.size,
-    modifiedAt: stat.modifiedAt ?? new Date(0),
-    ext: stat.kind === "dir" ? "" : extensionOf(name),
-  };
-}
-
-export function publishFsEvent(
-  deps: Pick<FsRoutesDeps, "bus" | "clock">,
-  principal: Principal,
-  op: FsEvent["op"],
-  paths: string[],
-  targetPaths?: string[],
-): void {
-  const event: FsEvent = FsEvent.parse({
-    type: "fs",
-    op,
-    identityId: principal.identityId,
-    paths,
-    at: deps.clock().toISOString(),
-    ...(targetPaths !== undefined ? { targetPaths } : {}),
-  });
-  deps.bus.publish(event);
-}
-
-interface DownloadCallOpts {
-  range?: { start: number; end?: number };
-  signal?: AbortSignal;
-  ifRange?: string;
-}
-
-function buildDownloadOpts(
-  ifRangeHeader: string | undefined,
-  signal: AbortSignal,
-  range?: { start: number; end?: number },
-): DownloadCallOpts {
-  const opts: DownloadCallOpts = { signal };
-  if (ifRangeHeader !== undefined) {
-    opts.ifRange = ifRangeHeader;
-  }
-  if (range !== undefined) {
-    opts.range = range;
-  }
-  return opts;
-}
-
-type DownloadResult = Awaited<ReturnType<StorageProvider["download"]>>;
-
-type DownloadOutcome =
-  | { kind: "stream"; result: DownloadResult }
-  | { kind: "range-not-satisfiable"; size: number | null };
-
-/**
- * Resolves a `GET/HEAD /fs/download` request into either a stream to
- * return, or a "range not satisfiable" outcome (416). When a `Range`
- * header is present, opportunistically stats the file first to know its
- * size (used to validate the range and, on an invalid range, to report it
- * in the 416's `Content-Range`); a failed stat here is not surfaced, since
- * the subsequent `download` call below will raise the real error itself.
- */
-async function resolveDownload(
-  storage: StorageProvider,
-  path: string,
-  rangeHeader: string | null,
-  ifRangeHeader: string | undefined,
-  signal: AbortSignal,
-): Promise<DownloadOutcome> {
-  if (rangeHeader === null) {
-    const result = await runStorageCall(() =>
-      storage.download(path, buildDownloadOpts(ifRangeHeader, signal)),
-    );
-    return { kind: "stream", result };
-  }
-
-  let knownSize: number | null = null;
-  try {
-    knownSize = (await storage.statFile(path)).size;
-  } catch {
-    knownSize = null;
-  }
-
-  const parsed = parseRangeHeader(rangeHeader, knownSize);
-  if (parsed.kind === "invalid") {
-    return { kind: "range-not-satisfiable", size: knownSize };
-  }
-  if (parsed.kind === "multiple") {
-    const result = await runStorageCall(() => storage.download(path, { signal }));
-    return { kind: "stream", result };
-  }
-
-  // `rangeHeader` is non-null here, so `parseRangeHeader` cannot have
-  // returned its "none" variant (that only happens for a null header), and
-  // the unsupported multi-range case returned the complete response above.
-  const single = parsed as Extract<typeof parsed, { kind: "single" }>;
-  const range =
-    single.end !== undefined ? { start: single.start, end: single.end } : { start: single.start };
-  const result = await runStorageCall(() =>
-    storage.download(path, buildDownloadOpts(ifRangeHeader, signal, range)),
-  );
-  return { kind: "stream", result };
+export function statEntry(storage: StorageProvider, path: string): Promise<EntryStat> {
+  return runStorageCall(() => storage.stat(path));
 }
 
 async function handleDownload(c: FsContext, deps: FsRoutesDeps): Promise<Response> {
   const principal = c.get("principal");
   const query = parseQuery(DownloadQuery, c.req.query());
   const path = normalizeOrThrow(query.path);
-  const rangeHeader = c.req.header("range") ?? null;
-  const ifRangeHeader = c.req.header("if-range");
-
-  const outcome = await resolveDownload(
-    principal.storage,
-    path,
-    rangeHeader,
-    ifRangeHeader,
-    c.req.raw.signal,
-  );
-
-  if (outcome.kind === "range-not-satisfiable") {
-    const headers: Record<string, string> =
-      outcome.size !== null ? { "Content-Range": `bytes */${outcome.size}` } : {};
-    return c.body(null, 416, headers);
-  }
-
-  const result = outcome.result;
-  const mime =
-    result.contentType ??
-    mimeFromExtension(extensionOf(baseName(path))) ??
-    "application/octet-stream";
+  const file = await runStorageCall(() => principal.storage.open(path));
+  const mime = mimeFromExtension(extensionOf(baseName(path))) ?? "application/octet-stream";
   const inline = query.inline === "1" && isInlinePreviewable(mime);
-  const disposition = contentDisposition(inline ? "inline" : "attachment", baseName(path));
-
-  const headers: Record<string, string> = {
+  const headers = {
     "Content-Type": mime,
-    "Accept-Ranges": "bytes",
     "Cache-Control": "private, no-store",
-    "Content-Disposition": disposition,
+    "Content-Disposition": contentDisposition(inline ? "inline" : "attachment", baseName(path)),
     "Content-Security-Policy": "sandbox",
   };
-  if (result.contentLength !== null) {
-    headers["Content-Length"] = String(result.contentLength);
-  }
-  if (result.contentRange !== null) {
-    headers["Content-Range"] = result.contentRange;
-  }
-  if (result.lastModified !== null) {
-    headers["Last-Modified"] = result.lastModified.toUTCString();
-  }
-
-  if (c.req.method === "HEAD") {
-    await result.body.cancel();
-    return c.body(null, result.status, headers);
-  }
-
   // Inline bytes back a preview the browser decides to fetch; the explicit
   // preview gesture is reported separately. Anything served as an attachment
   // is bytes the person asked for, and only reaching EOF proves they were
   // delivered.
+  if (inline) return sendFile(c.req.raw, file, headers);
   const context = activityRequestContext(c);
-  const body = inline
-    ? result.body
-    : await activityStream(deps.activity, principal, path, "file.download", result.body, {
+  return sendFile(c.req.raw, file, headers, {
+    body: (bytes, sent) =>
+      activityStream(deps.activity, principal, path, "file.download", bytes, {
         ...(context.producerOperationId ? { requestId: context.producerOperationId } : {}),
         source: context.source === "api" ? "api" : "web",
-        partial: result.status === 206,
-        expectedBytes: result.contentLength,
-      });
-  return c.body(body, result.status, headers);
+        partial: sent.partial,
+        expectedBytes: sent.length,
+      }),
+  });
 }
 
 /**
  * Registers every `/fs/*` route (list, stat, download, zip, upload, mkdir,
- * move, copy, rename, delete) on the authed group, using `ROUTES.fs.*`
- * (minus the `/api/v1` prefix, since `authed` is already mounted there).
+ * move, move-many, copy, rename, delete) on the authed group, using
+ * `ROUTES.fs.*` (minus the `/api/v1` prefix, since `authed` is already
+ * mounted there). Every change to files goes through `deps.files`.
  */
-/**
- * Moves items in order, continuing past failures, never overwriting, and
- * reports each outcome. Used by `POST /fs/move-many` and by AI chat when a
- * move or rename card is applied; a rename card passes `file.rename` so the
- * activity reads as one. With `createParents`, missing target folders are
- * created after the source was checked, so a move that cannot happen leaves
- * no empty folder behind.
- */
-export async function moveMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity">,
-  principal: Principal,
-  body: MoveManyRequest,
-  context: ActivityCallContext = { source: "api" },
-  action: "file.move" | "file.rename" = "file.move",
-): Promise<MoveManyResult[]> {
-  const results: MoveManyResult[] = [];
-  const batchId = context.batchId ?? randomUUID();
-  const operationBase = context.producerOperationId ?? randomUUID();
-  const provenance = context.conversationId ? { conversationId: context.conversationId } : {};
-  const moved: { path: string; target: string }[] = [];
-  const created: string[] = [];
-  const readyParents = new Set<string>();
-
-  /** Creates the target's missing parent folders, recording each one so every listing above them refreshes. */
-  async function ensureParent(target: string): Promise<void> {
-    const parent = parentPath(target);
-    const missing: string[] = [];
-    for (let folder = parent; folder !== "/" && !readyParents.has(folder); ) {
-      try {
-        await principal.storage.stat(folder);
-        break;
-      } catch (error) {
-        if (!isStorageError(error) || error.kind !== "not_found") throw error;
-        missing.unshift(folder);
-        folder = parentPath(folder);
-      }
-    }
-    if (missing.length > 0) {
-      await principal.storage.mkdir(parent, { parents: true });
-      created.push(...missing);
-    }
-    for (let folder = parent; folder !== "/"; folder = parentPath(folder)) readyParents.add(folder);
-  }
-
-  try {
-    for (const item of body.items) {
-      try {
-        const path = normalizeOrThrow(item.path);
-        const target = normalizeOrThrow(item.target);
-        // Check the source first, so a move that cannot happen leaves no new empty folder behind.
-        const source = await runStorageCall(() => principal.storage.stat(path));
-        const kind = source.kind === "dir" ? "dir" : "file";
-        await recordActivity(
-          deps.activity,
-          principal,
-          {
-            ...context,
-            producerOperationId: `${operationBase}:${results.length}`,
-            batchId,
-            action,
-            requested: { path, targetPath: target, ...provenance },
-            before: {
-              path,
-              kind,
-              ...(source.size === undefined ? {} : { size: source.size }),
-            },
-          },
-          async () => {
-            if (body.createParents === true && path !== target && !isUnderPath(path, target))
-              await runStorageCall(() => ensureParent(target));
-            await runStorageCall(() => relocatePath(principal.storage, "move", path, target));
-          },
-          () => ({ path: target, kind }),
-        );
-        moved.push({ path, target });
-        try {
-          await deps.metadata?.onMoved(principal.identityId, path, target, source.kind === "dir");
-          results.push({ ok: true, path, target });
-        } catch {
-          results.push({
-            ok: true,
-            path,
-            target,
-            warning: "Moved, but its tags, favorite or recent entry could not follow it.",
-          });
-        }
-      } catch (error) {
-        // Every storage call above goes through `runStorageCall`, so item failures arrive as `ApiHttpError`s.
-        if (!(error instanceof ApiHttpError)) throw error;
-        results.push({
-          ok: false,
-          path: item.path,
-          target: item.target,
-          error: { kind: error.kind, message: error.message },
-        });
-      }
-    }
-  } finally {
-    if (created.length > 0) publishFsEvent(deps, principal, "mkdir", created);
-    if (moved.length > 0)
-      publishFsEvent(
-        deps,
-        principal,
-        "move",
-        moved.map((entry) => entry.path),
-        moved.map((entry) => entry.target),
-      );
-  }
-  return results;
-}
-
-/**
- * Deletes one item and records it as a trash or a real delete, whichever the
- * login's storage actually performs. Deletes of the same path are serialized so
- * two callers cannot claim the same new trash leaf.
- */
-async function removeOne(
-  deps: Pick<FsRoutesDeps, "activity" | "trashPathForStorage">,
-  principal: Principal,
-  item: { path: string; kind: "file" | "dir" },
-  context: ActivityCallContext,
-  operation: { operationId: string; batchId: string },
-): Promise<void> {
-  const trashRoot = deps.trashPathForStorage?.(principal.storage) ?? null;
-  const insideTrash =
-    trashRoot !== null && (item.path === trashRoot || isUnderPath(trashRoot, item.path));
-  const trashing = principal.storage.trash !== undefined && !insideTrash;
-  const remove = () =>
-    recordActivity(
-      deps.activity,
-      principal,
-      {
-        ...context,
-        producerOperationId: operation.operationId,
-        batchId: operation.batchId,
-        action: trashing ? "file.trash" : "file.delete",
-        requested: {
-          path: item.path,
-          kind: item.kind,
-          ...(context.conversationId ? { conversationId: context.conversationId } : {}),
-        },
-        before: { path: item.path, kind: item.kind },
-      },
-      () => deleteWithActivityReceipt(principal.storage, item.path, item.kind),
-      (facts) => facts,
-    );
-  if (!deps.activity) {
-    await remove();
-    return;
-  }
-  await deps.activity.repo.withPathLock(principal.identityId, item.path, remove);
-}
-
-export interface TrashManyResult {
-  readonly path: string;
-  readonly ok: boolean;
-  readonly error?: { kind: string; message: string };
-}
-
-/**
- * Deletes items one by one, continuing past failures. Where the login's
- * storage has Trash, the deletes are recoverable and only recents are
- * dropped; otherwise every path-keyed metadata row goes with the item.
- */
-export async function trashMany(
-  deps: Pick<FsRoutesDeps, "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage">,
-  principal: Principal,
-  items: readonly { path: string; kind: "file" | "dir" }[],
-  context: ActivityCallContext = { source: "api" },
-): Promise<TrashManyResult[]> {
-  const results: TrashManyResult[] = [];
-  const removed: string[] = [];
-  const batchId = context.batchId ?? randomUUID();
-  const operationBase = context.producerOperationId ?? randomUUID();
-  try {
-    for (const item of items) {
-      try {
-        const path = normalizeOrThrow(item.path);
-        await runStorageCall(() =>
-          removeOne(deps, principal, { path, kind: item.kind }, context, {
-            operationId: `${operationBase}:${results.length}`,
-            batchId,
-          }),
-        );
-        removed.push(path);
-        try {
-          if (principal.storage.trash !== undefined)
-            await deps.metadata?.onTrashed(principal.identityId, path, item.kind === "dir");
-          else await deps.metadata?.onDeleted(principal.identityId, path, item.kind === "dir");
-        } catch {
-          // The item is gone either way; stale metadata is repaired by the next listing.
-        }
-        results.push({ path, ok: true });
-      } catch (error) {
-        if (!(error instanceof ApiHttpError)) throw error;
-        results.push({
-          path: item.path,
-          ok: false,
-          error: { kind: error.kind, message: error.message },
-        });
-      }
-    }
-  } finally {
-    if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
-  }
-  return results;
-}
-
 export function registerFsRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: FsRoutesDeps,
@@ -637,19 +249,9 @@ export function registerFsRoutes(
     const query = parseQuery(PathQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
     const entries = await runStorageCall(() => principal.storage.list(path));
-    // A complete authorized listing is a refresh input for changes made
-    // outside fdrive. It suggests differences; only a live check can
-    // establish one.
-    // Comparison runs beside the response: it probes the provider, and a
-    // listing is not worth slowing down to notice an outside change sooner.
-    void deps.activityObservations?.refresh(principal, path, entries);
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
-    // The provider-bound trash folder and the Mac app's bookkeeping namespace are fdrive's own;
-    // neither is a user folder, so the tree does not show them.
-    const visible = entries.filter((entry) => {
-      const entryPath = normalizeOrThrow(entry.path);
-      return entryPath !== trashPath && entryPath !== DESKTOP_INTERNAL_ROOT;
-    });
+    // fdrive's own folders (the Trash, the Mac app's folder) are not the
+    // user's, so the tree does not show them.
+    const visible = entries.filter((entry) => !isReservedPath(entry.path));
     const serialized = visible.map(serializeEntry);
     const decorated =
       deps.metadata !== undefined
@@ -680,13 +282,9 @@ export function registerFsRoutes(
     const principal = c.get("principal");
     const body = await parseBody(ZipRequest, c, jsonMaxBytes);
     const paths = body.paths.map((p) => normalizeOrThrow(p));
-    const zip = principal.storage.zip;
-    if (zip === undefined) {
-      throw new ApiHttpError("unsupported", "this storage cannot build zip archives", {
-        capability: "zip",
-      });
-    }
-    const stream = await runStorageCall(() => zip(paths, { signal: c.req.raw.signal }));
+    const stream = await runStorageCall(() =>
+      principal.storage.zip(paths, { signal: c.req.raw.signal }),
+    );
     // `ZipRequest.paths` has `.min(1)`, so `paths[0]` always exists here.
     const firstPath = paths[0] as string;
     const derivedName = baseName(firstPath);
@@ -715,113 +313,74 @@ export function registerFsRoutes(
     const query = parseQuery(UploadQuery, c.req.query());
     const path = normalizeOrThrow(query.path);
 
-    const uploadOpts: {
-      mkdirParents?: boolean;
-      modifiedAt?: Date;
-      contentLength?: number;
-      signal?: AbortSignal;
-    } = { signal: c.req.raw.signal };
-    if (query.mkdirParents !== undefined) {
-      uploadOpts.mkdirParents = query.mkdirParents === "true";
+    // The browser asks before an upload replaces a file (its conflict
+    // dialog) and saves over the file it opened; only a new file must not
+    // take a name that is already there.
+    const overwrite = query.intent !== "create";
+    const signal = c.req.raw.signal;
+    const body = c.req.raw.body ?? new Uint8Array();
+    const contentLength = finiteHeader(c.req.header("content-length"));
+    const sized = contentLength === undefined ? {} : { contentLength };
+    const actor = fileActor(principal, activityRequestContext(c));
+    const part =
+      query.part === undefined ? undefined : { id: query.part, offset: Number(query.offset ?? 0) };
+    // A piece before the last only grows the upload's part; the last one
+    // publishes the file as one upload, recorded and announced once.
+    if (part !== undefined && query.final !== "true") {
+      await runStorageCall(() =>
+        deps.files.uploadPart(actor, path, body, { part, overwrite, signal, ...sized }),
+      );
+      return c.body(null, 204);
     }
-    const modifiedAtHeader = c.req.header(MODIFIED_AT_HEADER);
-    if (modifiedAtHeader !== undefined) {
-      const modifiedAtMs = Number(modifiedAtHeader);
-      if (Number.isFinite(modifiedAtMs)) {
-        uploadOpts.modifiedAt = new Date(modifiedAtMs);
-      }
-    }
-    const contentLengthHeader = c.req.header("content-length");
-    if (contentLengthHeader !== undefined) {
-      const contentLength = Number(contentLengthHeader);
-      if (Number.isFinite(contentLength)) {
-        uploadOpts.contentLength = contentLength;
-      }
-    }
-
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
+    const modifiedAtMs = finiteHeader(c.req.header(MODIFIED_AT_HEADER));
+    const done = await runStorageCall(() =>
+      deps.files.upload(actor, path, body, {
         action: `file.${query.intent ?? "upload"}`,
-        requested: { path, kind: "file" },
-        ...(before ? { before } : {}),
-      },
-      () =>
-        runStorageCall(() =>
-          principal.storage.upload(path, c.req.raw.body ?? new Uint8Array(), uploadOpts),
-        ),
-      async () =>
-        (await activityStat(principal.storage, path)) ?? {
-          path,
-          kind: "file",
-          ...(uploadOpts.contentLength === undefined ? {} : { size: uploadOpts.contentLength }),
-          ...(uploadOpts.modifiedAt ? { modifiedAt: uploadOpts.modifiedAt.toISOString() } : {}),
-        },
+        overwrite,
+        signal,
+        ...sized,
+        ...(part === undefined ? {} : { part }),
+        ...(query.mkdirParents === undefined
+          ? {}
+          : { mkdirParents: query.mkdirParents === "true" }),
+        ...(modifiedAtMs === undefined ? {} : { modifiedAt: new Date(modifiedAtMs) }),
+      }),
     );
-
-    publishFsEvent(deps, principal, "create", [path]);
-    // The provider accepted the bytes even when the follow-up stat fails, and
-    // repeating the upload would overwrite a file that is already committed.
-    let body: EntryResponse;
-    try {
-      body = EntryResponse.parse(serializeEntry(await statEntry(principal.storage, path)));
-    } catch {
-      body = EntryResponse.parse({
-        name: baseName(path),
-        path,
-        kind: "file",
-        size: uploadOpts.contentLength ?? 0,
-        modifiedAt: (uploadOpts.modifiedAt ?? new Date(0)).toISOString(),
-        ext: extensionOf(baseName(path)),
-        mime: null,
-        metadataPending: true,
-      });
-    }
-    return c.json(body, 201);
+    activityHeaders(c, done.history);
+    return c.json(EntryResponse.parse(serializeEntry(done.entry)), 201);
   });
 
   authed.post(routePath(ROUTES.fs.mkdir), async (c) => {
     const principal = c.get("principal");
     const body = await parseBody(MkdirRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
-    await recordFsAction(
-      deps.activity,
-      c,
-      { action: "folder.create", requested: { path, kind: "dir" } },
-      () => runStorageCall(() => principal.storage.mkdir(path)),
+    const done = await runStorageCall(() =>
+      deps.files.mkdir(fileActor(principal, activityRequestContext(c)), path),
     );
-    const entry = await statEntry(principal.storage, path);
-    publishFsEvent(deps, principal, "mkdir", [path]);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    activityHeaders(c, done.history);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody, 201);
   });
 
-  authed.post(routePath(ROUTES.fs.move), async (c) => {
+  /** Moves or renames one item and answers with where it is now. */
+  async function moveOne(
+    c: FsContext,
+    path: string,
+    target: string,
+    action: "file.move" | "file.rename",
+  ): Promise<Response> {
     const principal = c.get("principal");
-    const body = await parseBody(MoveRequest, c, jsonMaxBytes);
-    const path = normalizeOrThrow(body.path);
-    const target = normalizeOrThrow(body.target);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.move",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
-      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
+    const done = await runStorageCall(() =>
+      deps.files.move(fileActor(principal, activityRequestContext(c)), path, target, { action }),
     );
-    const entry = await statEntry(principal.storage, target);
-    if (deps.metadata !== undefined) {
-      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
-    }
-    publishFsEvent(deps, principal, "move", [path], [target]);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    activityHeaders(c, done.history);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
+  }
+
+  authed.post(routePath(ROUTES.fs.move), async (c) => {
+    const body = await parseBody(MoveRequest, c, jsonMaxBytes);
+    return moveOne(c, normalizeOrThrow(body.path), normalizeOrThrow(body.target), "file.move");
   });
 
   authed.post(routePath(ROUTES.fs.moveMany), async (c) => {
@@ -829,7 +388,14 @@ export function registerFsRoutes(
     const body = await parseBody(MoveManyRequest, c, jsonMaxBytes);
     return c.json(
       MoveManyResponse.parse({
-        results: await moveMany(deps, principal, body, activityRequestContext(c)),
+        results: await moveMany(
+          deps.files,
+          principal,
+          body,
+          activityRequestContext(c),
+          "file.move",
+          normalizeOrThrow,
+        ),
       }),
     );
   });
@@ -839,94 +405,47 @@ export function registerFsRoutes(
     const body = await parseBody(CopyRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
     const target = normalizeOrThrow(body.target);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.copy",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "copy", path, target)),
-      () => ({
-        path: target,
-        ...(before?.kind ? { kind: before.kind } : {}),
-        ...(before?.size === undefined ? {} : { size: before.size }),
-      }),
+    const done = await runStorageCall(() =>
+      deps.files.copy(fileActor(principal, activityRequestContext(c)), path, target),
     );
-    const entry = await statEntry(principal.storage, target);
-    deps.metadata?.onCopied(principal.identityId, path, target);
-    publishFsEvent(deps, principal, "copy", [path], [target]);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
+    activityHeaders(c, done.history);
+    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
   });
 
   authed.post(routePath(ROUTES.fs.rename), async (c) => {
-    const principal = c.get("principal");
     const body = await parseBody(RenameRequest, c, jsonMaxBytes);
     const path = normalizeOrThrow(body.path);
-    const target = changeBaseName(path, body.newName);
-    const before = deps.activity ? await activityStat(principal.storage, path) : undefined;
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.rename",
-        requested: { path, targetPath: target },
-        ...(before ? { before } : {}),
-      },
-      () => runStorageCall(() => relocatePath(principal.storage, "move", path, target)),
-      () => ({ path: target, ...(before?.kind ? { kind: before.kind } : {}) }),
-    );
-    const entry = await statEntry(principal.storage, target);
-    if (deps.metadata !== undefined) {
-      await deps.metadata.onMoved(principal.identityId, path, target, entry.kind === "dir");
-    }
-    publishFsEvent(deps, principal, "move", [path], [target]);
-    const responseBody: EntryResponse = EntryResponse.parse(serializeEntry(entry));
-    return c.json(responseBody);
+    return moveOne(c, path, changeBaseName(path, body.newName), "file.rename");
   });
 
   authed.post(routePath(ROUTES.fs.delete), async (c) => {
     const principal = c.get("principal");
     const body = await parseBody(DeleteRequest, c, jsonMaxBytes);
-    const removed: string[] = [];
     const context = activityRequestContext(c);
     const batchId = context.batchId ?? randomUUID();
     const operationBase = context.producerOperationId ?? randomUUID();
-    try {
-      for (const item of body.items) {
-        const path = normalizeOrThrow(item.path);
-        try {
-          await removeOne(
-            deps,
-            principal,
-            { path, kind: item.kind === "dir" ? "dir" : "file" },
-            context,
-            { operationId: `${operationBase}:${removed.length}`, batchId },
-          );
-        } catch (error) {
-          if (isStorageError(error)) {
-            const mapped = toApiHttpError(error);
-            throw new ApiHttpError(mapped.kind, mapped.message, {
-              ...(mapped.details ?? {}),
-              failedPath: path,
-            });
-          }
-          throw error;
+    for (const [index, item] of body.items.entries()) {
+      const path = normalizeOrThrow(item.path);
+      try {
+        await deps.files.trash(
+          fileActor(principal, {
+            ...context,
+            producerOperationId: `${operationBase}:${index}`,
+            batchId,
+          }),
+          path,
+        );
+      } catch (error) {
+        if (isStorageError(error)) {
+          const mapped = toApiHttpError(error);
+          throw new ApiHttpError(mapped.kind, mapped.message, {
+            ...(mapped.details ?? {}),
+            failedPath: path,
+          });
         }
-        removed.push(path);
-        if (deps.metadata !== undefined) {
-          if (principal.storage.trash !== undefined) {
-            await deps.metadata.onTrashed(principal.identityId, path, item.kind === "dir");
-          } else {
-            await deps.metadata.onDeleted(principal.identityId, path, item.kind === "dir");
-          }
-        }
+        throw error;
       }
-    } finally {
-      if (removed.length > 0) publishFsEvent(deps, principal, "delete", removed);
     }
     const body2: OkResponse = OkResponse.parse({ ok: true });
     return c.json(body2);

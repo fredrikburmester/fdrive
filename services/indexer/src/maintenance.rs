@@ -22,10 +22,6 @@ pub const BATCH_SIZE: i64 = 250;
 
 type MediaRow = (String, String, String, i64);
 
-fn revision(contexts: &[Arc<RootContext>]) -> i64 {
-    contexts.iter().map(|c| c.features().revision).max().unwrap_or(0)
-}
-
 fn ids(feature: &str, job: &Job) -> HashMap<String, String> {
     [(feature.to_owned(), job.run_id())].into_iter().collect()
 }
@@ -116,31 +112,20 @@ pub fn rebuild_thumbnails(ctx: &RootContext, rows: &[MediaRow], force: bool, job
     }
 }
 
-pub fn start_thumbnail_rebuild(
-    job: &Arc<Job>,
-    contexts: Vec<Arc<RootContext>>,
-    path: Option<String>,
-    force: bool,
-) -> bool {
-    crate::jobs::spawn(job, revision(&contexts), "thumbnail-rebuild", move |job| {
-        let mut inventory = Vec::new();
-        for ctx in &contexts {
-            match thumbnail_candidates(ctx, path.as_deref()) {
-                Ok(rows) => inventory.push((ctx, rows)),
-                Err(e) => {
-                    job.fail();
-                    log(&format!("thumbnail-rebuild job crashed: {}", describe(&e)));
-                    return;
-                }
+pub fn start_thumbnail_rebuild(job: &Arc<Job>, ctx: Arc<RootContext>, path: Option<String>, force: bool) -> bool {
+    crate::jobs::spawn(job, ctx.features().revision, "thumbnail-rebuild", move |job| {
+        let rows = match thumbnail_candidates(&ctx, path.as_deref()) {
+            Ok(rows) => rows,
+            Err(e) => {
+                job.fail();
+                log(&format!("thumbnail-rebuild job crashed: {}", describe(&e)));
+                return;
             }
-        }
-        job.discover(inventory.iter().map(|(_, rows)| rows.len() as u64).sum());
+        };
+        job.discover(rows.len() as u64);
         job.discovered();
-        for (ctx, rows) in inventory {
-            if !ctx.values().internal_thumbnails() {
-                continue;
-            }
-            attempt(ids("thumbnails", job), || rebuild_thumbnails(ctx, &rows, force, job));
+        if ctx.values().internal_thumbnails() {
+            attempt(ids("thumbnails", job), || rebuild_thumbnails(&ctx, &rows, force, job));
             let _ = failures::prune(&ctx.db);
         }
     })
@@ -149,11 +134,8 @@ pub fn start_thumbnail_rebuild(
 /// Backfill image embeddings, or with `force` replace another model's rows. Never writes
 /// anything when the unit fails its health guard.
 pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: bool, job: &Job) {
-    let url = &ctx.cfg.image_embed_url;
-    if url.is_empty() {
-        return;
-    }
-    let health = image_embed::health(url, std::time::Duration::from_secs(5));
+    let url = ctx.cfg.image_url();
+    let health = image_embed::health(&url, std::time::Duration::from_secs(5));
     if let Some(guard) = image_embed::dimension_guard(health.as_ref()) {
         log(&format!("image embedding rebuild: {guard}; skipping"));
         return;
@@ -182,7 +164,7 @@ pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: boo
         }
         let mut succeeded = std::collections::HashSet::new();
         if !opened.is_empty() {
-            let embedded = image_embed::embed_images(&data, url, batch).and_then(|(vectors, model)| {
+            let embedded = image_embed::embed_images(&data, &url, batch).and_then(|(vectors, model)| {
                 for (sha, vector) in opened.iter().zip(&vectors) {
                     ctx.db.with(|c| db::upsert_image_embedding(c, sha, &model, vector))?;
                     succeeded.insert(sha.clone());
@@ -238,84 +220,75 @@ pub fn rebuild_image_embeddings(ctx: &RootContext, rows: &[MediaRow], force: boo
     flush(&mut pending);
 }
 
-pub fn start_image_rebuild(job: &Arc<Job>, contexts: Vec<Arc<RootContext>>, path: Option<String>, force: bool) -> bool {
-    crate::jobs::spawn(job, revision(&contexts), "image-embed-rebuild", move |job| {
+pub fn start_image_rebuild(job: &Arc<Job>, ctx: Arc<RootContext>, path: Option<String>, force: bool) -> bool {
+    crate::jobs::spawn(job, ctx.features().revision, "image-embed-rebuild", move |job| {
         let scope = normalize_scope(path.as_deref());
-        let mut inventory = Vec::new();
-        for ctx in contexts.iter().filter(|c| !c.cfg.image_embed_url.is_empty()) {
-            match ctx.db.with(|c| db::media_files(c, ctx.root_id)) {
-                Ok(rows) => inventory.push((
-                    ctx,
-                    rows.into_iter()
-                        .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope))
-                        .collect::<Vec<_>>(),
-                )),
-                Err(e) => {
-                    job.fail();
-                    log(&format!("image-embed-rebuild job crashed: {}", describe(&e)));
-                    return;
-                }
+        let rows: Vec<MediaRow> = match ctx.db.with(|c| db::media_files(c, ctx.root_id)) {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|(rel, ext, _, _)| image_embed::is_rebuild_candidate(ext, rel, &scope))
+                .collect(),
+            Err(e) => {
+                job.fail();
+                log(&format!("image-embed-rebuild job crashed: {}", describe(&e)));
+                return;
             }
-        }
-        job.discover(inventory.iter().map(|(_, rows)| rows.len() as u64).sum());
+        };
+        job.discover(rows.len() as u64);
         job.discovered();
-        for (ctx, rows) in inventory {
-            if !ctx.values().image_search {
-                continue;
-            }
+        if ctx.values().image_search {
             attempt(ids("imageSearch", job), || {
-                rebuild_image_embeddings(ctx, &rows, force, job)
+                rebuild_image_embeddings(&ctx, &rows, force, job)
             });
             let _ = failures::prune(&ctx.db);
         }
     })
 }
 
-/// Delete `idx.files` rows (and, by cascade, chunks) in a scope. Originals, roots, history,
+/// Delete `idx.files` rows (and, by cascade, chunks) in a scope. Originals, scan history,
 /// tags and thumbnails stay. `%` and `_` in names are literal.
-pub fn clear_index(contexts: &[Arc<RootContext>], scope: Option<&str>, job: &Job) -> Result<()> {
+pub fn clear_index(ctx: &RootContext, scope: Option<&str>, job: &Job) -> Result<()> {
     let prefix = scope.map(|s| format!("{s}/"));
-    for ctx in contexts {
-        let upper: i64 = ctx.db.with(|c| {
-            Ok(c.query_one(
-                "SELECT coalesce(max(id), 0)::bigint FROM idx.files WHERE root_id = $1::bigint",
-                &[&ctx.root_id],
+    let upper: i64 = ctx.db.with(|c| {
+        Ok(c.query_one(
+            "SELECT coalesce(max(id), 0)::bigint FROM idx.files WHERE root_id = $1::bigint",
+            &[&ctx.root_id],
+        )?
+        .get(0))
+    })?;
+    let mut after = 0_i64;
+    loop {
+        let rows: Vec<(i64, String)> = ctx.db.with(|c| {
+            Ok(c.query(
+                "SELECT id::bigint, path FROM idx.files WHERE root_id = $1::bigint AND id > $2::bigint AND id <= $3::bigint \
+                 AND ($4::text IS NULL OR path = $4 OR starts_with(path, $5)) ORDER BY id LIMIT $6::bigint",
+                &[&ctx.root_id, &after, &upper, &scope, &prefix, &BATCH_SIZE],
             )?
-            .get(0))
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect())
         })?;
-        let mut after = 0_i64;
-        loop {
-            let rows: Vec<(i64, String)> = ctx.db.with(|c| {
-                Ok(c.query(
-                    "SELECT id::bigint, path FROM idx.files WHERE root_id = $1::bigint AND id > $2::bigint AND id <= $3::bigint \
-                     AND ($4::text IS NULL OR path = $4 OR starts_with(path, $5)) ORDER BY id LIMIT $6::bigint",
-                    &[&ctx.root_id, &after, &upper, &scope, &prefix, &BATCH_SIZE],
-                )?
-                .into_iter()
-                .map(|r| (r.get(0), r.get(1)))
-                .collect())
-            })?;
-            if rows.is_empty() {
-                break;
+        if rows.is_empty() {
+            break;
+        }
+        job.discover(rows.len() as u64);
+        for (id, path) in rows {
+            after = id;
+            let _guard = ctx.path_locks.get(&path);
+            let deleted = ctx.db.with(|c| {
+                c.execute(
+                    "DELETE FROM idx.files WHERE root_id = $1::bigint AND id = $2::bigint AND path = $3",
+                    &[&ctx.root_id, &id, &path],
+                )?;
+                Ok(())
+            });
+            if let Err(e) = &deleted {
+                log(&format!("index clear failed for {path}: {}", describe(e)));
             }
-            job.discover(rows.len() as u64);
-            for (id, path) in rows {
-                after = id;
-                let _guard = ctx.path_locks.get(&path);
-                let deleted = ctx.db.with(|c| {
-                    c.execute(
-                        "DELETE FROM idx.files WHERE root_id = $1::bigint AND id = $2::bigint AND path = $3",
-                        &[&ctx.root_id, &id, &path],
-                    )?;
-                    Ok(())
-                });
-                if let Err(e) = &deleted {
-                    log(&format!("index clear failed for {path}: {}", describe(e)));
-                }
-                job.advance(deleted.is_ok(), false);
-            }
+            job.advance(deleted.is_ok(), false);
         }
     }
+    ctx.names_rebuild();
     Ok(())
 }
 
@@ -325,8 +298,7 @@ fn preview_name() -> Regex {
 
 /// Clear the shared preview cache and its manifest, then orphan previews in the generated
 /// layout. A failed removal keeps its manifest row for a later retry.
-pub fn clear_thumbnails(contexts: &[Arc<RootContext>], job: &Job) -> Result<()> {
-    let Some(ctx) = contexts.first() else { return Ok(()) };
+pub fn clear_thumbnails(ctx: &RootContext, job: &Job) -> Result<()> {
     let cache = match fsx::open_dir_nofollow(&ctx.cfg.thumbs_dir) {
         Ok(fd) => Some(fd),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
@@ -450,8 +422,7 @@ pub fn clear_thumbnails(contexts: &[Arc<RootContext>], job: &Job) -> Result<()> 
 
 /// Delete every `app.image_embeddings` row in key order, bounded by the key that was
 /// largest at the start so rows added meanwhile are never visited.
-pub fn clear_image_embeddings(contexts: &[Arc<RootContext>], job: &Job) -> Result<()> {
-    let Some(ctx) = contexts.first() else { return Ok(()) };
+pub fn clear_image_embeddings(ctx: &RootContext, job: &Job) -> Result<()> {
     let upper: Option<String> = ctx.db.with(|c| {
         Ok(c.query_one("SELECT max(content_key) FROM app.image_embeddings", &[])?
             .get(0))
@@ -538,6 +509,7 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
                             },
                         )
                     })?;
+                    ctx.names_touched(path, false);
                 }
                 if feature == "thumbnails" {
                     return Ok(Some(process_thumbnails(
@@ -570,59 +542,50 @@ pub fn retry_file(ctx: &Arc<RootContext>, path: &str, feature: &str) -> (bool, b
 }
 
 /// Retry a fixed inventory of unresolved failures for `feature`, optionally one id.
-pub fn start_retry(job: &Arc<Job>, contexts: Vec<Arc<RootContext>>, feature: String, failure_id: Option<i64>) -> bool {
-    crate::jobs::spawn(job, revision(&contexts), "failure-retry", move |job| {
-        let mut inventory = Vec::new();
-        for ctx in &contexts {
-            let rows: Result<Vec<(i64, String)>> = ctx.db.with(|c| {
-                Ok(c.query(
-                    "SELECT id::bigint, path FROM idx.processing_failures WHERE root_id = $1::bigint AND feature = $2 \
-                     AND resolved_at IS NULL AND ($3::bigint IS NULL OR id = $3) ORDER BY id",
-                    &[&ctx.root_id, &feature, &failure_id],
-                )?
-                .into_iter()
-                .map(|r| (r.get(0), r.get(1)))
-                .collect())
-            });
-            match rows {
-                Ok(rows) => {
-                    job.discover(rows.len() as u64);
-                    inventory.push((ctx, rows));
-                }
-                Err(e) => {
-                    job.fail();
-                    log(&format!("failure retry crashed: {}", describe(&e)));
-                    return;
-                }
+pub fn start_retry(job: &Arc<Job>, ctx: Arc<RootContext>, feature: String, failure_id: Option<i64>) -> bool {
+    crate::jobs::spawn(job, ctx.features().revision, "failure-retry", move |job| {
+        let rows: Result<Vec<(i64, String)>> = ctx.db.with(|c| {
+            Ok(c.query(
+                "SELECT id::bigint, path FROM idx.processing_failures WHERE root_id = $1::bigint AND feature = $2 \
+                 AND resolved_at IS NULL AND ($3::bigint IS NULL OR id = $3) ORDER BY id",
+                &[&ctx.root_id, &feature, &failure_id],
+            )?
+            .into_iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect())
+        });
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(e) => {
+                job.fail();
+                log(&format!("failure retry crashed: {}", describe(&e)));
+                return;
             }
-        }
+        };
+        job.discover(rows.len() as u64);
         job.discovered();
-        'roots: for (ctx, rows) in inventory {
-            for (id, path) in rows {
-                ctx.maybe_refresh_features();
-                if !ctx.values().get(&feature) {
-                    break 'roots;
-                }
-                let open = ctx
-                    .db
-                    .with(|c| {
-                        Ok(c.query_opt(
-                            "SELECT 1 FROM idx.processing_failures WHERE id = $1::bigint AND resolved_at IS NULL",
-                            &[&id],
-                        )?
-                        .is_some())
-                    })
-                    .unwrap_or(false);
-                if !open {
-                    job.advance(true, true);
-                    continue;
-                }
-                let ((ok, skipped), _) = attempt(ids(&feature, job), || retry_file(ctx, &path, &feature));
-                job.advance(ok, skipped);
+        for (id, path) in rows {
+            ctx.maybe_refresh_features();
+            if !ctx.values().get(&feature) {
+                break;
             }
+            let open = ctx
+                .db
+                .with(|c| {
+                    Ok(c.query_opt(
+                        "SELECT 1 FROM idx.processing_failures WHERE id = $1::bigint AND resolved_at IS NULL",
+                        &[&id],
+                    )?
+                    .is_some())
+                })
+                .unwrap_or(false);
+            if !open {
+                job.advance(true, true);
+                continue;
+            }
+            let ((ok, skipped), _) = attempt(ids(&feature, job), || retry_file(&ctx, &path, &feature));
+            job.advance(ok, skipped);
         }
-        for ctx in &contexts {
-            let _ = failures::prune(&ctx.db);
-        }
+        let _ = failures::prune(&ctx.db);
     })
 }

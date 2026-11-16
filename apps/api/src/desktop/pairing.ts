@@ -2,24 +2,19 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type {
   DesktopAccessMode,
   DesktopCredential,
+  DesktopWriteCapabilities,
   DesktopWriteCredential,
 } from "@fdrive/contracts";
-import type { ApiTokenRepo, DesktopPublishLock, IdentityRepo, ProviderRepo } from "@fdrive/db";
+import type { ApiTokenRepo, LoginRepo } from "@fdrive/db";
 import { addressBlock } from "../auth/address-block.js";
-import type { Principal } from "../auth/principal.js";
-import type { IdentityStorageFactory } from "../auth/storage-factory.js";
+import type { Principal, PrincipalFactory } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
-import { hostLabel } from "../providers/service.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
 import { hashApiToken } from "../tokens/token-format.js";
+import type { IndexedContentLookup } from "./indexed-content.js";
 import { generateDesktopToken, looksLikeDesktopToken } from "./tokens.js";
-import {
-  DESKTOP_MAX_UPLOAD_BYTES,
-  type DesktopWriteAvailability,
-  type DesktopWriteGate,
-  maxWritableBytes,
-} from "./writes.js";
+import { DESKTOP_MAX_UPLOAD_BYTES, NO_WRITES } from "./writes.js";
 
 type IssuedCredential = Omit<DesktopCredential, "location"> & {
   location: DesktopCredential["location"] | DesktopWriteCredential["location"];
@@ -37,41 +32,32 @@ interface Pair {
   confirmed?: boolean;
   approval?: {
     accountId: string;
-    identityIds: string[];
-    access: Record<string, DesktopAccessMode>;
+    identityId: string;
+    access: DesktopAccessMode;
   };
   result?: Promise<IssuedCredential[]>;
 }
 export interface DesktopDeps {
-  /** How the deployment answers a full grant; absent when desktop writes are not wired. */
-  writeAvailability?: (principal: Principal) => Promise<DesktopWriteAvailability>;
-  maxUploadBytes?: number;
+  /** What a grant may write; absent when desktop writes are not wired. */
+  writeCapabilities?: (principal: Principal) => DesktopWriteCapabilities;
+  /** Whether the server has the change feed, which covers every location. */
+  changeFeed?: boolean;
   apiTokens: ApiTokenRepo;
-  identities: IdentityRepo;
-  providers: ProviderRepo;
-  storageFactory: IdentityStorageFactory;
+  /** Reads a credential's token and login in one query. */
+  logins: Pick<LoginRepo, "byToken">;
+  /**
+   * The files folder's id (`ensureStorageId`), which the Mac compares as a
+   * location's `providerId`, and the installation's storage name, its `displayName`.
+   */
+  storage: { readonly id: string; name(): Promise<string> };
+  principalFor: PrincipalFactory;
   clock: () => Date;
-  trashPathForStorage: (storage: Principal["storage"]) => string | null;
-  /** Serializes Mac desktop commits for one identity; no other fdrive writer
-   * takes it. Absent means storage without a lease stays read-only. */
-  publishLock?: DesktopPublishLock;
-}
-
-/**
- * Why a full-access grant still lands read-only, phrased for whoever paired the
- * Mac: an administrator can act on it and anyone else can pass it on. Every unmet
- * gate is named, so fixing one never promises writes that the next still blocks.
- * Every storage publishes once the server serializes Mac writes, so nothing here
- * depends on the provider.
- */
-function writeUnavailableReason(missing: readonly DesktopWriteGate[]): string {
-  const steps: string[] = [];
-  if (missing.includes("state_dir")) steps.push("sets FDRIVE_DESKTOP_STATE_DIR on this server");
-  if (missing.includes("publish_lock"))
-    steps.push("configures the desktop publish lock on this server");
-  if (steps.length === 0)
-    return "Finder writes are turned off on this server. Files stay read-only.";
-  return `Read-only until an administrator ${steps.join(" and ")}.`;
+  /**
+   * The index rows behind a connection's files, which answer a version check
+   * without reading a file whose row provably describes it. Absent when
+   * nothing is indexed: every check hashes.
+   */
+  indexedContent?: IndexedContentLookup;
 }
 
 /** Pairing is transient, like the existing login limiter. Restart cancels pending requests.
@@ -118,81 +104,59 @@ export function createDesktopPairing(deps: DesktopDeps) {
     return pair;
   }
   async function location(principal: Principal, protocolVersion: 1 | 2 = 1) {
-    const identity = await deps.identities.get(principal.identityId);
-    const provider = identity && (await deps.providers.get(identity.providerId));
-    if (!identity || identity.accountId !== principal.accountId || !provider?.enabled)
-      throw new ApiHttpError("unauthorized", "Storage login is no longer available");
     const common = {
       accountId: principal.accountId,
-      identityId: identity.id,
-      providerId: provider.id,
-      // The local folder's row has no URL (`local`), which `new URL` would refuse.
-      displayName: provider.label || hostLabel(provider.baseUrl),
-      username: identity.externalUsername,
+      identityId: principal.identityId,
+      providerId: deps.storage.id,
+      displayName: await deps.storage.name(),
+      username: principal.username,
       paths: principal.tokenAccess?.paths ?? [],
     };
     if (protocolVersion === 1)
       return { ...common, protocolVersion: 1 as const, readOnly: true as const };
-    const granted = principal.tokenAccess?.mode === "full";
-    const { capabilities, missing } =
-      granted && deps.writeAvailability
-        ? await deps.writeAvailability(principal)
-        : {
-            capabilities: {
-              create: false,
-              update: false,
-              move: false,
-              trash: false,
-              restore: false,
-            },
-            missing: [] as readonly DesktopWriteGate[],
-          };
+    const capabilities = deps.writeCapabilities?.(principal) ?? NO_WRITES;
     const readOnly = !Object.values(capabilities).some(Boolean);
     return {
       ...common,
       protocolVersion: 2 as const,
       readOnly,
       capabilities,
-      maxUploadBytes: maxWritableBytes(
-        principal.storage,
-        deps.maxUploadBytes ?? DESKTOP_MAX_UPLOAD_BYTES,
-      ),
-      ...(granted && readOnly ? { writeUnavailableReason: writeUnavailableReason(missing) } : {}),
-      // Folder checks are served by the same write service that reports availability.
-      ...(deps.writeAvailability ? { listingChecks: true as const } : {}),
+      maxUploadBytes: DESKTOP_MAX_UPLOAD_BYTES,
+      // Folder checks are served by the same write service that reports capabilities.
+      ...(deps.writeCapabilities ? { listingChecks: true as const } : {}),
+      ...(deps.changeFeed === true ? { changeFeed: true as const } : {}),
     };
   }
+  /**
+   * Issues the one credential an approval grants, for the approving login.
+   * The bundle stays a list: that is the shape every Mac app reads.
+   */
   async function issue(pair: Pair): Promise<IssuedCredential[]> {
     const approval = pair.approval;
     if (!approval) throw new ApiHttpError("conflict", "Connection has not been approved");
-    const created: IssuedCredential[] = [];
-    const issued: string[] = [];
+    if (pair.cancelled || pair.expires <= deps.clock().getTime())
+      throw new ApiHttpError("not_found", "Connection request expired");
+    const credential = await tokens.create(approval, {
+      name: `Mac: ${pair.deviceName}`,
+      expiresInDays: 365,
+      access: { mode: approval.access, paths: ["/"] },
+    });
     try {
-      for (const identityId of approval.identityIds) {
-        if (pair.cancelled || pair.expires <= deps.clock().getTime())
-          throw new ApiHttpError("not_found", "Connection request expired");
-        const credential = await tokens.create(approval.accountId, {
-          name: `Mac: ${pair.deviceName}`,
-          identityId,
-          expiresInDays: 365,
-          access: { mode: approval.access[identityId] ?? "read", paths: ["/"] },
-        });
-        issued.push(credential.item.id);
-        if (pair.cancelled || pair.expires <= deps.clock().getTime())
-          throw new ApiHttpError("not_found", "Connection request expired");
-        const principal = await resolve(credential.token);
-        if (!principal)
-          throw new ApiHttpError("unauthorized", "Storage login changed. Connect again.");
-        created.push({
+      if (pair.cancelled || pair.expires <= deps.clock().getTime())
+        throw new ApiHttpError("not_found", "Connection request expired");
+      const principal = await resolve(credential.token);
+      if (!principal)
+        throw new ApiHttpError("unauthorized", "Storage login changed. Connect again.");
+      return [
+        {
           token: credential.token,
           tokenId: credential.item.id,
           expiresAt: credential.item.expiresAt as string,
           location: await location(principal, pair.protocolVersion),
-        });
-      }
-      return created;
+        },
+      ];
     } catch (error) {
-      await Promise.all(issued.map((id) => tokens.revoke(id, approval.accountId)));
+      await tokens.revoke(credential.item.id, approval.accountId);
       throw error;
     }
   }
@@ -236,36 +200,21 @@ export function createDesktopPairing(deps: DesktopDeps) {
         ...(pair.protocolVersion === 2 ? { supportsWrites: true } : {}),
       };
     },
+    /** Connects the Mac to the approving session's login, which its session already admitted. */
     async approve(
       id: string,
-      accountId: string,
-      identityIds: string[],
-      access: Record<string, DesktopAccessMode> = {},
+      owner: { readonly accountId: string; readonly identityId: string },
+      access: DesktopAccessMode,
     ) {
       const pair = get(id);
       if (pair.approval) throw new ApiHttpError("conflict", "Connection already approved");
-      if (
-        Object.keys(access).some((identityId) => !identityIds.includes(identityId)) ||
-        (pair.protocolVersion === 1 && Object.values(access).some((mode) => mode !== "read"))
-      ) {
+      if (pair.protocolVersion === 1 && access !== "read") {
         throw new ApiHttpError(
           "bad_request",
           "Write access requires a new connection from an updated Mac app",
         );
       }
-      for (const identityId of identityIds) {
-        const identity = await deps.identities.get(identityId);
-        const provider = identity && (await deps.providers.get(identity.providerId));
-        if (!identity || identity.accountId !== accountId || !provider?.enabled)
-          throw new ApiHttpError(
-            "forbidden",
-            "Select an available login belonging to your account",
-          );
-      }
-      // Recheck after asynchronous ownership reads; two browser approvals cannot race.
-      if (get(id) !== pair || pair.approval)
-        throw new ApiHttpError("conflict", "Connection already approved");
-      pair.approval = { accountId, identityIds: [...new Set(identityIds)], access: { ...access } };
+      pair.approval = { accountId: owner.accountId, identityId: owner.identityId, access };
     },
     async poll(id: string, secret: string) {
       const pair = get(id);
@@ -299,7 +248,7 @@ export function createDesktopPairing(deps: DesktopDeps) {
     },
     async revoke(bearer: string) {
       // Possession of this desktop secret authorizes only its own revocation. Do not
-      // require working storage, a linked identity, or an unexpired read grant to disconnect.
+      // require working storage, an existing login, or an unexpired read grant to disconnect.
       if (!looksLikeDesktopToken(bearer))
         throw new ApiHttpError("unauthorized", "Invalid desktop credential");
       const token = await deps.apiTokens.findByHash(hashApiToken(bearer));

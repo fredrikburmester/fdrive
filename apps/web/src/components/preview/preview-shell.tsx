@@ -388,6 +388,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
                 inlineUrl={inlineUrl}
                 downloadUrl={downloadUrl}
                 thumbUrl={thumbUrl}
+                folderEntries={listQuery.data?.entries}
               />
             )}
           </div>

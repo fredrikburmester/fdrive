@@ -20,24 +20,24 @@ describe("ApiTokenExpiresInDays", () => {
 });
 
 const VALID_ID = "123e4567-e89b-12d3-a456-426614174000";
-const VALID_IDENTITY_ID = "123e4567-e89b-12d3-a456-426614174001";
 
 describe("ApiTokenSummary", () => {
   const valid = {
     id: VALID_ID,
     name: "Claude",
-    identityId: VALID_IDENTITY_ID,
     createdAt: "2026-01-01T00:00:00.000Z",
     lastUsedAt: null,
     expiresAt: null,
+    access: { mode: "read", paths: ["/"] },
   };
 
   it("parses a valid summary", () => {
     expect(ApiTokenSummary.parse(valid)).toEqual(valid);
   });
 
-  it("allows a null identityId", () => {
-    expect(ApiTokenSummary.safeParse({ ...valid, identityId: null }).success).toBe(true);
+  it("rejects a summary without an access level", () => {
+    const { access: _access, ...withoutAccess } = valid;
+    expect(ApiTokenSummary.safeParse(withoutAccess).success).toBe(false);
   });
 
   it("rejects a non-datetime createdAt", () => {
@@ -56,23 +56,10 @@ describe("CreateApiTokenRequest", () => {
     expect(CreateApiTokenRequest.safeParse({ name: "Claude" }).success).toBe(true);
   });
 
-  it("accepts name, identityId, and expiresInDays", () => {
-    expect(
-      CreateApiTokenRequest.safeParse({
-        name: "Claude",
-        identityId: VALID_IDENTITY_ID,
-        expiresInDays: 90,
-      }).success,
-    ).toBe(true);
-  });
-
-  it("rejects a non-canonical identityId", () => {
-    expect(
-      CreateApiTokenRequest.safeParse({
-        name: "Claude",
-        identityId: VALID_IDENTITY_ID.toUpperCase(),
-      }).success,
-    ).toBe(false);
+  it("accepts a name and expiresInDays", () => {
+    expect(CreateApiTokenRequest.safeParse({ name: "Claude", expiresInDays: 90 }).success).toBe(
+      true,
+    );
   });
 
   it("rejects an empty name", () => {
@@ -93,10 +80,10 @@ describe("CreateApiTokenResponse", () => {
       item: {
         id: VALID_ID,
         name: "Claude",
-        identityId: null,
         createdAt: "2026-01-01T00:00:00.000Z",
         lastUsedAt: null,
         expiresAt: null,
+        access: { mode: "full", paths: ["/docs"] },
       },
     };
     expect(CreateApiTokenResponse.parse(value)).toEqual(value);

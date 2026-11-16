@@ -1,6 +1,8 @@
 import {
+  ApiTokenAccess,
   CanonicalUuid,
   DESKTOP_API,
+  DesktopChangeAnchor,
   DesktopFolderCheckRequest,
   DesktopFolderRequest,
   DesktopMoveRequest,
@@ -8,25 +10,24 @@ import {
   DesktopPairRequest,
   DesktopPairSecret,
   DesktopPath,
-  DesktopRecoveryResolution,
-  DesktopRecoveryResponse,
+  DesktopPurgeRequest,
   DesktopUploadRequest,
   DesktopVersionRequest,
 } from "@fdrive/contracts";
-import type { DesktopEffectsRepo } from "@fdrive/db";
 import type { Context } from "hono";
-import { accountContext } from "../accounts/routes.js";
 import { activityOperationId } from "../activity/fs-context.js";
 import type { PersonalActivityService } from "../activity/service.js";
 import { activityStream } from "../activity/streams.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import { createRequireAdmin, type Principal } from "../auth/principal.js";
+import { accountContext } from "../auth/account-context.ts";
+import type { Principal } from "../auth/principal.js";
 import { ApiHttpError } from "../errors.js";
 import { parseBody } from "../fs/routes.js";
 import { hashApiToken } from "../tokens/token-format.js";
+import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing, type DesktopDeps } from "./pairing.js";
-import { publishesSafely } from "./publish-gate.js";
+import { CREDENTIAL_GONE, looksLikeDesktopToken } from "./tokens.js";
 import type { DesktopWrites } from "./writes.js";
 
 export function registerDesktopRoutes(
@@ -34,7 +35,8 @@ export function registerDesktopRoutes(
   deps: DesktopDeps & {
     clientIp: (c: Context) => string;
     writes?: DesktopWrites;
-    recovery?: Pick<DesktopEffectsRepo, "status">;
+    /** The change feed; absent where the server keeps no change journal. */
+    changes?: DesktopChanges;
     /** Records hydration. A background fetch is not a proven human open. */
     activity?: PersonalActivityService;
   },
@@ -45,50 +47,13 @@ export function registerDesktopRoutes(
     if (!deps.writes) throw new ApiHttpError("not_found", "Desktop writes are unavailable");
     return deps.writes;
   };
-  groups.authed.get(`${base}/recovery`, createRequireAdmin(), async (c) => {
-    c.header("Cache-Control", "no-store");
-    if (!deps.recovery)
-      throw new ApiHttpError("upstream_unavailable", "Recovery status is unavailable");
-    const pending = await deps.recovery.status();
-    return c.json(
-      DesktopRecoveryResponse.parse({
-        pending: pending.map((job) => ({
-          ...job,
-          createdAt: job.createdAt.toISOString(),
-          nextAttemptAt: job.nextAttemptAt.toISOString(),
-        })),
-        uncertain: writes ? await writes.uncertain(deps.clock()) : [],
-      }),
-    );
-  });
-  groups.authed.post(
-    `${base}/recovery/:identityId/:operationId/resolve`,
-    createRequireAdmin(),
-    async (c) => {
-      c.header("Cache-Control", "no-store");
-      const body = await parseBody(DesktopRecoveryResolution, c);
-      const identityId = CanonicalUuid.safeParse(c.req.param("identityId"));
-      const operationId = CanonicalUuid.safeParse(c.req.param("operationId"));
-      if (!identityId.success || !operationId.success)
-        throw new ApiHttpError("bad_request", "Invalid recovery reference");
-      const identity = await deps.identities.get(identityId.data);
-      if (!identity) throw new ApiHttpError("not_found", "Storage login no longer exists");
-      return c.json(
-        await writeService().resolve(
-          identity.id,
-          identity.accountId,
-          operationId.data,
-          body.outcome,
-          deps.clock(),
-        ),
-      );
-    },
-  );
+  const changes = deps.changes;
   const pairing = createDesktopPairing({
     ...deps,
     ...(writes
-      ? { writeAvailability: async (principal: Principal) => writes.availability(principal) }
+      ? { writeCapabilities: (principal: Principal) => writes.capabilities(principal) }
       : {}),
+    ...(changes ? { changeFeed: true } : {}),
   });
   const files = createDesktopFiles(deps);
   function path(c: Context) {
@@ -99,20 +64,22 @@ export function registerDesktopRoutes(
   /** The caller's own ID for one hydration, distinct from a write's operation ID. */
   const hydrationId = (c: Context) => activityOperationId(c.req.header("x-fdrive-operation-id"));
   /**
-   * The token's principal. A location whose storage is gone (its provider
-   * disabled or of a type this release no longer has) cannot build storage;
-   * it answers like `location()` does for it, so the Mac app asks to sign in
-   * again instead of reporting a server error.
+   * Why a desktop bearer was refused. A well-formed desktop credential this server holds no
+   * row for is gone for good: revoked from the web or the Mac, deleted with its login or
+   * account, or cleared by a restore. Its 401 says so with `credential_gone`, and the Mac
+   * removes that location instead of asking again. Every other refusal (an expired
+   * credential, an unreadable grant, a missing or malformed bearer) stays a plain 401,
+   * which the Mac shows as signed out.
    */
-  async function resolveLocation(bearer: string) {
-    try {
-      return await pairing.resolve(bearer);
-    } catch (error) {
-      if (error instanceof ApiHttpError && error.kind === "upstream_unavailable") {
-        throw new ApiHttpError("unauthorized", "Storage login is no longer available");
-      }
-      throw error;
-    }
+  async function refused(bearer: string): Promise<ApiHttpError> {
+    if (
+      looksLikeDesktopToken(bearer) &&
+      (await deps.apiTokens.findByHash(hashApiToken(bearer))) === null
+    )
+      return new ApiHttpError("unauthorized", "This connection no longer exists. Connect again", {
+        code: CREDENTIAL_GONE,
+      });
+    return new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
   }
   async function principal(
     c: Context,
@@ -120,25 +87,31 @@ export function registerDesktopRoutes(
   ): Promise<{ bearer: string; principal: Principal }> {
     c.header("Cache-Control", "no-store");
     const bearer = c.req.header("authorization")?.replace(/^Bearer /, "") ?? "";
-    const resolved = await resolveLocation(bearer);
+    const resolved = await pairing.resolve(bearer);
+    if (!resolved) throw await refused(bearer);
     if (
-      !resolved ||
-      (resolved.tokenAccess?.mode !== "read" &&
-        !(writeProtocol && resolved.tokenAccess?.mode === "full"))
+      resolved.tokenAccess?.mode !== "read" &&
+      !(writeProtocol && resolved.tokenAccess?.mode === "full")
     )
       throw new ApiHttpError("unauthorized", "Reconnect this location in the Mac app");
+    const hash = hashApiToken(bearer);
     return {
       bearer,
       principal: {
         ...resolved,
+        // A write's one recheck right before it publishes (`writes.ts`), in
+        // one read: the token still exists, unexpired, for this login, with
+        // the grant it had when the request began.
         verifyAuthority: async () => {
-          const fresh = await pairing.resolve(bearer);
+          const token = await deps.apiTokens.findByHash(hash);
+          const access = ApiTokenAccess.safeParse(token?.access);
           return (
-            fresh !== null &&
-            fresh.accountId === resolved.accountId &&
-            fresh.identityId === resolved.identityId &&
-            JSON.stringify(fresh.tokenAccess) === JSON.stringify(resolved.tokenAccess) &&
-            (!writeProtocol || publishesSafely(fresh.storage, deps.publishLock !== undefined))
+            token !== null &&
+            access.success &&
+            (token.expiresAt === null || token.expiresAt.getTime() > deps.clock().getTime()) &&
+            token.accountId === resolved.accountId &&
+            token.identityId === resolved.identityId &&
+            JSON.stringify(access.data) === JSON.stringify(resolved.tokenAccess)
           );
         },
       },
@@ -171,14 +144,9 @@ export function registerDesktopRoutes(
     return c.json(pairing.info(c.req.param("id")));
   });
   groups.authed.post(`${base}/pairings/:id/approve`, async (c) => {
-    const owner = accountContext(c);
+    const { principal } = accountContext(c);
     const body = await parseBody(DesktopPairApproval, c);
-    await pairing.approve(
-      c.req.param("id"),
-      owner.principal.accountId,
-      body.identityIds,
-      body.access,
-    );
+    await pairing.approve(c.req.param("id"), principal, body.access);
     return c.json({ ok: true });
   });
   groups.public.get(`${base}/location`, async (c) =>
@@ -195,20 +163,20 @@ export function registerDesktopRoutes(
   );
   groups.public.get(`${base}/content`, async (c) => {
     const auth = await principal(c);
-    const result = await files.content(auth.principal, path(c), c.req.raw.signal);
+    const file = await files.content(auth.principal, path(c));
     c.header("Content-Type", "application/octet-stream");
-    if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
+    c.header("Content-Length", String(file.size));
     return c.body(
       await activityStream(
         deps.activity,
         auth.principal,
         path(c),
         "file.materialize",
-        result.body,
+        file.stream(),
         {
           // A hydration the client retries under one ID is one materialization.
           ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
-          expectedBytes: result.contentLength,
+          expectedBytes: file.size,
         },
       ),
     );
@@ -266,24 +234,32 @@ export function registerDesktopRoutes(
       const body = await parseBody(DesktopFolderCheckRequest, c);
       return c.json(await writeService().check(auth.principal, body.folders, c.req.raw.signal));
     });
+    v2.get(`${base}/changes`, async (c) => {
+      const auth = await principal(c, true);
+      if (!changes) throw new ApiHttpError("not_found", "This server keeps no change feed");
+      const since = c.req.query("since");
+      const parsed = DesktopChangeAnchor.optional().safeParse(since);
+      if (!parsed.success) throw new ApiHttpError("bad_request", "Invalid change anchor");
+      return c.json(await changes.read(auth.principal, parsed.data));
+    });
     v2.get(`${base}/entry`, async (c) =>
       c.json(await writeService().stat((await principal(c, true)).principal, path(c))),
     );
     v2.get(`${base}/content`, async (c) => {
       const auth = await principal(c, true);
-      const result = await writeService().files.content(auth.principal, path(c), c.req.raw.signal);
+      const file = await writeService().files.content(auth.principal, path(c));
       c.header("Content-Type", "application/octet-stream");
-      if (result.contentLength !== null) c.header("Content-Length", String(result.contentLength));
+      c.header("Content-Length", String(file.size));
       return c.body(
         await activityStream(
           deps.activity,
           auth.principal,
           path(c),
           "file.materialize",
-          result.body,
+          file.stream(),
           {
             ...(hydrationId(c) ? { requestId: hydrationId(c) as string } : {}),
-            expectedBytes: result.contentLength,
+            expectedBytes: file.size,
           },
         ),
       );
@@ -309,6 +285,12 @@ export function registerDesktopRoutes(
       const auth = await principal(c, true);
       const body = await parseBody(DesktopMoveRequest, c);
       return c.json(await writeService().prepare(auth.principal, { ...body, kind: "move" }));
+    });
+    v2.post(`${base}/purges`, async (c) => {
+      const auth = await principal(c, true);
+      const body = await parseBody(DesktopPurgeRequest, c);
+      await writeService().purge(auth.principal, body.itemId);
+      return c.json({ ok: true });
     });
     v2.get(`${base}/operations/:id`, async (c) =>
       c.json(await writeService().status((await principal(c, true)).principal, operationId(c))),

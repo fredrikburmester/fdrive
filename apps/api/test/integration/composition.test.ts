@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { sql } from "drizzle-orm";
@@ -8,6 +8,8 @@ import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
 import { generateApiToken, hashApiToken } from "../../src/tokens/token-format.js";
 import { seedLocalUsers } from "./helpers/local-storage.ts";
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function createTestLogger(): Logger {
   const noop = () => undefined;
@@ -85,21 +87,18 @@ describe("composeApp", () => {
       DATABASE_URL: postgres.connectionString,
       FDRIVE_STORAGE_ROOT: storage.root,
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 5).toString("base64"),
-      FDRIVE_MCP_WRITES: "true",
     });
 
     const composed = await composeApp(config, createTestLogger(), () => new Date());
 
     try {
-      // Migrations ran: the app schema's `providers` table exists.
+      // Migrations ran, and the first start gave the files folder its id.
       const { db, close } = createDb(postgres.connectionString);
       try {
         const result = await db.execute(sql`
-          select 1
-          from information_schema.tables
-          where table_schema = 'app' and table_name = 'providers'
+          select value from app.settings where key = 'storage.id'
         `);
-        expect(result.rows).toHaveLength(1);
+        expect(result.rows).toEqual([{ value: { id: expect.stringMatching(UUID) } }]);
       } finally {
         await close();
       }
@@ -110,7 +109,7 @@ describe("composeApp", () => {
           "content-type": "application/json",
           "x-requested-with": "fdrive",
         },
-        body: JSON.stringify({ credential: { username: "alice", password: "alice-password" } }),
+        body: JSON.stringify({ username: "alice", password: "alice-password" }),
       });
       expect(loginRes.status).toBe(200);
       const cookie = extractCookie(loginRes);
@@ -126,9 +125,7 @@ describe("composeApp", () => {
       const storageDb = createDb(postgres.connectionString);
       try {
         const repos = createRepos(storageDb.db);
-        const identity = (await repos.identities.listAll()).find(
-          (row) => row.externalUsername === "alice",
-        );
+        const identity = (await repos.identities.listAll()).find((row) => row.username === "alice");
         if (!identity) throw new Error("Alice's identity is missing");
         const token = generateApiToken();
         await repos.apiTokens.create({
@@ -192,6 +189,26 @@ describe("composeApp", () => {
           sql`select id, virtual_path as path, kind, state from app.activity_files where identity_id = ${identity.id} and virtual_path like '/activity-folder%' order by virtual_path`,
         );
         expect(after.rows).toEqual(files.rows);
+        // A change made outside fdrive reaches history only from the indexer's
+        // notifications: listing the folder compares nothing with history.
+        await rm(storage.path("alice", "/activity-folder/child.txt"));
+        const listing = await composed.app.request("/api/v1/fs/list?path=%2Factivity-folder", {
+          headers: { cookie },
+        });
+        expect(listing.status).toBe(200);
+        // The comparison used to run beside the response; give one a chance to land.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const observed = await storageDb.db.execute(
+          sql`select action from app.activity_events where identity_id = ${identity.id} and class = 'observation'`,
+        );
+        expect(observed.rows).toEqual([]);
+        // A journey names the login it was recorded under by its username.
+        const journey = await composed.app.request(
+          `/api/v1/activity/files/${String(files.rows[1]?.id)}`,
+          { headers: { cookie } },
+        );
+        expect(journey.status).toBe(200);
+        expect(await journey.json()).toMatchObject({ label: "alice", availability: "unknown" });
         const reads = await storageDb.db.execute(
           sql`select action, source, owner_account_id from app.activity_read_windows where identity_id = ${identity.id}`,
         );
@@ -218,12 +235,12 @@ describe("composeApp", () => {
             { action: "file.create", outcome: "success" },
           ]),
         );
-        await storageDb.db.execute(sql`update app.providers set enabled = false`);
         const about = await composed.app.request("/api/v1/about");
         expect(about.status).toBe(200);
-        expect(await about.json()).toMatchObject({ setupRequired: false, providers: [] });
+        const body = await about.json();
+        expect(body).toMatchObject({ setupRequired: false });
+        expect(body).not.toHaveProperty("providers");
       } finally {
-        await storageDb.db.execute(sql`update app.providers set enabled = true`);
         await storageDb.close();
       }
 
@@ -263,14 +280,14 @@ describe("composeApp", () => {
     try {
       const aboutRes = await composed.app.request("/api/v1/about");
       expect(aboutRes.status).toBe(200);
-      expect(await aboutRes.json()).toMatchObject({ setupRequired: true, providers: [] });
+      expect(await aboutRes.json()).toMatchObject({ setupRequired: true });
 
       const blockedRes = await composed.app.request("/api/v1/fs/list?path=/");
       expect(blockedRes.status).toBe(503);
       expect(await blockedRes.json()).toMatchObject({ error: { kind: "setup_required" } });
 
       const statusRes = await composed.app.request("/api/v1/setup/status");
-      expect(await statusRes.json()).toEqual({ required: true, storageConfigured: true });
+      expect(await statusRes.json()).toEqual({ required: true });
 
       const tokenLine = messages.find((message) => message.startsWith("setup token: "));
       if (tokenLine === undefined) {
@@ -308,10 +325,7 @@ describe("composeApp", () => {
       expect(reuseRes.status).toBe(404);
 
       const aboutAfterRes = await composed.app.request("/api/v1/about");
-      expect(await aboutAfterRes.json()).toMatchObject({
-        setupRequired: false,
-        providers: [{ type: "local" }],
-      });
+      expect(await aboutAfterRes.json()).toMatchObject({ setupRequired: false });
 
       // The owner's home is created on first use, under the deployment's folder.
       const uploadRes = await composed.app.request("/api/v1/fs/upload?path=/first.txt", {
@@ -354,9 +368,9 @@ describe("composeApp", () => {
     try {
       expect(messages).toContain("subsystem=core status=configured");
       expect(messages).toContain(
-        "subsystem=index status=not configured missing=FDRIVE_INDEX_ROOTS,FDRIVE_INDEXER_URL",
+        "subsystem=index status=not configured missing=FDRIVE_INDEXER_URL",
       );
-      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_EMBED_URL");
+      expect(messages).toContain("subsystem=search status=not configured missing=FDRIVE_ML_URL");
       expect(messages.some((message) => message.startsWith("subsystem=network bind hint"))).toBe(
         true,
       );
@@ -369,7 +383,7 @@ describe("composeApp", () => {
       expect(body.subsystems.core).toEqual({ status: "configured", missing: [] });
       expect(body.subsystems.index).toEqual({
         status: "not_configured",
-        missing: ["FDRIVE_INDEX_ROOTS", "FDRIVE_INDEXER_URL"],
+        missing: ["FDRIVE_INDEXER_URL"],
       });
       expect(body.subsystems.ocr).toEqual({
         status: "not_configured",

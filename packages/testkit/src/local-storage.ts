@@ -47,8 +47,8 @@ export async function startLocalStorage(
   const users = options.users ?? SEED_USERS;
   const files = options.files ?? SEED_FILES;
   const grants = options.grants ?? (options.users === undefined ? SEED_GRANTS : []);
-  // A real path: on macOS the temporary folder sits behind a symlink, and a
-  // folder fdrive confines homes to is compared by its real path.
+  // A real path: on macOS the temporary folder sits behind a symlink, and
+  // storage names what it changes on disk by the home's real path.
   const root = await realpath(await mkdtemp(join(tmpdir(), "fdrive-local-")));
   try {
     for (const user of users) await mkdir(join(root, user.username), { recursive: true });
@@ -72,6 +72,7 @@ export async function startLocalStorage(
 /** The parts of `@fdrive/db`'s repos that `insertLocalUsers` writes to. */
 export interface LocalUserRepos {
   readonly localUsers: {
+    /** Creates the user with their account and login, as setup and System > Users do. */
     create(input: { username: string; passwordHash: string }): Promise<unknown>;
     update(username: string, patch: { disabled: boolean }): Promise<unknown>;
   };
@@ -98,9 +99,9 @@ export interface LocalUserSeed {
 }
 
 /**
- * Creates `seed.users` in `app.local_users` with their passwords hashed by
- * `passwords`, then `seed.grants` in `app.local_grants`: what setup and
- * System > Users would have done. Pass a `LocalStorageFixture` as `seed` to
+ * Creates `seed.users`, each with their account and login, with their
+ * passwords hashed by `passwords`, then `seed.grants` in `app.local_grants`:
+ * what setup and System > Users would have done. Pass a `LocalStorageFixture` as `seed` to
  * insert the users and grants it was started with.
  */
 export async function insertLocalUsers(

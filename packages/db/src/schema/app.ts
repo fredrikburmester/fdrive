@@ -1,10 +1,10 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   bigserial,
   boolean,
   check,
   customType,
-  foreignKey,
   index,
   integer,
   jsonb,
@@ -16,7 +16,6 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { DesktopEffectPayload } from "../repos/desktop-effects-types.js";
 import type { AiChatSharing, ApiTokenAccess } from "../repos/types.js";
 import { vector } from "../vector.js";
 
@@ -32,29 +31,12 @@ const bytea = customType<{ data: Buffer }>({
 
 export const appSchema = pgSchema("app");
 
-export const providers = appSchema.table(
-  "providers",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    type: text("type").notNull(),
-    baseUrl: text("base_url").notNull(),
-    /** Shown to users on the login page and in the login switcher. Defaults to the endpoint host. */
-    label: text("label").notNull().default(""),
-    /** The provider module's `configFields` values. */
-    config: jsonb("config").$type<Record<string, unknown>>().notNull().default({}),
-    enabled: boolean("enabled").notNull().default(true),
-    /** True when the deployment pins this row (`FDRIVE_STORAGE_ROOT`) and it cannot change at runtime. */
-    managedByEnv: boolean("managed_by_env").notNull().default(false),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [unique("providers_type_base_url_unique").on(table.type, table.baseUrl)],
-);
-
 /**
  * The users of the built-in local storage, which fdrive owns: one row per
  * home folder `<FDRIVE_STORAGE_ROOT>/<username>`. Names are unique without
  * regard to case, because the home folders may sit on a case-insensitive
- * disk. A login (`identities`) on the local provider names one of these.
+ * disk. Each has a login (`identities`) of the same name, created with it;
+ * a removed user's login stays, so adding the name again gives it back.
  */
 export const localUsers = appSchema.table(
   "local_users",
@@ -65,6 +47,8 @@ export const localUsers = appSchema.table(
     disabled: boolean("disabled").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    /** The most bytes their home folder may hold; null for no limit. */
+    storageLimit: bigint("storage_limit", { mode: "number" }),
   },
   (table) => [uniqueIndex("local_users_username_lower_unique").on(sql`lower(${table.username})`)],
 );
@@ -108,6 +92,12 @@ export const accounts = appSchema.table("accounts", {
   isAdmin: boolean("is_admin").notNull().default(false),
 });
 
+/**
+ * A login: what sessions, tokens, tags, shares and activity belong to. Each
+ * local user has one of the same name from the moment they exist; a removed
+ * user's login stays with what belongs to it, so `username` names its user
+ * without a foreign key.
+ */
 export const identities = appSchema.table(
   "identities",
   {
@@ -115,32 +105,19 @@ export const identities = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    providerId: uuid("provider_id")
-      .notNull()
-      .references(() => providers.id),
-    externalUsername: text("external_username").notNull(),
+    /** Its local user's name, exactly as `local_users` spells it. */
+    username: text("username").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   },
   (table) => [
-    unique("identities_provider_id_external_username_unique").on(
-      table.providerId,
-      table.externalUsername,
-    ),
-    index("identities_account_id_idx").on(table.accountId),
+    // One login per account.
+    unique("identities_account_id_unique").on(table.accountId),
+    // A login is its local user's: unique in any case, as `local_users` is,
+    // so a sign-in finds it however its name is typed.
+    uniqueIndex("identities_username_lower_unique").on(sql`lower(${table.username})`),
   ],
 );
-
-export const credentials = appSchema.table("credentials", {
-  identityId: uuid("identity_id")
-    .primaryKey()
-    .references(() => identities.id, { onDelete: "cascade" }),
-  ciphertext: bytea("ciphertext").notNull(),
-  keyId: text("key_id").notNull(),
-  cachedToken: text("cached_token"),
-  cachedTokenExpiresAt: timestamp("cached_token_expires_at", { withTimezone: true }),
-  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
 
 export const sessions = appSchema.table(
   "sessions",
@@ -149,9 +126,9 @@ export const sessions = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    activeIdentityId: uuid("active_identity_id").references(() => identities.id, {
-      onDelete: "set null",
-    }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     lastSeenAt: timestamp("last_seen_at", { withTimezone: true }).notNull().defaultNow(),
@@ -161,7 +138,7 @@ export const sessions = appSchema.table(
   (table) => [
     index("sessions_expires_at_idx").on(table.expiresAt),
     index("sessions_account_id_idx").on(table.accountId),
-    index("sessions_active_identity_id_idx").on(table.activeIdentityId),
+    index("sessions_identity_id_idx").on(table.identityId),
   ],
 );
 
@@ -172,13 +149,15 @@ export const apiTokens = appSchema.table(
     accountId: uuid("account_id")
       .notNull()
       .references(() => accounts.id, { onDelete: "cascade" }),
-    identityId: uuid("identity_id").references(() => identities.id, { onDelete: "set null" }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull().unique(),
-    access: jsonb("access").$type<ApiTokenAccess>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    access: jsonb("access").$type<ApiTokenAccess>().notNull(),
   },
   (table) => [
     index("api_tokens_account_id_idx").on(table.accountId),
@@ -209,7 +188,6 @@ export const fileTags = appSchema.table(
     tagId: uuid("tag_id")
       .notNull()
       .references(() => tags.id, { onDelete: "cascade" }),
-    revision: uuid("revision").notNull().defaultRandom(),
   },
   (table) => [
     primaryKey({ columns: [table.identityId, table.path, table.tagId] }),
@@ -226,7 +204,6 @@ export const favorites = appSchema.table(
     path: text("path").notNull(),
     /** "file" or "dir": what kind of entry was favorited, since the fs entry itself is not looked up again for display. */
     kind: text("kind").notNull().default("file"),
-    revision: uuid("revision").notNull().defaultRandom(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [primaryKey({ columns: [table.identityId, table.path] })],
@@ -242,7 +219,6 @@ export const folderViews = appSchema.table(
     path: text("path").notNull(),
     /** Null when only the sort is pinned. */
     mode: text("mode"),
-    revision: uuid("revision").notNull().defaultRandom(),
     sort: jsonb("sort"),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -257,12 +233,29 @@ export const recents = appSchema.table(
       .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
-    revision: uuid("revision").notNull().defaultRandom(),
   },
   (table) => [
     primaryKey({ columns: [table.identityId, table.path] }),
     index("recents_identity_id_opened_at_idx").on(table.identityId, table.openedAt.desc()),
   ],
+);
+
+/** A search an account saved from the search panel: its query, type filter and folder scope. */
+export const savedSearches = appSchema.table(
+  "saved_searches",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    query: text("query").notNull(),
+    type: text("type").notNull(),
+    /** The folder "This folder only" searched; null searches everything. */
+    folder: text("folder"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("saved_searches_account_id_idx").on(table.accountId, table.createdAt)],
 );
 
 export const thumbnails = appSchema.table(
@@ -321,29 +314,22 @@ export const shares = appSchema.table(
       .notNull()
       .references(() => identities.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    description: text("description").notNull().default(""),
     scope: text("scope").notNull(),
     paths: text("paths").array().notNull(),
-    hasPassword: boolean("has_password").notNull().default(false),
-    /** An owned share's password, hashed; never selected into a share record. */
-    passwordHash: text("password_hash"),
     /** Operator-chosen public page rendering: "auto" | "list" | "gallery" | "download". */
     presentation: text("presentation").notNull().default("auto"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** Downloads, previews and archives counted against `maxDownloads`; uploads for a write share. */
+    usedDownloads: integer("used_downloads").notNull().default(0),
+    description: text("description").notNull().default(""),
+    /** The link's password, hashed; `null` for an open link. Only the public lookup reads it. */
+    passwordHash: text("password_hash"),
     /** 0 is unlimited. */
     maxDownloads: integer("max_downloads").notNull().default(0),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-    /** Legacy name: how many times the link has been used (downloads, or uploads for a write share). */
-    views: integer("views").notNull().default(0),
   },
-  (table) => [
-    index("shares_identity_id_idx").on(table.identityId),
-    check(
-      "shares_password_hash_kind",
-      sql`${table.hasPassword} = (${table.passwordHash} is not null)`,
-    ),
-  ],
+  (table) => [index("shares_identity_id_idx").on(table.identityId)],
 );
 
 export const settings = appSchema.table("settings", {
@@ -353,27 +339,27 @@ export const settings = appSchema.table("settings", {
 });
 
 /**
- * Shared office identity survives index clears and user-specific scopes.
- * Rows go with their provider: once a provider row is removed (which
- * requires that no login uses it) nothing can open the documents it named.
+ * The durable ids Office gives documents, keyed by where each lies in its
+ * owner's files: the owner's login and the owner's own path, a canonical
+ * virtual path. A document in a folder shared with someone is its owner's,
+ * so everyone who reaches it opens one id. Rows go with the owner's login.
+ * Deleted rows stay as tombstones (`deleted_at`).
  */
 export const officeFiles = appSchema.table(
   "office_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    providerId: uuid("provider_id")
+    identityId: uuid("identity_id")
       .notNull()
-      .references(() => providers.id, { onDelete: "cascade" }),
-    rootName: text("root_name").notNull(),
+      .references(() => identities.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
-    revision: uuid("revision").notNull().defaultRandom(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
-    index("office_files_provider_id_idx").on(table.providerId),
-    uniqueIndex("office_files_active_location_unique")
-      .on(table.providerId, table.rootName, table.path)
+    index("office_files_identity_id_idx").on(table.identityId),
+    uniqueIndex("office_files_active_path_unique")
+      .on(table.identityId, table.path)
       .where(sql`${table.deletedAt} is null`),
   ],
 );
@@ -401,6 +387,34 @@ export const systemEvents = appSchema.table(
   ],
 );
 
+/**
+ * What each user's Trash holds, one row per item. The item lies at
+ * `/.trash/<id>/<name>` in its login's files, the owner's for something
+ * deleted from a folder they share, and was deleted from `original_path`
+ * there. `moving_from` is set from just before the item moves until it is
+ * there, and names where it comes from; whoever finds such a row settles it
+ * by what is on disk, so an item is never in Trash without its row.
+ */
+export const trashItems = appSchema.table(
+  "trash_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => identities.id, { onDelete: "cascade" }),
+    originalPath: text("original_path").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").$type<"file" | "dir">().notNull(),
+    size: bigint("size", { mode: "number" }).notNull(),
+    deletedAt: timestamp("deleted_at", { withTimezone: true }).notNull(),
+    movingFrom: text("moving_from"),
+  },
+  (table) => [
+    check("trash_items_kind", sql`${table.kind} in ('file', 'dir')`),
+    index("trash_items_identity_deleted").on(table.identityId, table.deletedAt),
+  ],
+);
+
 /** Lazily registered desktop items; paths never act as authorization. */
 export const desktopItems = appSchema.table(
   "desktop_items",
@@ -412,8 +426,6 @@ export const desktopItems = appSchema.table(
     path: text("path").notNull(),
     kind: text("kind").notNull(),
     metadataVersion: uuid("metadata_version").notNull().defaultRandom(),
-    contentVersion: text("content_version"),
-    originalPath: text("original_path"),
     deletedAt: timestamp("deleted_at", { withTimezone: true }),
   },
   (table) => [
@@ -449,42 +461,6 @@ export const desktopOperations = appSchema.table(
   ],
 );
 
-/** Metadata work is committed with the native receipt, never with a file replay. */
-export const desktopEffects = appSchema.table(
-  "desktop_effects",
-  {
-    sequence: bigserial("sequence", { mode: "number" }).primaryKey(),
-    operationId: uuid("operation_id").notNull(),
-    identityId: uuid("identity_id")
-      .notNull()
-      .references(() => identities.id, { onDelete: "cascade" }),
-    accountId: uuid("account_id")
-      .notNull()
-      .references(() => accounts.id, { onDelete: "cascade" }),
-    payload: jsonb("payload").$type<DesktopEffectPayload>().notNull(),
-    state: text("state").notNull().default("pending"),
-    attempts: integer("attempts").notNull().default(0),
-    lastError: text("last_error"),
-    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
-    completedAt: timestamp("completed_at", { withTimezone: true }),
-  },
-  (table) => [
-    uniqueIndex("desktop_effects_operation").on(table.identityId, table.operationId),
-    foreignKey({
-      columns: [table.identityId, table.operationId],
-      foreignColumns: [desktopOperations.identityId, desktopOperations.id],
-    }).onDelete("cascade"),
-    index("desktop_effects_pending")
-      .on(table.nextAttemptAt, table.sequence)
-      .where(sql`${table.state} = 'pending'`),
-    index("desktop_effects_identity_pending")
-      .on(table.identityId, table.sequence)
-      .where(sql`${table.state} = 'pending'`),
-    index("desktop_effects_account").on(table.accountId),
-  ],
-);
-
 /** Installation backup configuration. Private keys are never persisted here. */
 export const backupConfiguration = appSchema.table("backup_configuration", {
   id: integer("id").primaryKey().default(1),
@@ -514,10 +490,6 @@ export const backupRuns = appSchema.table(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     state: text("state").notNull().default("queued"),
-    leaseId: uuid("lease_id"),
-    verificationRequested: boolean("verification_requested").notNull().default(false),
-    verificationError: text("verification_error"),
-    verifiedAt: timestamp("verified_at", { withTimezone: true }),
     requestedBy: uuid("requested_by"),
     scheduleSlot: text("schedule_slot").unique(),
     request: jsonb("request").notNull(),
@@ -530,6 +502,10 @@ export const backupRuns = appSchema.table(
     coverage: jsonb("coverage").notNull().default([]),
     pinned: boolean("pinned").notNull().default(false),
     artifact: text("artifact"),
+    leaseId: uuid("lease_id"),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    verificationRequested: boolean("verification_requested").notNull().default(false),
+    verificationError: text("verification_error"),
   },
   (table) => [index("backup_runs_created_idx").on(table.createdAt)],
 );
@@ -545,30 +521,17 @@ export const backupDeliveries = appSchema.table(
     name: text("name").notNull(),
     state: text("state").notNull().default("pending"),
     objectKey: text("object_key"),
-    markerVersionId: text("marker_version_id"),
-    retentionUntil: timestamp("retention_until", { withTimezone: true }),
     versionId: text("version_id"),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
     error: text("error"),
+    markerVersionId: text("marker_version_id"),
+    retentionUntil: timestamp("retention_until", { withTimezone: true }),
   },
   (table) => [
     index("backup_deliveries_run_idx").on(table.runId),
     unique("backup_delivery_run_destination").on(table.runId, table.destinationId),
   ],
 );
-export const backupAttachments = appSchema.table("backup_attachments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  versionId: uuid("version_id").notNull(),
-  label: text("label").notNull(),
-  filename: text("filename").notNull(),
-  sourceDate: timestamp("source_date", { withTimezone: true }),
-  notes: text("notes").notNull().default(""),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  bytes: text("bytes").notNull(),
-  sha256: text("sha256").notNull(),
-  secret: bytea("secret").notNull(),
-});
-
 /** One AI chat a login keeps; its transcript is in `ai_chat_messages`, what it may read in `ai_chat_references`. */
 export const aiChats = appSchema.table(
   "ai_chats",

@@ -1,22 +1,26 @@
 // @vitest-environment jsdom
 import type { ListResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { refreshIdentityQuery } from "@/lib/account/invalidation";
 import { queryKeys } from "@/lib/api/keys";
 import { type UploadAction, uploadReducer } from "@/lib/upload/queue";
 import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem } from "@/lib/upload/types";
 import { useUploadReveal } from "./use-upload-reveal";
 
-afterEach(() => useUploadStore.getState().reset());
+// Every hook subscribes to the one upload store: unmount each test's hook, or
+// later tests' uploads drive refreshes and renders in roots whose test is over,
+// which can land after the jsdom environment is gone.
+afterEach(() => {
+  cleanup();
+  useUploadStore.getState().reset();
+});
 
 function item(id: string, overrides: Partial<UploadItem> = {}): UploadItem {
   return {
     id,
-    identityId: "alice",
     file: new File([id], id),
     targetPath: `/dest/${id}`,
     relativePath: id,
@@ -55,21 +59,14 @@ function setup(initialPaths: string[] = []) {
   client.setQueryData(queryKeys.fs.list("/elsewhere"), listing([], "/elsewhere"));
   const queryFn = vi.fn(async () => listing(initialPaths));
   const onReveal = vi.fn();
-  useUploadStore.getState().setActiveIdentity("alice");
   const hook = renderHook(
-    ({ path, identityId }) => {
+    ({ path }) => {
       const query = useQuery({ queryKey: queryKeys.fs.list(path), queryFn });
-      useUploadReveal(
-        path,
-        identityId,
-        query.data?.entries.map((entry) => entry.path) ?? [],
-        query,
-        onReveal,
-      );
+      useUploadReveal(path, query.data?.entries.map((entry) => entry.path) ?? [], query, onReveal);
       return query;
     },
     {
-      initialProps: { path: "/dest", identityId: "alice" },
+      initialProps: { path: "/dest" },
       wrapper: ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
       ),
@@ -108,7 +105,6 @@ it("reveals successes, deduplicating dropped folders and ignoring other destinat
       item("skipped.txt", { status: "skipped" }),
       item("cancelled.txt", { status: "cancelled" }),
       item("elsewhere.txt", { targetPath: "/elsewhere/elsewhere.txt" }),
-      item("other-login.txt", { identityId: "bob" }),
     ],
   });
   dispatch({ type: "succeed", id: "folder/a.txt" });
@@ -126,7 +122,7 @@ it("waits for a replacement refresh and rendered sort even when another callback
   await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
   // The queue's onUploaded callback also invalidates this listing.
   act(() => {
-    void refreshIdentityQuery(client, queryKeys.fs.list("/dest"));
+    void client.invalidateQueries({ queryKey: queryKeys.fs.list("/dest") });
   });
   await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(2));
   expect(onReveal).not.toHaveBeenCalled();
@@ -193,22 +189,9 @@ it("does not replay old uploads or reveal after leaving and returning during ref
   dispatch({ type: "enqueue", items: [item("new.txt")] });
   dispatch({ type: "succeed", id: "new.txt" });
   await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
-  rerender({ path: "/elsewhere", identityId: "alice" });
-  rerender({ path: "/dest", identityId: "alice" });
+  rerender({ path: "/elsewhere" });
+  rerender({ path: "/dest" });
   await act(async () => refresh.resolve(listing(["/dest/old.txt", "/dest/new.txt"])));
-  expect(onReveal).not.toHaveBeenCalled();
-});
-
-it("abandons completions on an identity switch before the browser receives the new identity", async () => {
-  const { onReveal, queryFn } = setup();
-  const refresh = Promise.withResolvers<ListResponse>();
-  queryFn.mockReturnValue(refresh.promise);
-  dispatch({ type: "enqueue", items: [item("a.txt")] });
-  dispatch({ type: "succeed", id: "a.txt" });
-  await waitFor(() => expect(queryFn).toHaveBeenCalledTimes(1));
-  act(() => useUploadStore.getState().setActiveIdentity("bob"));
-  act(() => useUploadStore.getState().setActiveIdentity("alice"));
-  await act(async () => refresh.resolve(listing(["/dest/a.txt"])));
   expect(onReveal).not.toHaveBeenCalled();
 });
 

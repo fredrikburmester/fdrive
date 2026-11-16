@@ -1,19 +1,13 @@
 "use client";
 
-import type {
-  FsEntry,
-  OfficeStatusResponse,
-  ProviderCapabilities,
-  ReceivedGrant,
-  Tag,
-} from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
-import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
 import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
 import {
@@ -23,11 +17,11 @@ import {
   writeDraggedPaths,
 } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
+import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries } from "@/lib/files/selection";
+import { contextEntries, selectionOf } from "@/lib/files/selection";
 import { wantsThumbnail } from "@/lib/files/thumbnail";
 import { sharedFolderCaption } from "@/lib/grants/format";
-import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { cn } from "@/lib/utils";
@@ -133,9 +127,6 @@ export interface FileListProps {
   /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
   showChat?: boolean;
   hideArchive?: boolean;
-  /** What the active login's storage can do, for every row's context menu
-   * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
-  capabilities?: ProviderCapabilities;
   /** The folders others share with the active login: captions in `Shared with me`, and
    * what each context menu offers (see `FileContextMenu`). Defaults to none. */
   received?: readonly ReceivedGrant[];
@@ -192,7 +183,6 @@ export function FileList({
   hideArchive = false,
   showOrganize = false,
   showChat = false,
-  capabilities = DEFAULT_CAPABILITIES,
   received = EMPTY_RECEIVED,
   scrollRequest = null,
   onScrollConsumed,
@@ -262,6 +252,12 @@ export function FileList({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
+    writeDownloadUrl(
+      event.dataTransfer,
+      paths,
+      entry,
+      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+    );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);
@@ -342,6 +338,37 @@ export function FileList({
           const isFocused = focusedPath === entry.path;
           const isTreeRow = treeDepths !== undefined;
           const depth = treeDepths?.get(entry.path) ?? 0;
+          const rowStyle = {
+            height: virtualRow.size,
+            transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
+            paddingLeft: 12 + depth * TREE_INDENT_PX,
+            paddingRight: 12,
+          };
+          if (isLink(entry)) {
+            // Shown so its name stays visible, and nothing more: no menu, no
+            // selection, no drag, nothing to open.
+            return (
+              <div
+                key={entry.path}
+                data-path={entry.path}
+                aria-disabled="true"
+                title={LINK_TITLE}
+                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-muted-foreground text-sm"
+                style={rowStyle}
+              >
+                {isTreeRow && <span className="size-4 shrink-0" />}
+                <div className="flex min-w-0 flex-1 items-center gap-3 opacity-60">
+                  <span className="size-4 shrink-0" />
+                  <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
+                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                  <span className="w-20 shrink-0 text-right text-xs">--</span>
+                  <span className="w-28 shrink-0 text-xs">
+                    {formatDate(new Date(entry.modifiedAt))}
+                  </span>
+                </div>
+              </div>
+            );
+          }
           const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
           const group = contextEntries(entry, entries, selected);
           const groupPaths = group.map((candidate) => candidate.path);
@@ -370,7 +397,6 @@ export function FileList({
               onOpenTagsEditor={() => onOpenTagsEditor(group)}
               favorite={groupFavorite(group)}
               onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-              capabilities={capabilities}
               received={received}
             >
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
@@ -385,12 +411,7 @@ export function FileList({
                 onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
                 onDoubleClick={() => onEntryDoubleClick(entry)}
                 className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
-                style={{
-                  height: virtualRow.size,
-                  transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
-                  paddingLeft: 12 + depth * TREE_INDENT_PX,
-                  paddingRight: 12,
-                }}
+                style={rowStyle}
                 data-focused={isFocused}
               >
                 {isTreeRow &&

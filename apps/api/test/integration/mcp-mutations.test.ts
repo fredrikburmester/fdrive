@@ -1,4 +1,3 @@
-import { createRecycleFolderTrash, withMoveToTrash } from "@fdrive/core";
 import { createLocalStorage } from "@fdrive/local";
 import { startLocalStorage } from "@fdrive/testkit";
 import { type ServerType, serve } from "@hono/node-server";
@@ -8,18 +7,22 @@ import { Hono } from "hono";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import type { AppHono } from "../../src/app.ts";
 import { createLoginLimiter } from "../../src/auth/login-limiter.ts";
-import type { Principal } from "../../src/auth/principal.ts";
 import type { McpToolDeps } from "../../src/mcp/handlers.ts";
 import { registerMcpRoutes } from "../../src/mcp/routes.ts";
-import { buildIdentity } from "../../src/scoping/test-fixtures/index.ts";
+import type { TokenPrincipal } from "../../src/tokens/principal.ts";
 import { generateApiToken } from "../../src/tokens/token-format.ts";
+import { testFileOperations, testTrashItems } from "../file-operations.ts";
+import { memoryTrashItemRepo } from "../trash-items.ts";
 
 let storage: Awaited<ReturnType<typeof startLocalStorage>>;
 let server: ServerType;
 let client: Client;
-let principal: Principal;
+let principal: TokenPrincipal;
 let revoked = false;
 let indexAvailable = true;
+let metadataFails = true;
+/** Trash's rows, which the delete writes and the Trash tools read. */
+const trashRepo = memoryTrashItemRepo();
 
 beforeAll(async () => {
   storage = await startLocalStorage({
@@ -38,6 +41,7 @@ beforeAll(async () => {
     username: "alice",
     isAdmin: false,
     storage: createLocalStorage({ home: storage.path("alice") }),
+    tokenAccess: { mode: "organize", paths: ["/"] },
   };
   const token = generateApiToken();
   const app = new Hono() as AppHono;
@@ -46,27 +50,25 @@ beforeAll(async () => {
     limiter: createLoginLimiter({ clock: () => new Date() }),
     clientIp: () => "127.0.0.1",
     toolDeps: {
-      identities: { get: async () => buildIdentity() },
-      scopeResolver: {
-        verifiedIndexScopes: async () =>
-          indexAvailable
-            ? {
-                available: true,
-                scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-              }
-            : { available: false, reason: "provider_mismatch" },
-      },
-      indexQueries: {
-        rootIdsByName: async () => ({ files: 1 }),
-        recordMove: async () => {
-          throw new Error("injected audit failure");
-        },
-      } as unknown as McpToolDeps["indexQueries"],
+      scopeResolver: { scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }] },
+      indexed: async () => indexAvailable,
+      indexQueries: {} as unknown as McpToolDeps["indexQueries"],
       searchService: {} as McpToolDeps["searchService"],
       publicUrl: async () => "https://fdrive.example.com",
       indexerClient: null,
-      trashPathForStorage: (storage) => (storage.trash === undefined ? null : "/.trash"),
-      writesEnabled: true,
+      // Tags and the rest follow best effort; a failure there is only a warning.
+      files: testFileOperations({
+        trashRepo,
+        metadata: {
+          onMoved: async () => {
+            if (metadataFails) throw new Error("injected metadata failure");
+          },
+          onDeleted: async () => {
+            if (metadataFails) throw new Error("injected metadata failure");
+          },
+        },
+      }),
+      trash: testTrashItems({ repo: trashRepo }).items,
       clock: () => new Date(),
     },
   });
@@ -97,7 +99,7 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   });
   expect(conflict.isError).toBe(true);
   expect(
-    await new Response((await principal.storage.download("/destination.txt")).body).text(),
+    await new Response((await principal.storage.open("/destination.txt")).stream()).text(),
   ).toBe("keep destination");
   const moved = await client.callTool({
     name: "move_path",
@@ -105,9 +107,12 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
   });
   expect(moved.isError).not.toBe(true);
   expect(moved.content).toEqual([
-    { type: "text", text: expect.stringContaining("move history could not be recorded") },
+    {
+      type: "text",
+      text: expect.stringContaining("could not follow it"),
+    },
   ]);
-  expect(await new Response((await principal.storage.download("/renamed.txt")).body).text()).toBe(
+  expect(await new Response((await principal.storage.open("/renamed.txt")).stream()).text()).toBe(
     "source",
   );
   await expect(principal.storage.stat("/source.txt")).rejects.toMatchObject({ kind: "not_found" });
@@ -118,16 +123,9 @@ it("preserves occupied targets, reports completed writes truthfully, and rejects
 it("runs full file management without indexed roots and enforces folder grants", async () => {
   revoked = false;
   indexAvailable = false;
-  // Trash by moving into the recycle folder, the way the files folder keeps it.
+  metadataFails = false;
   const base = createLocalStorage({ home: storage.path("bob") });
-  principal = {
-    ...principal,
-    tokenAccess: { mode: "full", paths: ["/mcp"] },
-    storage: {
-      ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock: () => new Date() }),
-      trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
-    },
-  };
+  principal = { ...principal, tokenAccess: { mode: "full", paths: ["/mcp"] }, storage: base };
   const call = async (name: string, args: Record<string, unknown>) => {
     const result = await client.callTool({ name, arguments: args });
     expect(result.isError, JSON.stringify(result.content)).not.toBe(true);
@@ -151,7 +149,7 @@ it("runs full file management without indexed roots and enforces folder grants",
   const trash = await call("list_trash", {});
   expect(trash.entries).toHaveLength(1);
   await call("restore_path", { id: trash.entries[0].id });
-  expect(await new Response((await base.download("/mcp/README")).body).text()).toBe("updated");
+  expect(await new Response((await base.open("/mcp/README")).stream()).text()).toBe("updated");
   expect(
     (await client.callTool({ name: "read_file", arguments: { path: "/destination.txt" } })).isError,
   ).toBe(true);
@@ -163,7 +161,7 @@ it("runs full file management without indexed roots and enforces folder grants",
       })
     ).isError,
   ).toBe(true);
-  expect(await new Response((await base.download("/destination.txt")).body).text()).toBe(
+  expect(await new Response((await base.open("/destination.txt")).stream()).text()).toBe(
     "keep destination",
   );
 });

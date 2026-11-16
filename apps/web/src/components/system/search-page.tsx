@@ -34,7 +34,7 @@ export function SearchPage() {
     reembed.mutate(undefined, {
       onSuccess: (result) => {
         toast.success(
-          `Marked ${result.marked} file${result.marked === 1 ? "" : "s"} across ${result.roots.length} root${result.roots.length === 1 ? "" : "s"}.`,
+          `Marked ${result.marked} file${result.marked === 1 ? "" : "s"} for re-embedding.`,
         );
         setReembedOpen(false);
       },
@@ -75,7 +75,7 @@ export function SearchPage() {
             description={
               data.semantic.configured
                 ? "The text embedding model fdrive queries at search time."
-                : "Not configured: set FDRIVE_EMBED_URL."
+                : "Not configured: set FDRIVE_ML_URL."
             }
           >
             <div className="flex flex-wrap items-center gap-3">
@@ -95,9 +95,8 @@ export function SearchPage() {
               own limit on how much text it can embed at once.
             </p>
             <p className="text-sm text-muted-foreground">
-              Re-embed re-extracts and re-embeds every file in every configured root from scratch,
-              not just the embeddings. On a large index this can take a long time and loads the
-              indexer with work.
+              Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings.
+              On a large index this can take a long time and loads the indexer with work.
             </p>
           </SystemSection>
 
@@ -109,18 +108,6 @@ export function SearchPage() {
               { label: "Embedded", value: data.index.embedded.toLocaleString() },
             ]}
           />
-
-          <SystemSection title="Roots" contentClassName="flex-row flex-wrap gap-2">
-            {data.roots.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No index roots are configured.</p>
-            ) : (
-              data.roots.map((root) => (
-                <Badge key={root} variant="secondary">
-                  {root}
-                </Badge>
-              ))
-            )}
-          </SystemSection>
         </>
       )}
 
@@ -129,9 +116,8 @@ export function SearchPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Re-embed everything?</AlertDialogTitle>
             <AlertDialogDescription>
-              Today this re-extracts and re-embeds every file in every configured root from scratch,
-              not just the embeddings. On a large index this can take a long time and reload the
-              indexer with work.
+              Today this re-extracts and re-embeds every file from scratch, not just the embeddings.
+              On a large index this can take a long time and reload the indexer with work.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

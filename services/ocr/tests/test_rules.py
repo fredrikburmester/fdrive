@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fdrive_ocr.rules import is_candidate_pdf, is_excluded, is_too_big, root_relative_key
+from fdrive_ocr.rules import is_excluded, is_too_big, root_relative_key
 
 
 def test_root_relative_key() -> None:
@@ -61,16 +61,3 @@ def test_is_too_big_under_cap() -> None:
 
 def test_is_too_big_exactly_at_cap_is_not_too_big() -> None:
     assert is_too_big(200 * 1024 * 1024, 200) is False
-
-
-def test_is_candidate_pdf_true() -> None:
-    assert is_candidate_pdf("report.pdf") is True
-    assert is_candidate_pdf("REPORT.PDF") is True
-
-
-def test_is_candidate_pdf_rejects_apple_double() -> None:
-    assert is_candidate_pdf("._report.pdf") is False
-
-
-def test_is_candidate_pdf_rejects_non_pdf() -> None:
-    assert is_candidate_pdf("report.txt") is False

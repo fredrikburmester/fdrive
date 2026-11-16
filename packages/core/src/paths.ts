@@ -90,6 +90,19 @@ export function isWithin(parent: string, child: string): boolean {
 }
 
 /**
+ * True when `path` is nested strictly below `prefix` (not equal to it). The
+ * root ("/") is below nothing.
+ */
+export function isUnderPath(prefix: string, path: string): boolean {
+  const normalizedPrefix = normalizePath(prefix);
+  const normalizedPath = normalizePath(path);
+  if (normalizedPrefix === "/") {
+    return normalizedPath !== "/";
+  }
+  return normalizedPath.startsWith(`${normalizedPrefix}/`);
+}
+
+/**
  * The path of `child` relative to `parent`, as segments joined by "/".
  * "" when they are equal, `null` when `child` is not within `parent`.
  */

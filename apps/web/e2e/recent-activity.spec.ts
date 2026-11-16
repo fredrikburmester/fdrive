@@ -1,7 +1,10 @@
 import { rename } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ActivityFileResponse, PersonalActivityResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
-import { homePath } from "./support/local-folder.js";
+import { dismissActivityPanel } from "./support/activity.js";
+import { homePath, journalOutsideChange } from "./support/local-folder.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -65,6 +68,9 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   await expect(activity.getByText("Renamed", { exact: true })).toBeVisible();
   await expect(activity.getByText(`From ${name}`, { exact: true })).toBeVisible();
   await expect(activity.getByText("Uploaded", { exact: true })).toBeVisible();
+  // Finished archive jobs from earlier specs reopen the Activity panel on this
+  // fresh load, over the Info panel's lower half where See all sits.
+  await dismissActivityPanel(page);
   await activity.getByRole("button", { name: "See all" }).click();
   await expect(page).toHaveURL(new RegExp(`/activity/files/${id}$`));
   const history = page.locator('[data-slot="personal-activity"]');
@@ -108,7 +114,7 @@ test("upload completion leads to a durable journey, copies branch and exports ke
       (
         await foreign.request.post("/api/v1/auth/login", {
           headers,
-          data: { credential: { username: "bob", password: "bob-password" } },
+          data: { username: "bob", password: "bob-password" },
         })
       ).ok(),
     ).toBe(true);
@@ -122,11 +128,11 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   }
 });
 
-test("external disappearance and rediscovery preserve uncertainty and separate replacement identity", async ({
+test("an outside disappearance and rediscovery the watcher journals keep uncertainty and a separate replacement identity", async ({
   page,
 }) => {
   const path = `/${uniqueName("outside-fdrive")}.txt`;
-  const destination = `${path}.moved`;
+  const away = join(tmpdir(), uniqueName("away"));
   const headers = { "x-requested-with": "fdrive" };
   expect(
     (
@@ -143,17 +149,18 @@ test("external disappearance and rediscovery preserve uncertainty and separate r
     (event) => event.action === "file.upload" && event.stage === "outcome",
   )?.fileId;
   expect(id).toBeTruthy();
-  // A writer outside fdrive (the host, rsync) moves the file on disk.
-  async function externalMove(from: string, to: string) {
-    await rename(homePath("alice", from), homePath("alice", to));
-  }
-  await externalMove(path, destination);
-  expect((await page.request.post(`/api/v1/activity/files/${id}/recheck`, { headers })).ok()).toBe(
-    true,
-  );
-  const missing = PersonalActivityResponse.parse(
-    await (await page.request.get(`/api/v1/activity/files/${id}/events`)).json(),
-  );
+  const journey = async () =>
+    PersonalActivityResponse.parse(
+      await (await page.request.get(`/api/v1/activity/files/${id}/events`)).json(),
+    );
+  // A writer outside fdrive (the host, rsync) moves the file out of the files
+  // folder, and the indexer's watcher journals it.
+  await rename(homePath("alice", path), away);
+  await journalOutsideChange("alice", path);
+  await expect
+    .poll(async () => (await journey()).items.map((event) => event.action))
+    .toContain("observation.location_missing");
+  const missing = await journey();
   expect(missing.items).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
@@ -163,14 +170,13 @@ test("external disappearance and rediscovery preserve uncertainty and separate r
       }),
     ]),
   );
-  expect(JSON.stringify(missing)).not.toContain(destination);
-  await externalMove(destination, path);
-  expect((await page.request.post(`/api/v1/activity/files/${id}/recheck`, { headers })).ok()).toBe(
-    true,
-  );
-  const resolved = PersonalActivityResponse.parse(
-    await (await page.request.get(`/api/v1/activity/files/${id}/events`)).json(),
-  ).items.find((event) => event.action === "observation.resolved");
+  expect(JSON.stringify(missing)).not.toContain(away);
+  await rename(away, homePath("alice", path));
+  await journalOutsideChange("alice", path);
+  await expect
+    .poll(async () => (await journey()).items.map((event) => event.action))
+    .toContain("observation.resolved");
+  const resolved = (await journey()).items.find((event) => event.action === "observation.resolved");
   const replacement = resolved?.subjects.find((subject) => subject.role === "target")?.fileId;
   expect(replacement).toBeTruthy();
   expect(replacement).not.toBe(id);
@@ -178,7 +184,8 @@ test("external disappearance and rediscovery preserve uncertainty and separate r
   const original = ActivityFileResponse.parse(
     await (await page.request.get(`/api/v1/activity/files/${id}`)).json(),
   );
-  expect(original).toMatchObject({ currentPath: null, availability: "unknown" });
+  expect(original).toMatchObject({ currentPath: null, availability: "unknown", label: "alice" });
   await page.goto(`/activity/files/${id}`);
   await expect(page.getByText(/Whether this is the earlier file remains unknown/)).toBeVisible();
+  await expect(page.getByText(/^alice · Revision records describe changes/)).toBeVisible();
 });

@@ -116,7 +116,6 @@ async function readFileErrorEvents(db: Db, opts: SystemEventListOptions): Promis
     .where(
       and(
         eq(files.textStatus, "error"),
-        isNull(files.deletedAt),
         ...(opts.before === undefined ? [] : [sql`${at} < ${opts.before}`]),
       ),
     )

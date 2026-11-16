@@ -14,7 +14,6 @@ export const HealthSubsystemName = z.enum([
   "ocr",
   "thumbnails",
   "office",
-  "trash",
   "shares",
   "network",
 ]);

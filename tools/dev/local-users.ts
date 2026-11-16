@@ -1,10 +1,9 @@
 /**
- * Creates users of the api's local folder directly in `app.local_users`,
- * for the dev environment (`seed-users.ts`) and the perf fixture. Real
- * installations create them through setup and System > Users.
+ * Creates users of the api's local folder directly, each with their account
+ * and login, for the dev environment (`seed-users.ts`) and the perf fixture.
+ * Real installations create them through setup and System > Users.
  */
-import type { LocalUserRepo } from "@fdrive/db";
-import { ConflictError } from "@fdrive/db";
+import { ConflictError, type Repos } from "@fdrive/db";
 import {
   createScryptSharePasswords,
   type SharePasswords,
@@ -14,26 +13,36 @@ import {
 export interface LocalUserSeed {
   readonly username: string;
   readonly password: string;
+  /** Gives the user an administrator account, also when the user exists already. */
+  readonly isAdmin?: boolean;
 }
 
 /**
- * Creates each of `users` that does not exist yet, its password hashed the
- * way the api checks it at sign-in (scrypt, `scrypt$N$r$p$salt$key`). A user
- * that exists keeps its password and state. Returns the usernames it
- * created, in order.
+ * Creates each of `users` that does not exist yet, with their account and
+ * login, its password hashed the way the api checks it at sign-in (scrypt,
+ * `scrypt$N$r$p$salt$key`). A user that exists keeps its password and state,
+ * except that one marked `isAdmin` becomes an administrator. Returns the
+ * usernames it created, in order.
  */
 export async function seedLocalUsers(
-  repo: Pick<LocalUserRepo, "get" | "create">,
+  repos: Pick<Repos, "localUsers" | "logins">,
   users: readonly LocalUserSeed[],
   passwords: Pick<SharePasswords, "hash"> = createScryptSharePasswords(),
 ): Promise<string[]> {
   const created: string[] = [];
   for (const user of users) {
-    if ((await repo.get(user.username)) !== null) continue;
+    if ((await repos.localUsers.get(user.username)) !== null) {
+      if (user.isAdmin === true) {
+        await repos.logins.updateUser(user.username, { isAdmin: true, at: new Date() });
+      }
+      continue;
+    }
     try {
-      await repo.create({
+      await repos.logins.createUser({
         username: user.username,
         passwordHash: await passwords.hash(user.password),
+        isAdmin: user.isAdmin === true,
+        at: new Date(),
       });
       created.push(user.username);
     } catch (error) {

@@ -1,18 +1,20 @@
 import { FolderSizeResponse, PathQuery, ROUTES } from "@fdrive/contracts";
 import {
   type CoreError,
+  isAtOrUnder,
   isUnderPath,
+  isWithin,
   joinPath,
   normalizePath,
   type Scope,
-  type StorageProvider,
+  TRASH_PATH,
 } from "@fdrive/core";
-import type { IdentityRepo, IndexQueries } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexQueries } from "@fdrive/db";
+import { SHARED_WITH_ME } from "@fdrive/local";
 import type { AppHono, AuthedHono } from "../app.js";
 import { ApiHttpError } from "../errors.js";
-import { createReadAuthorizer, type ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { toIndexRelativePath } from "../search/scopes.js";
+import { indexPrefixes, toIndexRelativePath } from "../search/scopes.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -22,20 +24,10 @@ function routePath(fullPath: string): string {
 }
 
 export interface FolderSizeRoutesDeps {
-  readonly indexQueries: Pick<IndexQueries, "rootIdsByName" | "subtreeSize">;
-  readonly resolver: Pick<ScopeResolver, "verifiedIndexScopes">;
-  readonly identities: Pick<IdentityRepo, "get">;
-  /**
-   * The storage provider's recycle folder virtual path, when configured.
-   * A requested path that is the trash folder itself, or nested under it,
-   * is answered as `{ indexed: false }`, mirroring how `fs/routes.ts` hides
-   * it from listings and `search/service.ts` excludes it from hits.
-   */
-  readonly trashPathForStorage?: (storage: StorageProvider) => string | null;
-  /** Overridable for tests; defaults to `createReadAuthorizer`. */
-  readonly createAuthorizer?: (
-    storage: Pick<StorageProvider, "list" | "download">,
-  ) => ReadAuthorizer;
+  readonly indexQueries: Pick<IndexQueries, "subtreeSize">;
+  readonly resolver: Pick<ScopeResolver, "scopesFor">;
+  /** Whether the files folder is indexed now: sizes come from the index. */
+  readonly indexed: () => Promise<boolean>;
 }
 
 const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
@@ -43,6 +35,9 @@ const NOT_INDEXED: Omit<FolderSizeResponse, "path"> = {
   files: 0,
   indexed: false,
 };
+
+/** `Shared with me`: in the home it is a reserved name, so the home's own folder of that name is never counted. */
+const SHELF = `/${SHARED_WITH_ME}`;
 
 interface SizeRegion {
   readonly scope: Scope;
@@ -76,12 +71,12 @@ function outermostBoundaries(paths: readonly string[]): string[] {
   );
 }
 
-/** Partitions a requested virtual subtree into its physical mapping regions. */
-function sizeRegions(
-  scopes: readonly Scope[],
-  path: string,
-  trashPath: string | null,
-): SizeRegion[] {
+/**
+ * Partitions a requested virtual subtree into its physical mapping regions,
+ * leaving out the Trash, which a folder's size never counts, and the home's
+ * own `Shared with me`, which stays out of sight.
+ */
+function sizeRegions(scopes: readonly Scope[], path: string): SizeRegion[] {
   const owner = containingScope(scopes, path);
   if (owner === null) return [];
 
@@ -92,16 +87,17 @@ function sizeRegions(
       .map((scope) => ({ scope, virtualPrefix: scope.virtualPrefix })),
   ].filter(
     (region) =>
-      trashPath === null ||
-      (region.virtualPrefix !== trashPath && !isUnderPath(trashPath, region.virtualPrefix)),
+      !(region.scope.virtualPrefix === "/" && isWithin(SHELF, region.virtualPrefix)) &&
+      !isAtOrUnder(TRASH_PATH, region.virtualPrefix),
   );
 
   return regionScopes.map((region) => {
     const boundaries = scopes
       .filter((scope) => isUnderPath(region.virtualPrefix, scope.virtualPrefix))
       .map((scope) => scope.virtualPrefix);
-    if (trashPath !== null && isUnderPath(region.virtualPrefix, trashPath))
-      boundaries.push(trashPath);
+    if (isUnderPath(region.virtualPrefix, TRASH_PATH)) boundaries.push(TRASH_PATH);
+    if (region.scope.virtualPrefix === "/" && isUnderPath(region.virtualPrefix, SHELF))
+      boundaries.push(SHELF);
 
     return {
       ...region,
@@ -114,29 +110,26 @@ function sizeRegions(
 }
 
 /**
- * Registers `GET /fs/folder-size?path=`: resolves the virtual `path` to an
- * physical regions via the caller's *verified* index scopes, then proves the
- * caller can still read the requested directory and each nested mapped root
- * before touching the index. Each physical aggregate excludes the trees
- * shadowed by more-specific mappings and configured trash; separately mapped
- * roots are added back after their own live read succeeds.
+ * Registers `GET /fs/folder-size?path=`: resolves the virtual `path` to its
+ * physical regions via the caller's scopes, resolved for this request, and
+ * adds up what the index holds there. The scopes are the permission: no
+ * storage is read. Each physical aggregate excludes the trees shadowed by
+ * more-specific mappings, the home's own `Shared with me` and the Trash;
+ * folders shared with the caller are added back.
  *
  * Answers `200 { indexed: false, bytes: 0, files: 0 }` (never an error) for
- * a folder that is out of scope, not covered by any indexed root, or the
- * trash folder: none of those is information worth surfacing as a 4xx to a
+ * a folder that is out of scope, the trash folder, or any folder while the
+ * files folder is not indexed: none of those is information worth surfacing as a 4xx to a
  * caller who otherwise still has read access, and each is indistinguishable
  * from "this folder was simply never indexed" from the caller's point of
- * view. A folder the caller cannot currently read at all fails the live
- * read check instead, and is answered with the same 403/404 `fs/list` would
- * give for that folder, since that failure is about read access itself,
- * not about the index.
+ * view. A folder gone from disk since it was indexed is sized from what the
+ * index still holds until the next index pass.
  */
 export function registerFolderSizeRoutes(
   groups: { public: AppHono; authed: AuthedHono },
   deps: FolderSizeRoutesDeps,
 ): void {
   const { authed } = groups;
-  const buildAuthorizer = deps.createAuthorizer ?? ((storage) => createReadAuthorizer({ storage }));
 
   authed.get(routePath(ROUTES.fs.folderSize), async (c) => {
     const result = PathQuery.safeParse(c.req.query());
@@ -155,67 +148,25 @@ export function registerFolderSizeRoutes(
     const notIndexed = (): Response => c.json(FolderSizeResponse.parse({ path, ...NOT_INDEXED }));
 
     const principal = c.get("principal");
-    const trashPath = deps.trashPathForStorage?.(principal.storage);
-    if (trashPath != null && (path === trashPath || isUnderPath(trashPath, path)))
-      return notIndexed();
-    const identity = await deps.identities.get(principal.identityId);
-    if (identity === null) {
+    // The Trash is answered as not indexed, as listings hide it and search leaves it out.
+    if (isAtOrUnder(TRASH_PATH, path)) return notIndexed();
+    if (!(await deps.indexed())) {
       return notIndexed();
     }
-    const verified = await deps.resolver.verifiedIndexScopes(identity);
-    if (!verified.available) {
-      return notIndexed();
-    }
-
-    const regions = sizeRegions(verified.scopes, path, trashPath ?? null);
-    const firstRegion = regions[0];
-    if (firstRegion === undefined) {
+    const scopes = await deps.resolver.scopesFor(principal.username);
+    const regions = sizeRegions(scopes, path);
+    if (regions.length === 0) {
       return notIndexed();
     }
 
-    const authorizer = buildAuthorizer(principal.storage);
-    const authResult = await authorizer.authorize({ path, kind: "dir" });
-    if (!authResult.allowed) {
-      const kind =
-        authResult.reason === "denied"
-          ? "forbidden"
-          : authResult.reason === "missing"
-            ? "not_found"
-            : "upstream_unavailable";
-      throw new ApiHttpError(kind, "cannot read this folder");
-    }
-
-    const authorizedRegions = [firstRegion];
-    for (const region of regions.slice(1)) {
-      const regionAuth = await authorizer.authorize({ path: region.virtualPrefix, kind: "dir" });
-      if (regionAuth.allowed) {
-        authorizedRegions.push(region);
-      } else if (regionAuth.reason === "unavailable") {
-        throw new ApiHttpError("upstream_unavailable", "cannot read mapped folder");
-      }
-    }
-
-    const rootIds = await deps.indexQueries.rootIdsByName();
-    const indexedRegions = authorizedRegions.flatMap((region) => {
-      const rootId = rootIds[region.scope.rootName];
-      return rootId === undefined ? [] : [{ ...region, rootId }];
-    });
-    if (indexedRegions.length === 0) {
-      return notIndexed();
-    }
-
-    const scopePrefixes = verified.scopes.flatMap((scope) => {
-      const scopeRootId = rootIds[scope.rootName];
-      return scopeRootId === undefined ? [] : [{ rootId: scopeRootId, fsPrefix: scope.fsPrefix }];
-    });
-
+    const scopePrefixes = indexPrefixes(scopes);
     const sizes = await Promise.all(
-      indexedRegions.map((region) =>
+      regions.map((region) =>
         region.excludedRelativePrefixes.length === 0
-          ? deps.indexQueries.subtreeSize(scopePrefixes, region.rootId, region.relativePrefix)
+          ? deps.indexQueries.subtreeSize(scopePrefixes, INDEX_ROOT_ID, region.relativePrefix)
           : deps.indexQueries.subtreeSize(
               scopePrefixes,
-              region.rootId,
+              INDEX_ROOT_ID,
               region.relativePrefix,
               region.excludedRelativePrefixes,
             ),

@@ -2,25 +2,22 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Scope, StorageProvider } from "@fdrive/core";
-import type { Identity, IndexedFile, IndexQueries } from "@fdrive/db";
+import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
-import { buildIdentity } from "../scoping/test-fixtures/index.ts";
 import { registerThumbRoutes, type ThumbFileReader, type ThumbRoutesDeps } from "./routes.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function createTestLogger(): Logger {
   const logger = {
@@ -46,9 +43,9 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     folders: overrides.folders ?? (async () => fail("folders")),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
+    contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -56,13 +53,13 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
-    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
-    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
-    deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
-    liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
+    thumbnailKeys: overrides.thumbnailKeys ?? (async () => fail("thumbnailKeys")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
     imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
+    photos: overrides.photos ?? (async () => fail("photos")),
+    photoDetails: overrides.photoDetails ?? (async () => fail("photoDetails")),
     subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
+    bytesByExtension: overrides.bytesByExtension ?? (async () => fail("bytesByExtension")),
   };
 }
 
@@ -81,7 +78,6 @@ function makeFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...overrides,
   };
 }
@@ -101,49 +97,34 @@ function fakeFileReader(overrides: Partial<ThumbFileReader> = {}): ThumbFileRead
   };
 }
 
-/** Allows every target by default; pass `allow: false` to deny everything instead. */
-function fakeAuthorizer(allow = true): ReadAuthorizer {
-  return {
-    authorize: async () => (allow ? { allowed: true } : { allowed: false, reason: "denied" }),
-  };
-}
-
-interface BuildAppOptions extends Partial<Omit<ThumbRoutesDeps, "resolver" | "identities">> {
+interface BuildAppOptions extends Partial<Omit<ThumbRoutesDeps, "resolver">> {
   /** Omits `fileReader` entirely so `registerThumbRoutes` falls back to the real, disk-backed one. */
   readonly useRealFileReader?: boolean;
   readonly scopes?: readonly Scope[] | null;
-  readonly identity?: Identity | null;
-  readonly authorizerAllows?: boolean;
 }
 
 function buildApp(deps: BuildAppOptions = {}, username = "alice") {
+  // The scope is the permission: a thumbnail reads nothing from storage.
   const storage = {} as StorageProvider;
-  const identity =
-    deps.identity === undefined ? buildIdentity({ externalUsername: username }) : deps.identity;
   const principal: Principal = {
     accountId: "00000000-0000-4000-8000-000000000001",
-    identityId: identity?.id ?? "00000000-0000-4000-8000-0000000000a1",
+    identityId: "00000000-0000-4000-8000-0000000000a1",
     username,
     storage,
     isAdmin: false,
   };
 
-  const { useRealFileReader, scopes, authorizerAllows, ...overrides } = deps;
+  const { useRealFileReader, scopes, ...overrides } = deps;
   const resolvedScopes = scopes === undefined ? HOME_SCOPES : scopes;
 
-  const resolver: Pick<ScopeResolver, "verifiedIndexScopes"> = {
-    verifiedIndexScopes: async () =>
-      resolvedScopes === null
-        ? { available: false, reason: "no_roots" }
-        : { available: true, scopes: resolvedScopes },
+  const resolver: Pick<ScopeResolver, "scopesFor"> = {
+    scopesFor: async () => resolvedScopes ?? [],
   };
 
   const fullDeps: ThumbRoutesDeps = {
     indexQueries: fakeIndexQueries(),
     resolver,
-    identities: { get: async () => identity },
     thumbsDir: "/thumbs",
-    createAuthorizer: () => fakeAuthorizer(authorizerAllows ?? true),
     ...(useRealFileReader === true ? {} : { fileReader: fakeFileReader() }),
     ...overrides,
   };
@@ -182,7 +163,6 @@ describe("GET /api/v1/thumb: real file reader", () => {
       thumbsDir: dir,
       useRealFileReader: true,
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath }),
       }),
@@ -199,7 +179,6 @@ describe("GET /api/v1/thumb", () => {
   it("streams a thumbnail with the expected headers", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -210,9 +189,68 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/webp");
     expect(res.headers.get("content-length")).toBe("42");
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("cache-control")).toBe("private, no-cache");
     expect(res.headers.get("etag")).toBe('"abc123"');
     expect(await res.text()).toBe("webp-bytes");
+  });
+
+  it("answers 304 without a body when the browser already has this file's thumbnail", async () => {
+    const readStream = vi.fn(fakeFileReader().readStream);
+    const app = buildApp({
+      indexQueries: fakeIndexQueries({
+        fileByPath: async () => makeFile(),
+        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
+      }),
+      fileReader: fakeFileReader({ readStream }),
+    });
+
+    const same = await app.request("/api/v1/thumb?path=/photo.jpg&size=256", {
+      headers: { "if-none-match": '"abc123"' },
+    });
+    expect(same.status).toBe(304);
+    expect(same.headers.get("cache-control")).toBe("private, no-cache");
+    expect(same.headers.get("etag")).toBe('"abc123"');
+    expect(await same.text()).toBe("");
+    expect(readStream).not.toHaveBeenCalled();
+
+    // A changed file has another digest: its new thumbnail is sent.
+    const changed = await app.request("/api/v1/thumb?path=/photo.jpg&size=256", {
+      headers: { "if-none-match": '"old"' },
+    });
+    expect(changed.status).toBe(200);
+  });
+
+  it("returns 404 for fdrive's own folders, which nothing lists", async () => {
+    const fileByPath = vi.fn(async () => makeFile());
+    const app = buildApp({
+      indexQueries: fakeIndexQueries({ fileByPath }),
+    });
+
+    for (const path of ["/.trash/photo.jpg", "/.fdrive-desktop/staging/photo.jpg"]) {
+      const res = await app.request(`/api/v1/thumb?path=${encodeURIComponent(path)}&size=256`);
+      expect(res.status).toBe(404);
+    }
+    expect(fileByPath).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 for a path in the folder a shared folder shadows", async () => {
+    const fileByPath = vi.fn(async () => makeFile());
+    const app = buildApp({
+      indexQueries: fakeIndexQueries({ fileByPath }),
+      // bob's home holds a folder at alice's mount point: it maps to alice's
+      // folder going in, so a path there never reaches bob's own copy.
+      scopes: [
+        { fsPrefix: "/bob", virtualPrefix: "/" },
+        { fsPrefix: "/bob/Shared with me/docs", virtualPrefix: "/Inbox" },
+      ],
+    });
+
+    const res = await app.request(
+      `/api/v1/thumb?path=${encodeURIComponent("/Shared with me/docs/a.jpg")}&size=256`,
+    );
+
+    expect(res.status).toBe(404);
+    expect(fileByPath).not.toHaveBeenCalled();
   });
 
   it("returns 404 when thumbnails are not configured", async () => {
@@ -255,27 +293,9 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 404 when the caller's identity no longer exists", async () => {
-    const app = buildApp({ identity: null });
-
-    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
-
-    expect(res.status).toBe(404);
-  });
-
-  it("returns 404 when the path cannot be resolved to a configured root", async () => {
-    const app = buildApp({
-      indexQueries: fakeIndexQueries({ rootIdsByName: async () => ({}) }),
-    });
-
-    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
-
-    expect(res.status).toBe(404);
-  });
-
   it("returns 404 when no verified scope covers the requested path", async () => {
     const app = buildApp({
-      scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/photos" }],
+      scopes: [{ fsPrefix: "/alice", virtualPrefix: "/photos" }],
     });
 
     const res = await app.request("/api/v1/thumb?path=/videos/clip.jpg&size=256");
@@ -286,7 +306,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the file is not indexed", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => null,
       }),
     });
@@ -299,7 +318,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when the indexed file has no sha256", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile({ sha256: null }),
       }),
     });
@@ -312,7 +330,6 @@ describe("GET /api/v1/thumb", () => {
   it("returns 404 when no thumbnail has been generated for that size", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => null,
       }),
@@ -323,25 +340,9 @@ describe("GET /api/v1/thumb", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 404 when the live read check denies the exact path", async () => {
-    const app = buildApp({
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
-        fileByPath: async () => makeFile(),
-        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-      }),
-      authorizerAllows: false,
-    });
-
-    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
-
-    expect(res.status).toBe(404);
-  });
-
   it("returns 404 when the cached thumbnail file is missing from disk", async () => {
     const app = buildApp({
       indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
       }),
@@ -362,11 +363,10 @@ describe("GET /api/v1/thumb", () => {
     const app = buildApp(
       {
         indexQueries: fakeIndexQueries({
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         }),
-        scopes: [{ rootName: "files", fsPrefix: "/bob", virtualPrefix: "/" }],
+        scopes: [{ fsPrefix: "/bob", virtualPrefix: "/" }],
       },
       "bob",
     );
@@ -374,47 +374,5 @@ describe("GET /api/v1/thumb", () => {
     await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
 
     expect(fileByPath).toHaveBeenCalledWith(1, "bob/photo.jpg");
-  });
-
-  it("uses the default authorizer built from the caller's own storage when none is injected", async () => {
-    const download = vi.fn(async () => ({
-      body: { cancel: async () => undefined } as unknown as ReadableStream<Uint8Array>,
-      contentType: null,
-      contentLength: null,
-      lastModified: null,
-    }));
-    const storage = { list: async () => [], download } as unknown as StorageProvider;
-    const identity = buildIdentity({ externalUsername: "alice" });
-    const principal: Principal = {
-      accountId: "00000000-0000-4000-8000-000000000001",
-      identityId: identity.id,
-      username: "alice",
-      storage,
-      isAdmin: false,
-    };
-    const deps: ThumbRoutesDeps = {
-      indexQueries: fakeIndexQueries({
-        rootIdsByName: async () => ({ files: 1 }),
-        fileByPath: async () => makeFile(),
-        thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
-      }),
-      resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }) },
-      identities: { get: async () => identity },
-      thumbsDir: "/thumbs",
-      fileReader: fakeFileReader(),
-    };
-    const app = createApp({
-      config: loadConfig(REQUIRED_ENV),
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date("2024-06-01T00:00:00.000Z"),
-      principalResolver: async () => principal,
-      registerRoutes: (groups) => registerThumbRoutes(groups, deps),
-    });
-
-    const res = await app.request("/api/v1/thumb?path=/photo.jpg&size=256");
-
-    expect(res.status).toBe(200);
-    expect(download).toHaveBeenCalledWith("/photo.jpg");
   });
 });

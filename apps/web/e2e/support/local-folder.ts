@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { Client } from "pg";
 
 function fromEnv(name: string): string {
   const value = process.env[name];
@@ -15,4 +16,30 @@ function fromEnv(name: string): string {
  */
 export function homePath(username: string, virtualPath = "/"): string {
   return join(fromEnv("E2E_STORAGE_ROOT"), username, virtualPath);
+}
+
+/**
+ * Journals what the indexer's file watcher journals when it sees
+ * `virtualPath` in `username`'s files change on disk: a row in
+ * `idx.changes` with source `watcher`, appended under the journal's lock and
+ * announced on `idx_changes`, as every writer does. The shared run has no
+ * real indexer, so a spec that changes files through `homePath` reports the
+ * change itself.
+ */
+export async function journalOutsideChange(username: string, virtualPath: string): Promise<void> {
+  const client = new Client({ connectionString: fromEnv("E2E_DATABASE_URL") });
+  await client.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtextextended('idx.changes', 0))");
+    // The files folder is index root 1, which a migration seeds.
+    await client.query(
+      "insert into idx.changes (root_id, path, source) values (1, $1, 'watcher')",
+      [`${username}${virtualPath}`],
+    );
+    await client.query("select pg_notify('idx_changes', 'files')");
+    await client.query("commit");
+  } finally {
+    await client.end();
+  }
 }

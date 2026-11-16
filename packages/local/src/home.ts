@@ -1,93 +1,104 @@
+import type { Stats } from "node:fs";
 import { lstat, mkdir, realpath } from "node:fs/promises";
-import { basename, join, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { normalizePath, StorageError, splitSegments } from "@fdrive/core";
 import { codeOf } from "./errors.js";
 
 /**
- * One user's home folder on disk, and the only way storage turns a caller's
- * path into a path on disk. Paths are normalized first, which clamps `..`
- * at the home, so the only way out is a symlink: every lookup resolves the
- * real path of what already exists and refuses one outside the home with
- * `forbidden`. Missing trailing segments cannot be links, so creating them
- * stays inside.
+ * One user's home folder on disk, or a folder someone shares, and the only
+ * way storage turns a caller's path into a path on disk. Paths are
+ * normalized first, which clamps `..` at the home, and no symbolic link
+ * below the home is ever followed: a path that passes through one, at any
+ * segment including the last, is refused with `forbidden`, whatever it
+ * points at. fdrive never makes links; writers outside it (SMB, rsync) may,
+ * and everything fdrive checks about a path (grants, its own folders, share
+ * links) holds only for the path as asked.
  *
- * A writer that swaps a directory for a symlink between the check and the
- * use can still win that race. Every writer of a home is trusted (fdrive,
- * OCR, the host's own tools), so links are guarded against mistakes and
- * stale configuration, not against a hostile process on the same disk.
+ * A writer that swaps a folder for a link between the check and the use can
+ * still win that race. Every writer of a home is trusted (fdrive, OCR, the
+ * host's own tools), so links are refused to keep fdrive's checks true, not
+ * to stop a hostile process on the same disk.
  */
 export interface Home {
-  /** The home's real path, creating the folder on first use. */
-  real(): Promise<string>;
-  /**
-   * The entry `path` names: its parent resolved and confined, the final
-   * segment itself not followed. Use it for operations on the directory
-   * entry: delete, move, publish, mkdir.
-   */
-  entry(path: string): Promise<string>;
-  /**
-   * Like `entry`, but a symlink at the final segment is followed, and is
-   * `forbidden` when its target is outside the home. Use it for operations
-   * on content: read, list, stat, copy from.
-   */
-  target(path: string): Promise<string>;
-  /**
-   * How the disk spells `path`, an entry that exists. A disk that ignores
-   * case or how accents are encoded (macOS) finds "Årsbesked" written with
-   * one character or with a combining ring, but stores one of them, and
-   * that is the one every listing shows. A symlink keeps the name it was
-   * asked by: the disk only reports the stored names of what links lead to.
-   */
-  spelled(path: string): Promise<string>;
-  /** True when `realPath` is the home or inside it. */
-  contains(realPath: string): Promise<boolean>;
+  /** Where `path` is on disk; see `Location`. */
+  locate(path: string): Promise<Location>;
 }
 
-function isMissing(error: unknown): boolean {
-  const code = codeOf(error);
-  return code === "ENOENT" || code === "ENOTDIR";
+/** Where a caller's path is on disk. */
+export interface Location {
+  /**
+   * The entry on disk: the folders on the way named as the disk stores them,
+   * the last segment as asked. Operating on that name keeps a rename that
+   * only changes case a rename on a disk that ignores case.
+   */
+  readonly at: string;
+  /**
+   * The path, normalized, as the disk spells what exists of it. A disk that
+   * ignores case or how accents are encoded (macOS) finds "Årsbesked"
+   * written with one character or with a combining ring, but stores one of
+   * them, and that is the one every listing shows.
+   */
+  readonly path: string;
 }
 
-function inside(home: string, realPath: string): boolean {
-  return realPath === home || realPath.startsWith(home.endsWith(sep) ? home : `${home}${sep}`);
+/** Codes that end a path early: nothing there, a file on the way, or a link loop. */
+const UNRESOLVED = new Set(["ENOENT", "ENOTDIR", "ELOOP"]);
+
+async function lstatOrNull(path: string): Promise<Stats | null> {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    const code = codeOf(error);
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    throw error;
+  }
 }
 
-function outside(path: string): StorageError {
-  return new StorageError("forbidden", `outside the home folder: ${path}`);
+function linked(path: string): StorageError {
+  return new StorageError("forbidden", `symbolic links are not followed: ${path}`);
+}
+
+/** The names from `base` down to `dir`, a folder inside it. */
+function namesBelow(base: string, dir: string): string[] {
+  const rel = relative(base, dir);
+  if (rel === "") return [];
+  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new StorageError("forbidden", "the shared folder is outside its owner's files");
+  }
+  return rel.split(sep);
 }
 
 export interface CreateHomeOptions {
   /**
-   * Whether a missing folder is created on first use (a user's own home)
-   * or reads as missing (a folder someone shared, which its owner may have
-   * removed). Defaults to true.
-   */
-  readonly create?: boolean;
-  /**
-   * A folder this one must really be inside, links resolved: the owner's
-   * home for a folder they share. Without it, a shared folder its owner
-   * replaced with a link would lead somewhere the owner cannot go themselves.
+   * For a folder someone shares: its owner's home, which `dir` is a folder
+   * in. The folder is then never created, so one its owner removed reads as
+   * missing, and it is reached from the owner's home as any path is, so a
+   * link on the way to it is refused too.
    */
   readonly within?: string;
 }
 
-/** The home folder at `dir`, which need not exist yet. */
+/**
+ * The home folder at `dir`, which need not exist yet. The home itself, or
+ * the owner's home of a shared folder, is the deployment's and may be
+ * reached through a link; nothing below it may.
+ */
 export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
-  const create = options.create ?? true;
-  let ready: Promise<string> | undefined;
+  const { within } = options;
+  let ready: Promise<{ readonly top: string; readonly prefix: readonly string[] }> | undefined;
 
-  async function resolveHome(): Promise<string> {
-    if (create) await mkdir(dir, { recursive: true });
-    const resolved = await realpath(dir);
-    if (options.within !== undefined && !inside(await realpath(options.within), resolved)) {
-      throw new StorageError("forbidden", "the shared folder is outside its owner's files");
+  async function resolveTop() {
+    if (within === undefined) {
+      await mkdir(dir, { recursive: true });
+      return { top: await realpath(dir), prefix: [] };
     }
-    return resolved;
+    return { top: await realpath(within), prefix: namesBelow(within, dir) };
   }
 
-  function real(): Promise<string> {
+  /** Where every path starts, and the names of a shared folder below it. */
+  function start() {
     if (ready === undefined) {
-      ready = resolveHome();
+      ready = resolveTop();
       // A failure is not cached: the next call tries again, so a home on a
       // disk that was briefly missing recovers without a restart.
       ready.catch(() => {
@@ -97,66 +108,50 @@ export function createHome(dir: string, options: CreateHomeOptions = {}): Home {
     return ready;
   }
 
-  /** Resolves `segments` under the home through the deepest part that exists. */
-  async function resolveDir(home: string, segments: readonly string[], path: string) {
-    for (let depth = segments.length; ; depth -= 1) {
-      try {
-        const resolved = await realpath(join(home, ...segments.slice(0, depth)));
-        if (!inside(home, resolved)) throw outside(path);
-        return join(resolved, ...segments.slice(depth));
-      } catch (error) {
-        if (depth === 0 || !isMissing(error)) throw error;
-      }
-    }
-  }
-
-  async function entry(path: string): Promise<string> {
-    const segments = splitSegments(normalizePath(path));
-    const home = await real();
-    const leaf = segments.pop();
-    if (leaf === undefined) return home;
-    return join(await resolveDir(home, segments, path), leaf);
-  }
-
   return {
-    real,
-    entry,
-
-    async target(path) {
-      const at = await entry(path);
-      try {
-        if (!(await lstat(at)).isSymbolicLink()) return at;
-      } catch (error) {
-        // Missing: the operation itself reports `not_found`.
-        if (isMissing(error)) return at;
-        throw error;
+    async locate(path) {
+      const { top, prefix } = await start();
+      const names = [...prefix, ...splitSegments(normalizePath(path))];
+      // Resolve the deepest part that exists: one call for a path that does.
+      let depth = names.length;
+      let real: string;
+      for (;;) {
+        try {
+          real = await realpath(join(top, ...names.slice(0, depth)));
+          break;
+        } catch (error) {
+          if (depth === 0 || !UNRESOLVED.has(codeOf(error) ?? "")) throw error;
+          depth -= 1;
+        }
       }
-      const resolved = await realpath(at);
-      if (!inside(await real(), resolved)) throw outside(path);
-      return resolved;
-    },
-
-    async spelled(path) {
-      const normalized = normalizePath(path);
-      const segments = splitSegments(normalized);
-      const home = await real();
-      const asked = join(home, ...segments);
-      // The real path names every folder as stored, so one that matches
-      // what was asked means no link and no other spelling on the way.
-      if ((await realpath(asked)) === asked) return normalized;
-      const names: string[] = [];
-      let dir = home;
-      for (const segment of segments) {
-        const at = join(dir, segment);
-        const link = (await lstat(at)).isSymbolicLink();
-        dir = await realpath(at);
-        names.push(link ? segment : basename(dir));
+      // A real path names every folder as stored, so one that matches what
+      // was asked means no link on the way and no other spelling. Otherwise
+      // a segment is a link or spelled another way; only lstat tells which.
+      if (real !== join(top, ...names.slice(0, depth))) {
+        for (let at = 1; at <= depth; at += 1) {
+          if ((await lstat(join(top, ...names.slice(0, at)))).isSymbolicLink()) throw linked(path);
+        }
       }
-      return `/${names.join("/")}`;
-    },
-
-    async contains(realPath) {
-      return inside(await real(), realPath);
+      // The first name that did not resolve may be a link leading nowhere.
+      const missing = names[depth];
+      if (missing !== undefined && (await lstatOrNull(join(real, missing)))?.isSymbolicLink()) {
+        throw linked(path);
+      }
+      // A shared folder its owner removed stays missing: nothing here creates it again.
+      if (depth < prefix.length) throw new StorageError("not_found", `not found: ${path}`);
+      // No link on the way, so the real path has a name for every segment asked.
+      const stored = [
+        ...relative(top, real)
+          .split(sep)
+          .filter((name) => name.length > 0),
+        ...names.slice(depth),
+      ];
+      const last = names.at(-1);
+      const at =
+        depth < names.length || last === undefined
+          ? join(real, ...names.slice(depth))
+          : join(dirname(real), last);
+      return { at, path: `/${stored.slice(prefix.length).join("/")}` };
     },
   };
 }

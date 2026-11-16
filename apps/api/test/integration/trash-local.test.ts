@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import {
   EntryResponse,
   ListResponse,
@@ -7,14 +7,12 @@ import {
   ROUTES,
   TrashListResponse,
   TrashRestoreResponse,
-  TrashStatusResponse,
+  TrashSettings,
 } from "@fdrive/contracts";
-import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
 const TRASH_PATH = "/.trash";
@@ -24,16 +22,15 @@ const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.s
 /**
  * Exercises the trash routes (`/api/v1/trash/*`) plus the `fs/delete` and
  * `fs/list` interactions with a trash, against a real local folder, whose
- * Trash is fdrive's own: a delete moves the item into the recycle folder
- * (`<home>/.trash/.fdrive-move-v1`). Follows `accounts-local.test.ts`'s
- * composition pattern: one Postgres, one local folder, one composed app with
- * provider-bound Trash settings persisted, and plain `app.request` calls per user.
+ * Trash is fdrive's own: a delete moves the item into a folder of its own
+ * (`<home>/.trash/<id>/<name>`). Follows `accounts-local.test.ts`'s
+ * composition pattern: one Postgres, one local folder, one composed app,
+ * and plain `app.request` calls per user.
  */
 describe("trash against real PostgreSQL and a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
-  let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
     [postgres, storage] = await Promise.all([
@@ -50,21 +47,10 @@ describe("trash against real PostgreSQL and a local folder", () => {
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 9).toString("base64"),
     });
     composed = await composeApp(config, silentLogger());
-    database = createDb(postgres.connectionString);
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled: true,
-      path: TRASH_PATH,
-      retentionHours: 72,
-    });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
-    await database?.close();
     await storage?.stop();
     await postgres?.stop();
   }, 180000);
@@ -96,7 +82,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
   async function login(username: string) {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };
@@ -137,11 +123,11 @@ describe("trash against real PostgreSQL and a local folder", () => {
     const alice = await login("alice");
     const aliceCookie = alice.cookie;
 
-    // 1. trash status is available with the configured path and retention.
-    const status = TrashStatusResponse.parse(
-      await (await call(ROUTES.trash.status, { cookie: aliceCookie })).json(),
+    // 1. Trash is always on, keeping items 30 days until an administrator changes it.
+    const settings = TrashSettings.parse(
+      await (await call(ROUTES.trash.settings, { cookie: aliceCookie })).json(),
     );
-    expect(status).toEqual({ available: true, path: TRASH_PATH, retentionHours: 72 });
+    expect(settings).toEqual({ retentionDays: 30 });
 
     // 2. delete files whose names contain spaces, Unicode, and a literal
     // "%20" (not a URL-encoded space), the last from inside a folder, then
@@ -159,7 +145,6 @@ describe("trash against real PostgreSQL and a local folder", () => {
     await deleteItem(aliceCookie, `/A Folder/${percentName}`, "file");
     await deleteItem(aliceCookie, "/A Folder", "dir");
     expect(existsSync(storage.path("alice", "/A Folder"))).toBe(false);
-    expect(existsSync(storage.path("alice", `${TRASH_PATH}/.fdrive-move-v1`))).toBe(true);
 
     // 3. the trash list parses originalPath, name, and deletedAt correctly
     // for every deleted item, the folder included.
@@ -182,6 +167,10 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(afterDeletes.entries).toHaveLength(4);
     for (const entry of afterDeletes.entries) {
       expect(new Date(entry.deletedAt).toString()).not.toBe("Invalid Date");
+      // Each item lies in a folder of its own, under its own name.
+      expect(existsSync(storage.path("alice", `${TRASH_PATH}/${entry.id}/${entry.name}`))).toBe(
+        true,
+      );
     }
 
     // 4. fs/list never shows the trash folder itself.
@@ -261,11 +250,13 @@ describe("trash against real PostgreSQL and a local folder", () => {
     expect(emptyRes.status).toBe(200);
     const aliceTrashAfterEmpty = await listTrash(aliceCookie);
     expect(aliceTrashAfterEmpty.entries).toEqual([]);
+    // Restores, the purge and emptying left no folders behind.
+    expect(readdirSync(storage.path("alice", TRASH_PATH))).toEqual([]);
     const carolTrashAfterAliceEmpty = await listTrash(carol.cookie);
     expect(carolTrashAfterAliceEmpty.entries.map((entry) => entry.name)).toEqual(["carol-own.txt"]);
   }, 180000);
 
-  it("preserves and relocates retained metadata without taking it from replacement files", async () => {
+  it("takes metadata into Trash with the item and back on a restore, leaving nothing for a new file at its path", async () => {
     const { cookie } = await login("alice");
     await upload(cookie, "/metadata-restore.txt", "original");
     expect(
@@ -297,6 +288,7 @@ describe("trash against real PostgreSQL and a local folder", () => {
     };
 
     await deleteItem(cookie, "/metadata-restore.txt", "file");
+    expect(await favoritePaths()).toEqual([]);
     await restore("/metadata-restore.txt");
     expect(await favoritePaths()).toEqual(["/metadata-restore.txt"]);
 
@@ -304,9 +296,38 @@ describe("trash against real PostgreSQL and a local folder", () => {
     await restore("/metadata-restore.txt", "/metadata-recovered.txt");
     expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
 
+    // A new file at the old path is not the favorite; the trashed one still is.
     await deleteItem(cookie, "/metadata-recovered.txt", "file");
     await upload(cookie, "/metadata-recovered.txt", "replacement");
+    expect(await favoritePaths()).toEqual([]);
     await restore("/metadata-recovered.txt", "/metadata-archive.txt");
-    expect(await favoritePaths()).toEqual(["/metadata-recovered.txt"]);
+    expect(await favoritePaths()).toEqual(["/metadata-archive.txt"]);
+  }, 180000);
+
+  it("deletes and restores an item whose path is near the system's limit", async () => {
+    const { cookie } = await login("alice");
+    // Absolute paths longer than this fail with ENAMETOOLONG: 1024 bytes on a Mac, 4096 on Linux.
+    const limit = process.platform === "darwin" ? 1024 : 4096;
+    const segment = "d".repeat(200);
+    const segments: string[] = [];
+    while (
+      storage.path("alice", `/${[...segments, segment, "deep.txt"].join("/")}`).length <
+      limit - 64
+    )
+      segments.push(segment);
+    const path = `/${[...segments, "deep.txt"].join("/")}`;
+    expect(storage.path("alice", path).length).toBeGreaterThan(limit - 300);
+    await upload(cookie, path, "deep");
+
+    await deleteItem(cookie, path, "file");
+    const entry = (await listTrash(cookie)).entries.find((item) => item.originalPath === path);
+    if (entry === undefined) throw new Error("expected the deep item in Trash");
+    const restored = await call(ROUTES.trash.restore, {
+      method: "POST",
+      cookie,
+      body: { ids: [entry.id] },
+    });
+    expect(restored.status).toBe(200);
+    expect(existsSync(storage.path("alice", path))).toBe(true);
   }, 180000);
 });

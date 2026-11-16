@@ -63,19 +63,15 @@ fn uuid_like(value: &str) -> bool {
 }
 
 #[test]
-fn attempts_count_per_root_path_and_feature_and_recurrence_starts_over() {
+fn attempts_count_per_path_and_feature_and_recurrence_starts_over() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, false));
-    let mut cfg = env.config();
-    cfg.roots = vec![("other".to_owned(), env.root.clone())];
-    let other = context_with(cfg, fv(true, false, false, false, false), |_| {});
     for _ in 0..2 {
         fail(&ctx, "same.png", "thumbnails", "DecodeError: bad bytes");
     }
     fail(&ctx, "same.png", "imageSearch", "ValueError: rejected");
-    fail(&other, "same.png", "thumbnails", "PermissionError: denied");
     let attempts: Vec<i32> = records(&env).iter().map(|r| r.4).collect();
-    assert_eq!(attempts, vec![2, 1, 1]);
+    assert_eq!(attempts, vec![2, 1]);
 
     let first_failed = |env: &Env| -> chrono::DateTime<chrono::Utc> {
         env.client()
@@ -90,7 +86,7 @@ fn attempts_count_per_root_path_and_feature_and_recurrence_starts_over() {
     report(&ctx.db, ctx.root_id, "same.png", "thumbnails", ok());
     let rows = records(&env);
     assert!(rows[0].5, "success resolves");
-    assert!(!rows[1].5 && !rows[2].5, "other features and roots are untouched");
+    assert!(!rows[1].5, "other features are untouched");
 
     std::thread::sleep(std::time::Duration::from_millis(5));
     fail(&ctx, "same.png", "thumbnails", "DecodeError: changed bytes");
@@ -128,7 +124,7 @@ fn skips_are_not_recovery_but_resolving_skips_are() {
 }
 
 #[test]
-fn prune_keeps_unresolved_drops_old_and_resolves_deleted_files() {
+fn prune_keeps_unresolved_and_drops_old_resolved_records() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, false));
     fail(&ctx, "open.png", "thumbnails", "DecodeError: open");
@@ -143,13 +139,79 @@ fn prune_keeps_unresolved_drops_old_and_resolves_deleted_files() {
     failures::prune(&ctx.db).unwrap();
     let paths: Vec<String> = records(&env).into_iter().map(|r| r.1).collect();
     assert_eq!(paths, vec!["open.png", "recent.png"]);
+    assert!(!records(&env)[0].5, "an open issue stays open");
+}
 
-    let mut c = env.client();
-    env.write("open.png", b"x");
-    env.seed(&ctx, "open.png", "sha", "indexed");
-    db::mark_deleted(&mut c, ctx.root_id, "open.png", false).unwrap();
-    failures::prune(&ctx.db).unwrap();
-    assert!(records(&env)[0].5, "a deleted file's failure is resolved");
+#[test]
+fn a_completed_walk_resolves_the_issues_of_paths_without_a_row() {
+    let env = Env::new();
+    let ctx = env.ctx(fv(true, false, false, false, false));
+    let other = common::other_root(&mut env.client(), "other");
+    env.write("indexed.png", b"x");
+    env.seed(&ctx, "indexed.png", "sha", "indexed");
+    for (root, path) in [
+        (ctx.root_id, "indexed.png"),
+        (ctx.root_id, "gone.png"),
+        (other, "gone.png"),
+    ] {
+        report(&ctx.db, root, path, "thumbnails", failed("DecodeError: bad"));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let started = db::now(&mut env.client()).unwrap();
+    // Reported again by the walk: a file that fails before it gets a row.
+    fail(&ctx, "unreadable.png", "thumbnails", "PermissionDenied: no");
+    assert_eq!(failures::resolve_gone(&ctx.db, ctx.root_id, started).unwrap(), 1);
+    let unresolved: Vec<(i64, String)> = env
+        .client()
+        .query(
+            "SELECT root_id::bigint, path FROM idx.processing_failures WHERE resolved_at IS NULL ORDER BY root_id, path",
+            &[],
+        )
+        .unwrap()
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+    assert_eq!(
+        unresolved,
+        [
+            (ctx.root_id, "indexed.png".to_owned()),
+            (ctx.root_id, "unreadable.png".to_owned()),
+            (other, "gone.png".to_owned())
+        ]
+    );
+}
+
+#[test]
+fn a_scan_resolves_the_failures_of_files_that_are_gone() {
+    let env = Env::new();
+    let ctx = env.ctx(fv(true, false, false, false, false));
+    env.write("gone.png", b"x");
+    env.seed(&ctx, "gone.png", "sha", "indexed");
+    std::fs::remove_file(env.path("gone.png")).unwrap();
+    fail(&ctx, "gone.png", "thumbnails", "DecodeError: bad");
+    // Failed by a worker after the file and its row were already gone.
+    fail(&ctx, "raced.png", "thumbnails", "NotFound: no such file");
+    assert_eq!(scan_once(&ctx).deleted, 1);
+    assert!(env.unresolved().is_empty());
+}
+
+#[test]
+fn a_file_that_fails_before_it_has_a_row_keeps_its_failure() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new();
+    let ctx = env.ctx(fv(true, false, false, false, false));
+    env.write("locked.png", &png(8, 8));
+    let path = env.path("locked.png");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::File::open(&path).is_ok() {
+        return; // Running as root: permissions do not apply.
+    }
+    assert_eq!(scan_once(&ctx).errors, 1);
+    assert_eq!(scan_once(&ctx).errors, 1);
+    assert!(!env.has_row(&ctx, "locked.png"));
+    let unresolved: Vec<(String, String)> = env.unresolved().into_iter().collect();
+    assert_eq!(unresolved, [("locked.png".to_owned(), "thumbnails".to_owned())]);
+    assert_eq!(env.attempts("locked.png", "thumbnails"), Some(2));
 }
 
 #[test]
@@ -230,7 +292,7 @@ fn an_unavailable_history_never_breaks_processing() {
 fn a_backend_outage_is_waiting_not_a_file_failure() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     env.write("words.txt", b"searchable words");
     assert_eq!(scan_once(&ctx).errors, 0);
@@ -318,7 +380,7 @@ fn prune_reports_a_missing_history() {
     env.client()
         .batch_execute("ALTER TABLE idx.files RENAME TO gone")
         .unwrap();
-    assert!(failures::prune(&ctx.db).is_err());
+    assert!(failures::resolve_gone(&ctx.db, ctx.root_id, chrono::Utc::now()).is_err());
 }
 
 #[test]

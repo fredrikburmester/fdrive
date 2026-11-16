@@ -7,6 +7,7 @@ import {
   RECENCY_FLOOR,
   RECENCY_HALF_LIFE_DAYS,
   recencyWeight,
+  typoBudget,
 } from "./ranking.ts";
 
 describe("fuseRankings", () => {
@@ -181,11 +182,47 @@ describe("nameMatch", () => {
     expect(nameMatch(" . ", { name: "Plan.md", folder: "/" })).toBe("none");
   });
 
+  it("is typo when every word starts a word of the name give or take its typos", () => {
+    expect(nameMatch("Microlär", { name: "Mikrolärande", folder: "/" })).toBe("typo");
+    expect(nameMatch("mikrolarande", { name: "Mikrolärande", folder: "/" })).toBe("typo");
+    expect(nameMatch("Kontextdokumnet", { name: "Kontextdokument.md", folder: "/" })).toBe("typo");
+    expect(nameMatch("infragide logbok", { name: "InfraGuide loggbok", folder: "/" })).toBe("typo");
+    expect(nameMatch("plan mikrolarande", { name: "Plan mikrolärande.md", folder })).toBe("typo");
+  });
+
+  it("reads an accent macOS stored decomposed the same way when counting typos", () => {
+    const name = "Mötesanteckningar.pdf".normalize("NFD");
+    expect(nameMatch("motesanteckningar", { name, folder: "/" })).toBe("typo");
+  });
+
+  it("allows no typo below five letters, one up to eight and two from nine", () => {
+    expect(nameMatch("wrok", { name: "Work", folder: "/" })).toBe("none");
+    expect(nameMatch("lagerlat", { name: "Lägerlåt.pdf", folder: "/" })).toBe("none");
+    expect(nameMatch("motesantekningar", { name: "Mötesanteckningar", folder: "/" })).toBe("typo");
+    expect(nameMatch("motesantekninger", { name: "Mötesanteckningar", folder: "/" })).toBe("none");
+  });
+
+  it("prefers a name and its folders spelled as typed over a typo", () => {
+    expect(nameMatch("acme invoice", { name: "invoice.pdf", folder: "/Clients/Acme" })).toBe(
+      "path",
+    );
+    expect(nameMatch("acme invoise", { name: "invoice.pdf", folder: "/Clients/Acme" })).toBe(
+      "none",
+    );
+  });
+
   it("boosts each kind of match more than the one below it", () => {
     expect(NAME_MATCH_BOOST.exact).toBeGreaterThan(NAME_MATCH_BOOST.words);
     expect(NAME_MATCH_BOOST.words).toBeGreaterThan(NAME_MATCH_BOOST.path);
-    expect(NAME_MATCH_BOOST.path).toBeGreaterThan(NAME_MATCH_BOOST.none);
+    expect(NAME_MATCH_BOOST.path).toBeGreaterThan(NAME_MATCH_BOOST.typo);
+    expect(NAME_MATCH_BOOST.typo).toBeGreaterThan(NAME_MATCH_BOOST.none);
     expect(NAME_MATCH_BOOST.none).toBe(0);
+  });
+});
+
+describe("typoBudget", () => {
+  it("allows none below five letters, one up to eight and two from nine", () => {
+    expect([0, 4, 5, 8, 9, 20].map(typoBudget)).toEqual([0, 0, 1, 1, 2, 2]);
   });
 });
 
@@ -221,5 +258,11 @@ describe("recencyWeight", () => {
     // The most reciprocal rank fusion can give: first in both content lists and in the filename list.
     const bestFused = 2 / 61 + 1.5 / 61;
     expect(NAME_MATCH_BOOST.path * RECENCY_FLOOR).toBeGreaterThan(bestFused);
+    expect(NAME_MATCH_BOOST.typo * RECENCY_FLOOR).toBeGreaterThan(bestFused);
+  });
+
+  it("cannot lift a typo match above a name spelled as typed, however new", () => {
+    const bestFused = 2 / 61 + 1.5 / 61;
+    expect(NAME_MATCH_BOOST.typo + bestFused).toBeLessThan(NAME_MATCH_BOOST.path * RECENCY_FLOOR);
   });
 });

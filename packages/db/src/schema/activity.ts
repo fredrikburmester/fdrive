@@ -28,13 +28,13 @@ const owner = () =>
     .notNull()
     .references(() => accounts.id, { onDelete: "cascade" });
 
-/** Durable identity snapshots deliberately have no FK to live logins/providers. */
+/**
+ * The login each event was recorded under, with its username, kept when the
+ * login is deleted: history outlives a login, so this has no FK to it.
+ */
 export const activityStorageIdentities = appSchema.table("activity_storage_identities", {
   identityId: uuid("identity_id").primaryKey(),
-  providerId: uuid("provider_id").notNull(),
-  providerType: text("provider_type").notNull(),
   label: text("label").notNull(),
-  retiredAt: time("retired_at"),
 });
 export const activityFiles = appSchema.table(
   "activity_files",
@@ -67,7 +67,7 @@ export const activityFileBridges = appSchema.table(
   "activity_file_bridges",
   {
     identityId: uuid("identity_id").notNull(),
-    namespace: text("namespace").notNull(),
+    namespace: text("namespace").$type<"office" | "desktop">().notNull(),
     externalId: text("external_id").notNull(),
     fileId: uuid("file_id").notNull(),
   },
@@ -254,7 +254,6 @@ export const activityRevisions = appSchema.table(
     identityId: uuid("identity_id").notNull(),
     ownerAccountId: owner(),
     eventId: uuid("event_id").notNull(),
-    providerVersion: text("provider_version"),
     sha256: text("sha256"),
     size: bigint("size", { mode: "number" }),
     previousRevisionId: uuid("previous_revision_id"),
@@ -314,8 +313,8 @@ export const activityTrashBindings = appSchema.table(
     ownerAccountId: owner(),
     eventId: uuid("event_id").notNull(),
     originalPath: text("original_virtual_path").notNull(),
-    trashLeaf: text("trash_virtual_leaf"),
-    state: text("state").$type<"bound" | "unresolved" | "restored" | "purged">().notNull(),
+    trashLeaf: text("trash_virtual_leaf").notNull(),
+    state: text("state").$type<"bound" | "restored" | "purged">().notNull(),
   },
   (t) => [
     primaryKey({ columns: [t.eventId, t.fileId] }),

@@ -1,22 +1,21 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DesktopWriteEntry } from "@fdrive/contracts";
-import { StorageError, type StorageProvider } from "@fdrive/core";
-import type { DesktopEffectContext } from "@fdrive/db";
+import { isStorageError, type MoveOptions, StorageError, trashItemPath } from "@fdrive/core";
+import type { DesktopAccessMove } from "@fdrive/db";
+import { createLocalStorage, createUserStorage } from "@fdrive/local";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
+import { testFileOperations, testTrashItems } from "../../test/file-operations.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import { recordingGate } from "../../test/recording-gate.js";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../../test/trash-items.js";
 import type { Principal } from "../auth/principal.js";
-import { createDesktopRetention, removeRecoveryTree } from "./retention.js";
-import {
-  createDesktopWrites,
-  DESKTOP_COMMIT_STALL_MS,
-  DESKTOP_PROGRESS_INTERVAL_MS,
-  DESKTOP_TRASH,
-  NO_WRITES,
-} from "./writes.js";
+import { fileActor } from "../files/operations.js";
+import { createDesktopRetention, removeIncoming } from "./retention.js";
+import { createDesktopWrites, DESKTOP_TRASH, NO_WRITES } from "./writes.js";
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 const ALL_WRITES = { create: true, update: true, move: true, trash: true, restore: true };
@@ -25,17 +24,67 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 const body = (value: string) => required(new Response(value).body);
+/**
+ * A call that never returns, as one in a process that died there: `made`
+ * resolves once it is called. A service built afresh stands for the restart.
+ */
+function crashAt() {
+  let reached: () => void = () => undefined;
+  const made = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  return {
+    made,
+    call: (): Promise<never> => {
+      reached();
+      return new Promise<never>(() => undefined);
+    },
+  };
+}
+/** The names an operation has staged in its owner's files. */
+async function staged(
+  f: { raw: { list(path: string): Promise<{ name: string }[]> }; principal: Principal },
+  operationId: string,
+) {
+  try {
+    return (
+      await f.raw.list(`/.fdrive-desktop/${f.principal.identityId}/incoming/${operationId}`)
+    ).map((entry) => entry.name);
+  } catch (error) {
+    if (isStorageError(error) && error.kind === "not_found") return [];
+    throw error;
+  }
+}
+/** The only row Trash holds, arrived or on its way, with its path in Trash. */
+function onlyItem(f: { trashRepo: MemoryTrashItemRepo }) {
+  const rows = [...f.trashRepo.rows.values()];
+  expect(rows).toHaveLength(1);
+  const row = required(rows[0]);
+  return { ...row, leaf: trashItemPath(row.id, row.name) };
+}
+/** The path in Trash of the only item there. */
+async function onlyLeaf(f: { trashRepo: MemoryTrashItemRepo }) {
+  return onlyItem(f).leaf;
+}
 const temporary: string[] = [];
 afterEach(async () => {
   await Promise.all(temporary.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
+/** Every new file is written at a new moment. */
+function ticking() {
+  let now = Date.parse("2026-11-01T00:00:00.000Z");
+  return () => new Date(now++);
+}
+
 async function fixture() {
-  const stateDir = await mkdtemp(join(tmpdir(), "desktop-unit-"));
-  temporary.push(stateDir);
-  const memory = memoryRepo();
-  const raw = createMemoryStorage({ "/old.txt": "old", "/folder/child": "child" });
-  const storage: StorageProvider = { ...raw, withWriteLease: vi.fn(async (action) => action(raw)) };
+  const trashRepo = memoryTrashItemRepo();
+  const memory = memoryRepo(trashRepo);
+  const raw = createMemoryStorage(
+    { "/old.txt": "old", "/folder/child": "child" },
+    { clock: ticking() },
+  );
+  const storage = raw;
   const principal: Principal = {
     accountId: randomUUID(),
     identityId: randomUUID(),
@@ -43,20 +92,29 @@ async function fixture() {
     isAdmin: false,
     storage,
     tokenAccess: { mode: "full", paths: ["/"] },
-    verifyAuthority: vi.fn(async () => true),
   };
-  const effectContext = vi.fn(
-    async (_principal: Principal, context: Omit<DesktopEffectContext, "office">) => ({
-      ...context,
-      office: null,
-    }),
+  // Every move is one the owner's public links follow, in the owner's files.
+  const access = vi.fn(
+    async (identityId: string, from: string, to: string, directory: boolean) =>
+      ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
   );
+  const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
+  // Trash's rows, over the one login's files.
+  const homeOf = async () => raw;
+  const trash = testTrashItems({ repo: trashRepo, homeOf }).items;
+  const files = testFileOperations({ trashRepo, homeOf });
+  // Delete permanently, through `FileOperations.purge`.
+  const purge = vi.fn(async (principal: Principal, id: string) => {
+    await files.purge(fileActor(principal, { source: "native" }), id);
+  });
   const deps = {
     repo: memory.repo,
-    stateDir,
+    storageForIdentity: async () => raw,
     clock: () => new Date(),
-    trashPathForStorage: () => null,
-    effectContext,
+    access,
+    metadata,
+    purge,
+    trash,
   };
   const service = createDesktopWrites(deps);
   const stage = async (name: string, bytes: string, existing?: DesktopWriteEntry) => {
@@ -74,7 +132,7 @@ async function fixture() {
     await service.upload(principal, request.operationId, body(bytes), new AbortController().signal);
     return request;
   };
-  const read = async (path: string) => new Response((await raw.download(path)).body).text();
+  const read = async (path: string) => new Response((await raw.open(path)).stream()).text();
   return {
     ...memory,
     raw,
@@ -82,10 +140,14 @@ async function fixture() {
     principal,
     service,
     deps,
-    stateDir,
     stage,
     read,
-    effectContext,
+    access,
+    metadata,
+    purge,
+    files,
+    trashRepo,
+    trash,
   };
 }
 
@@ -99,27 +161,24 @@ it("retains a durable upload receipt and never republishes after acknowledgement
   const op = required(
     await f.repo.operation(f.principal.identityId, f.principal.accountId, request.operationId),
   );
+  // Staged in the owner's files, beside the Mac's Trash.
   expect(
-    await readFile(
-      join(
-        f.stateDir,
-        f.principal.identityId,
-        request.operationId,
-        required(op.result).uploadFile as string,
-      ),
-      "utf8",
+    await f.read(
+      `/.fdrive-desktop/${f.principal.identityId}/incoming/${request.operationId}/${required(op.result).uploadFile}`,
     ),
   ).toBe("saved");
   const result = await f.service.commit(f.principal, request.operationId);
   expect(result.item?.id).toBe(original.id);
   expect(result.item?.version.content).toBe(sha("saved"));
   expect(await f.read("/old.txt")).toBe("saved");
-  expect(f.effectContext).toHaveBeenCalledWith(f.principal, {
+  expect(f.completed.get(request.operationId)).toEqual({
     from: "/old.txt",
     to: "/old.txt",
     directory: false,
     trash: false,
   });
+  // A save in place moves no metadata.
+  expect(f.metadata.onMoved).not.toHaveBeenCalled();
   const restarted = createDesktopWrites(f.deps);
   expect(await restarted.commit(f.principal, request.operationId)).toEqual(result);
   await restarted.acknowledge(f.principal, request.operationId);
@@ -136,7 +195,9 @@ it("retains a durable upload receipt and never republishes after acknowledgement
   await expect(
     restarted.prepare(f.principal, { ...request, name: "different" }),
   ).rejects.toMatchObject({ kind: "conflict" });
-  expect(f.storage.withWriteLease).toHaveBeenCalledTimes(1);
+  // No copy of what the save replaced is kept, and its staging folder is gone.
+  expect(result.recoveryId).toBeNull();
+  expect(await f.raw.list(`/.fdrive-desktop/${f.principal.identityId}/incoming`)).toEqual([]);
 });
 
 it("creates zero-byte files and folders, moves descendants and preserves identities", async () => {
@@ -175,7 +236,7 @@ it("rejects stale content, occupied/case-folded names, root and escaping scope m
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const stale = await f.stage("old.txt", "local", source);
-  await f.raw.upload("/old.txt", new TextEncoder().encode("new"));
+  await f.raw.upload("/old.txt", new TextEncoder().encode("new"), { overwrite: true });
   await expect(f.service.commit(f.principal, stale.operationId)).rejects.toMatchObject({
     details: { code: "version_conflict" },
   });
@@ -230,7 +291,7 @@ it("rejects stale content, occupied/case-folded names, root and escaping scope m
   });
 });
 
-it("fails closed for read grants, unqualified providers, disabled spool and revocation", async () => {
+it("fails closed for read grants, and needs nothing else", async () => {
   const f = await fixture();
   const input = {
     kind: "folder" as const,
@@ -238,20 +299,13 @@ it("fails closed for read grants, unqualified providers, disabled spool and revo
     parentId: "root",
     name: "new",
   };
-  for (const p of [
-    { ...f.principal, tokenAccess: { mode: "read" as const, paths: ["/"] } },
-    { ...f.principal, storage: f.raw },
-  ]) {
-    expect(f.service.capabilities(p)).toEqual(NO_WRITES);
-    await expect(f.service.prepare(p, input)).rejects.toMatchObject({ kind: "forbidden" });
-  }
-  const disabled = createDesktopWrites({ ...f.deps, stateDir: undefined } as never);
-  expect(disabled.capabilities(f.principal)).toEqual(NO_WRITES);
-  await expect(disabled.prepare(f.principal, input)).rejects.toMatchObject({ kind: "forbidden" });
+  const readOnly: Principal = { ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } };
+  expect(f.service.capabilities(readOnly)).toEqual(NO_WRITES);
+  expect(f.service.capabilities(f.principal)).toEqual(ALL_WRITES);
+  await expect(f.service.prepare(readOnly, input)).rejects.toMatchObject({ kind: "forbidden" });
   await f.service.prepare(f.principal, input);
-  vi.mocked(required(f.principal.verifyAuthority)).mockResolvedValue(false);
-  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
-    kind: "unauthorized",
+  await expect(f.service.commit(readOnly, input.operationId)).rejects.toMatchObject({
+    kind: "forbidden",
   });
   await expect(
     f.service.status({ ...f.principal, accountId: randomUUID() }, input.operationId),
@@ -313,30 +367,34 @@ it("bounds and verifies uploads, resets failed transfers and cancels only unpubl
   });
 });
 
-it("reclaims expired uploads, stale conflicts and old backups only inside the recovery namespace", async () => {
+it("cancels stale uploads and forgets finished operations with what they staged", async () => {
   const f = await fixture();
   const eventLog = { record: vi.fn() };
   let now = new Date();
+  let unavailable = "";
   const retention = createDesktopRetention({
     repo: f.repo,
-    stateDir: f.stateDir,
-    storageForIdentity: async () => f.storage,
+    storageForIdentity: async (identityId) => {
+      if (identityId === unavailable) throw Error("storage is down");
+      return f.raw;
+    },
     clock: () => now,
     eventLog,
   });
   const key = (id: string) => f.principal.identityId + id;
-  // An acknowledged replacement leaves a retained original under the recovery namespace.
+  const incoming = `/.fdrive-desktop/${f.principal.identityId}/incoming`;
+  const staged = async () => (await f.raw.list(incoming)).map((entry) => entry.name).sort();
+  // An acknowledged save leaves nothing behind; one a crash interrupted
+  // left its body, which goes when its operation is forgotten.
   const original = await f.service.stat(f.principal, "/old.txt");
   const replaced = await f.stage("old.txt", "new", original);
   await f.service.commit(f.principal, replaced.operationId);
   await f.service.acknowledge(f.principal, replaced.operationId);
-  const internal = `/.fdrive-desktop/${f.principal.identityId}/${replaced.operationId}`;
-  const attempts = await f.raw.list(internal);
-  expect(attempts.map((entry) => entry.kind)).toEqual(["dir"]);
-  expect((await f.raw.list(required(attempts[0]).path)).map((entry) => entry.name)).toEqual([
-    "previous",
-  ]);
-  // A body that never finished, a conflict nobody retried, and a tree with a stray entry.
+  expect(await staged()).toEqual([]);
+  await f.raw.upload(`${incoming}/${replaced.operationId}/${randomUUID()}`, body("left"), {
+    mkdirParents: true,
+  });
+  // A body that never finished and a conflict nobody retried.
   const idle = await f.stage("idle.txt", "idle");
   f.operations.set(key(idle.operationId), {
     ...required(f.operations.get(key(idle.operationId))),
@@ -347,163 +405,218 @@ it("reclaims expired uploads, stale conflicts and old backups only inside the re
     ...required(f.operations.get(key(conflicted.operationId))),
     state: "conflict",
   });
-  const stray = await f.stage("stray.txt", "stray");
-  await f.service.commit(f.principal, stray.operationId);
-  await f.service.acknowledge(f.principal, stray.operationId);
-  const strayInternal = `/.fdrive-desktop/${f.principal.identityId}/${stray.operationId}`;
-  await f.raw.upload(`${strayInternal}/notes.txt`, body("someone else's file"));
-  // An uncertain commit is never a candidate, however old.
-  const uncertain = await f.stage("uncertain.txt", "uncertain");
-  f.operations.set(key(uncertain.operationId), {
-    ...required(f.operations.get(key(uncertain.operationId))),
-    state: "uncertain",
+  // Ready and committing operations may still publish what they staged, however old.
+  const ready = await f.stage("ready.txt", "ready");
+  const committing = await f.stage("committing.txt", "committing");
+  f.operations.set(key(committing.operationId), {
+    ...required(f.operations.get(key(committing.operationId))),
+    state: "committing",
   });
-  expect(await retention.sweep()).toEqual({ cancelled: 0, reclaimed: 0, deferred: 0 });
+  expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 0, deferred: 0 });
   now = new Date(now.getTime() + 31 * 24 * 60 * 60_000);
-  expect(await retention.sweep()).toEqual({ cancelled: 2, reclaimed: 1, deferred: 1 });
+  expect(await retention.sweep()).toEqual({ cancelled: 2, forgotten: 1, deferred: 0 });
   expect((await f.service.status(f.principal, idle.operationId)).state).toBe("cancelled");
   expect((await f.service.status(f.principal, conflicted.operationId)).state).toBe("cancelled");
-  expect(await readdir(join(f.stateDir, f.principal.identityId))).not.toContain(idle.operationId);
-  expect(
-    (await f.raw.list(`/.fdrive-desktop/${f.principal.identityId}`)).map((e) => e.path),
-  ).toEqual([strayInternal]);
-  expect(required(f.operations.get(key(replaced.operationId))).result?.reclaimedAt).toBeTruthy();
-  expect(required(f.operations.get(key(stray.operationId))).result?.reclaimedAt).toBeUndefined();
-  expect(eventLog.record).toHaveBeenCalledWith(
-    "general",
-    "warn",
-    "Mac write recovery reclamation deferred",
-    expect.objectContaining({ operationId: stray.operationId }),
-  );
-  expect((await f.service.status(f.principal, uncertain.operationId)).state).toBe("uncertain");
+  expect(f.operations.has(key(replaced.operationId))).toBe(false);
+  expect(await staged()).toEqual([ready.operationId, committing.operationId].sort());
+  expect((await f.service.status(f.principal, ready.operationId)).state).toBe("ready");
   expect(await f.read("/old.txt")).toBe("new");
-  expect(await f.read("/stray.txt")).toBe("stray");
-  // Cancelled rows are reclaimed by a later pass; a second pass changes nothing else.
-  expect(await retention.sweep()).toEqual({ cancelled: 0, reclaimed: 2, deferred: 1 });
-  expect(await retention.sweep()).toEqual({ cancelled: 0, reclaimed: 0, deferred: 1 });
-  expect(f.storage.withWriteLease).toHaveBeenCalled();
-  // Without a spool directory or a lease-capable provider the same rules apply.
-  const bare = createDesktopRetention({
-    repo: f.repo,
-    storageForIdentity: async () => f.raw,
-    clock: () => now,
-    eventLog,
-  });
+  // Cancelled rows are forgotten by a later pass; a second pass changes nothing.
+  expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 2, deferred: 0 });
+  expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 0, deferred: 0 });
+  // A failure defers that operation to a later pass and says so.
   const late = await f.stage("late.txt", "late");
   f.operations.set(key(late.operationId), {
     ...required(f.operations.get(key(late.operationId))),
     state: "receiving",
     updatedAt: new Date(0),
   });
-  expect(await bare.sweep()).toEqual({ cancelled: 1, reclaimed: 0, deferred: 1 });
-  expect((await f.service.status(f.principal, late.operationId)).state).toBe("cancelled");
-});
-
-it("resolves an uncertain commit from storage evidence without replaying the write", async () => {
-  const f = await fixture();
-  const eventLog = { record: vi.fn() };
-  const service = createDesktopWrites({ ...f.deps, storageForIdentity: async () => f.storage });
-  void eventLog;
-  const now = () => new Date();
-  const original = await service.stat(f.principal, "/old.txt");
-  const input = await f.stage("old.txt", "published", original);
-  const move = f.raw.move.bind(f.raw);
-  f.raw.move = vi.fn(async (path: string, target: string, options?: { overwrite?: boolean }) => {
-    await move(path, target, options);
-    throw Error("connection lost after commit");
-  });
-  await expect(service.commit(f.principal, input.operationId)).rejects.toMatchObject({
-    details: { code: "operation_uncertain" },
-  });
-  const { identityId, accountId } = f.principal;
-  expect(await service.uncertain(now())).toMatchObject([
-    { operationId: input.operationId, state: "uncertain", stalled: true, kind: "upload" },
-  ]);
-  // A live commit is not resolvable; a stalled one is.
-  const live = await f.stage("live.txt", "live");
-  f.operations.set(identityId + live.operationId, {
-    ...required(f.operations.get(identityId + live.operationId)),
-    state: "committing",
-  });
-  await expect(
-    service.resolve(identityId, accountId, live.operationId, "discarded", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
-  expect(
-    (
-      await service.resolve(
-        identityId,
-        accountId,
-        live.operationId,
-        "discarded",
-        new Date(Date.now() + DESKTOP_COMMIT_STALL_MS + 1),
-      )
-    ).state,
-  ).toBe("cancelled");
-  // Wrong evidence is refused before any registry change; resolution never moves bytes.
-  f.raw.move = vi.fn(move);
-  const other = await f.stage("other.txt", "other");
-  f.operations.set(identityId + other.operationId, {
-    ...required(f.operations.get(identityId + other.operationId)),
-    state: "uncertain",
-  });
-  await expect(
-    service.resolve(identityId, accountId, other.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
-  expect(await f.read("/old.txt")).toBe("published");
-  const resolved = await service.resolve(
-    identityId,
-    accountId,
-    input.operationId,
-    "published",
-    now(),
+  unavailable = f.principal.identityId;
+  expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 0, deferred: 1 });
+  expect(eventLog.record).toHaveBeenCalledWith(
+    "general",
+    "warn",
+    "Mac write cleanup deferred",
+    expect.objectContaining({ operationId: late.operationId }),
   );
-  expect(resolved).toMatchObject({
-    state: "completed",
-    recoveryId: input.operationId,
-    item: { path: "/old.txt", version: { content: sha("published") } },
-  });
-  expect(await f.read("/old.txt")).toBe("published");
-  expect((await service.status(f.principal, input.operationId)).state).toBe("completed");
-  expect(await service.acknowledge(f.principal, input.operationId)).toMatchObject({
-    state: "completed",
-  });
-  expect(f.raw.move).toHaveBeenCalledTimes(0);
-  await expect(
-    service.resolve(identityId, accountId, input.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
+  unavailable = "";
+  expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 1, deferred: 0 });
+  expect(await staged()).toEqual([ready.operationId, committing.operationId].sort());
 });
 
-it("resolves trash moves and restores, and refuses missing sources or unavailable storage", async () => {
+it("finishes a write a crash stopped after its rename when the app retries", async () => {
   const f = await fixture();
-  const { identityId, accountId } = f.principal;
-  const key = (id: string) => identityId + id;
-  const now = () => new Date();
-  const markUncertain = (id: string) =>
-    f.operations.set(key(id), { ...required(f.operations.get(key(id))), state: "uncertain" });
-  const original = await f.service.stat(f.principal, "/old.txt");
-  const stale = await f.stage("old.txt", "stale", original);
-  markUncertain(stale.operationId);
-  await expect(
-    f.service.resolve(identityId, accountId, stale.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "upstream_unavailable" });
-  const { effectContext: _unused, ...bare } = f.deps;
-  const service = createDesktopWrites({
-    ...bare,
-    storageForIdentity: async () => f.storage,
-    effects: {
-      beforeWrite: async () => undefined,
-      kick: () => {
-        throw Error("kick failed");
-      },
-    },
+  const { identityId } = f.principal;
+  // What grants access follows the item: its public links and the folders shared from it.
+  const access = vi.fn(
+    async (_identity: string, from: string, to: string, directory: boolean) =>
+      ({
+        directory,
+        shares: { identityId, from, to },
+        grants: { owner: "test", from, to },
+      }) as DesktopAccessMove,
+  );
+  const item = await f.service.stat(f.principal, "/old.txt");
+  const folder = await f.service.stat(f.principal, "/folder");
+  const move = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: item.id,
+    parentId: folder.id,
+    name: "moved.txt",
+    base: item.version,
+  };
+  const crash = crashAt();
+  const crashed = createDesktopWrites({
+    ...f.deps,
+    access,
+    repo: { ...f.repo, complete: crash.call },
   });
-  // An upload whose target is a folder is not evidence of publication.
-  const folder = await f.stage("folder", "bytes");
-  markUncertain(folder.operationId);
-  await expect(
-    service.resolve(identityId, accountId, folder.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
-  // A trash move whose storage step completed but whose registry update was lost.
+  await crashed.prepare(f.principal, move);
+  void crashed.commit(f.principal, move.operationId);
+  await crash.made;
+  // The rename happened; its receipt did not.
+  expect(await f.read("/folder/moved.txt")).toBe("old");
+  expect((await f.service.status(f.principal, move.operationId)).state).toBe("committing");
+  expect(f.moved.has(move.operationId)).toBe(false);
+  // Every retry starts with the same request, which finishes the commit from disk.
+  const restarted = createDesktopWrites({ ...f.deps, access });
+  const receipt = await restarted.prepare(f.principal, move);
+  expect(receipt).toMatchObject({
+    state: "completed",
+    item: { id: item.id, path: "/folder/moved.txt" },
+  });
+  expect(f.moved.get(move.operationId)).toEqual({
+    directory: false,
+    shares: { identityId, from: "/old.txt", to: "/folder/moved.txt" },
+    grants: { owner: "test", from: "/old.txt", to: "/folder/moved.txt" },
+  });
+  expect(f.completed.get(move.operationId)).toMatchObject({
+    from: "/old.txt",
+    to: "/folder/moved.txt",
+  });
+  expect(f.metadata.onMoved).toHaveBeenCalledWith(
+    identityId,
+    "/old.txt",
+    "/folder/moved.txt",
+    false,
+  );
+  expect(await f.read("/folder/moved.txt")).toBe("old");
+  expect(f.raw.dump()["/old.txt"]).toBeUndefined();
+  expect(await restarted.commit(f.principal, move.operationId)).toEqual(receipt);
+  // A save in place the same way: the published body is the one the receipt names.
+  const g = await fixture();
+  const original = await g.service.stat(g.principal, "/old.txt");
+  const save = await g.stage("old.txt", "saved", original);
+  const stopped = crashAt();
+  void createDesktopWrites({ ...g.deps, repo: { ...g.repo, complete: stopped.call } }).commit(
+    g.principal,
+    save.operationId,
+  );
+  await stopped.made;
+  expect(await g.read("/old.txt")).toBe("saved");
+  expect(await createDesktopWrites(g.deps).prepare(g.principal, save)).toMatchObject({
+    state: "completed",
+    item: { id: original.id, version: { content: sha("saved") } },
+  });
+  expect(await g.read("/old.txt")).toBe("saved");
+  expect(await staged(g, save.operationId)).toEqual([]);
+});
+
+it("publishes a write a crash stopped before its rename once the app retries, and only once", async () => {
+  const f = await fixture();
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const save = await f.stage("old.txt", "saved", original);
+  const move = f.raw.move.bind(f.raw);
+  const crash = crashAt();
+  f.raw.move = vi.fn(crash.call);
+  void createDesktopWrites(f.deps).commit(f.principal, save.operationId);
+  await crash.made;
+  // What it was about to publish is recorded; nothing is published.
+  expect(await f.read("/old.txt")).toBe("old");
+  const op = required(
+    await f.repo.operation(f.principal.identityId, f.principal.accountId, save.operationId),
+  );
+  expect(op.state).toBe("committing");
+  expect(op.result?.publication).toMatchObject({ to: "/old.txt" });
+  f.raw.move = vi.fn(move);
+  const restarted = createDesktopWrites(f.deps);
+  // The retry finds it unpublished, and its commit publishes it.
+  expect((await restarted.prepare(f.principal, save)).state).toBe("ready");
+  expect((await restarted.commit(f.principal, save.operationId)).state).toBe("completed");
+  expect(await f.read("/old.txt")).toBe("saved");
+  expect(f.raw.move).toHaveBeenCalledTimes(1);
+  // A new folder the same way, from a commit retried directly.
+  const folder = {
+    kind: "folder" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "made",
+  };
+  await f.service.prepare(f.principal, folder);
+  const again = crashAt();
+  f.raw.move = vi.fn(again.call);
+  void createDesktopWrites(f.deps).commit(f.principal, folder.operationId);
+  await again.made;
+  f.raw.move = vi.fn(move);
+  expect(
+    (await createDesktopWrites(f.deps).commit(f.principal, folder.operationId)).item,
+  ).toMatchObject({ path: "/made", kind: "dir" });
+  expect(f.raw.dirs()).toContain("/made");
+  expect(await staged(f, folder.operationId)).toEqual([]);
+});
+
+it("leaves no Trash row behind a move to Trash that never moved the item", async () => {
+  const f = await fixture();
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const request = (operationId: string) => ({
+    kind: "move" as const,
+    operationId,
+    itemId: original.id,
+    parentId: "trash",
+    name: original.name,
+    base: original.version,
+  });
+  const begin = vi.spyOn(f.trash, "begin");
+  // The rename into Trash fails: the item stays, and its row goes with the folder made for it.
+  const failing = request(randomUUID());
+  await f.service.prepare(f.principal, failing);
+  const move = f.raw.move.bind(f.raw);
+  f.raw.move = vi.fn(async () => {
+    throw new StorageError("upstream_unavailable", "disk gone");
+  });
+  await expect(f.service.commit(f.principal, failing.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  f.raw.move = move;
+  expect((await f.service.status(f.principal, failing.operationId)).state).toBe("ready");
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
+  expect(await f.read("/old.txt")).toBe("old");
+  // Refused at the last check before it moves, after its row was written: the same.
+  const revoked = request(randomUUID());
+  await f.service.prepare(f.principal, revoked);
+  const lapsed = { ...f.principal, verifyAuthority: async () => false };
+  await expect(f.service.commit(lapsed, revoked.operationId)).rejects.toMatchObject({
+    kind: "unauthorized",
+  });
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(await f.read("/old.txt")).toBe("old");
+  // Each attempt wrote its row before it could move anything.
+  expect(begin).toHaveBeenCalledTimes(2);
+  // Committed again, it goes to Trash once, with one row.
+  expect((await f.service.commit(f.principal, failing.operationId)).item).toMatchObject({
+    id: original.id,
+    trashed: true,
+  });
+  expect(onlyItem(f)).toMatchObject({ originalPath: "/old.txt", movingFrom: null });
+  expect(await f.read(onlyItem(f).leaf)).toBe("old");
+});
+
+it("finishes a trash move and a restore a crash interrupted, from where the item was", async () => {
+  const f = await fixture();
+  const { identityId } = f.principal;
+  const original = await f.service.stat(f.principal, "/old.txt");
   const trashed = {
     kind: "move" as const,
     operationId: randomUUID(),
@@ -512,29 +625,44 @@ it("resolves trash moves and restores, and refuses missing sources or unavailabl
     name: original.name,
     base: original.version,
   };
-  await service.prepare(f.principal, trashed);
-  const trashRoot = `/.fdrive-desktop/${identityId}/trash`;
-  await f.raw.mkdir("/.fdrive-desktop");
-  await f.raw.mkdir(`/.fdrive-desktop/${identityId}`);
-  await f.raw.mkdir(trashRoot);
-  markUncertain(trashed.operationId);
-  await expect(
-    service.resolve(identityId, accountId, trashed.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
-  await f.raw.move("/old.txt", `${trashRoot}/${original.id}`);
-  const inTrash = await service.resolve(
-    identityId,
-    accountId,
+  await f.service.prepare(f.principal, trashed);
+  const crash = crashAt();
+  void createDesktopWrites({ ...f.deps, repo: { ...f.repo, complete: crash.call } }).commit(
+    f.principal,
     trashed.operationId,
-    "published",
-    now(),
   );
-  expect(inTrash.item).toMatchObject({ trashed: true, parentId: "trash", id: original.id });
-  expect(required(await f.repo.item(identityId, original.id))).toMatchObject({
-    path: `${trashRoot}/${original.id}`,
-    originalPath: "/old.txt",
+  await crash.made;
+  // Its row was written before it moved; the retry finds the item at its Trash item's path.
+  const pending = onlyItem(f);
+  const leaf = pending.leaf;
+  expect(pending).toMatchObject({ originalPath: "/old.txt", movingFrom: "/old.txt" });
+  expect(await f.read(leaf)).toBe("old");
+  expect(await f.trash.list(identityId, 10)).toEqual({ items: [], truncated: false });
+  const inTrash = await createDesktopWrites(f.deps).prepare(f.principal, trashed);
+  expect(inTrash.item).toMatchObject({
+    trashed: true,
+    parentId: "trash",
+    id: original.id,
+    path: `${DESKTOP_TRASH}/${original.id}`,
   });
-  // A restore whose storage step completed: the request carries the recovery name.
+  expect(required(await f.repo.item(identityId, original.id)).path).toBe(leaf);
+  // It arrived with its receipt: Trash lists it.
+  expect(onlyItem(f).movingFrom).toBeNull();
+  expect((await f.trash.list(identityId, 10)).items).toMatchObject([
+    { name: "old.txt", originalPath: "/old.txt" },
+  ]);
+  expect(f.moved.get(trashed.operationId)?.shares).toEqual({
+    identityId,
+    from: "/old.txt",
+    to: leaf,
+  });
+  expect(f.completed.get(trashed.operationId)).toMatchObject({
+    from: "/old.txt",
+    to: leaf,
+    trash: true,
+  });
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, "/old.txt", leaf, false);
+  // A restore: the request carries the name in the Mac's Trash.
   const restore = {
     kind: "move" as const,
     operationId: randomUUID(),
@@ -544,79 +672,96 @@ it("resolves trash moves and restores, and refuses missing sources or unavailabl
     base: required(inTrash.item).version,
   };
   expect(restore.name).toContain("(deleted ");
-  await service.prepare(f.principal, restore);
-  await f.raw.move(`${trashRoot}/${original.id}`, "/old.txt");
-  markUncertain(restore.operationId);
-  const restored = await service.resolve(
-    identityId,
-    accountId,
+  await f.service.prepare(f.principal, restore);
+  const again = crashAt();
+  void createDesktopWrites({ ...f.deps, repo: { ...f.repo, complete: again.call } }).commit(
+    f.principal,
     restore.operationId,
-    "published",
-    now(),
   );
+  await again.made;
+  const restored = await createDesktopWrites(f.deps).prepare(f.principal, restore);
   expect(restored.item).toMatchObject({ path: "/old.txt", name: "old.txt", trashed: false });
-  expect(required(await f.repo.item(identityId, original.id))).toMatchObject({
-    path: "/old.txt",
-    originalPath: null,
+  expect(required(await f.repo.item(identityId, original.id)).path).toBe("/old.txt");
+  expect(f.moved.get(restore.operationId)?.shares).toEqual({
+    identityId,
+    from: leaf,
+    to: "/old.txt",
   });
-  // A source handle that disappeared cannot be resolved as published.
-  const orphan = await f.stage("old.txt", "orphan", await service.stat(f.principal, "/old.txt"));
-  markUncertain(orphan.operationId);
-  f.items.delete(original.id);
-  await expect(
-    service.resolve(identityId, accountId, orphan.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "conflict" });
+  expect(f.completed.get(restore.operationId)).toMatchObject({
+    from: "/old.txt",
+    restored: true,
+  });
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, leaf, "/old.txt", false);
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
 });
 
-it("refuses resolution when evidence or the ledger changes underneath it", async () => {
+it("never overwrites a file someone replaced between commit attempts", async () => {
+  // Published before a crash, then replaced: the save is a conflict.
   const f = await fixture();
-  const { identityId, accountId } = f.principal;
-  const key = (id: string) => identityId + id;
-  const now = () => new Date();
-  const markUncertain = (id: string) =>
-    f.operations.set(key(id), { ...required(f.operations.get(key(id))), state: "uncertain" });
   const original = await f.service.stat(f.principal, "/old.txt");
-  const differing = await f.stage("old.txt", "never published", original);
-  markUncertain(differing.operationId);
-  const service = createDesktopWrites({ ...f.deps, storageForIdentity: async () => f.storage });
-  await expect(
-    service.resolve(identityId, accountId, differing.operationId, "published", now()),
-  ).rejects.toThrow("bytes differ");
-  const list = f.raw.list.bind(f.raw);
-  f.raw.list = vi.fn(async () => {
-    throw new StorageError("upstream_unavailable", "Storage offline");
+  const save = await f.stage("old.txt", "saved", original);
+  const crash = crashAt();
+  void createDesktopWrites({ ...f.deps, repo: { ...f.repo, complete: crash.call } }).commit(
+    f.principal,
+    save.operationId,
+  );
+  await crash.made;
+  await f.raw.upload("/old.txt", body("theirs"), { overwrite: true });
+  expect((await createDesktopWrites(f.deps).prepare(f.principal, save)).state).toBe("conflict");
+  expect(await f.read("/old.txt")).toBe("theirs");
+  expect(f.completed.has(save.operationId)).toBe(false);
+  // Stopped before its rename, then replaced: the retry's base check refuses it.
+  const g = await fixture();
+  const before = await g.service.stat(g.principal, "/old.txt");
+  const late = await g.stage("old.txt", "saved", before);
+  const move = g.raw.move.bind(g.raw);
+  const stopped = crashAt();
+  g.raw.move = vi.fn(stopped.call);
+  void createDesktopWrites(g.deps).commit(g.principal, late.operationId);
+  await stopped.made;
+  g.raw.move = move;
+  await g.raw.upload("/old.txt", body("theirs"), { overwrite: true });
+  const restarted = createDesktopWrites(g.deps);
+  expect((await restarted.prepare(g.principal, late)).state).toBe("ready");
+  await expect(restarted.commit(g.principal, late.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
   });
-  await expect(
-    service.resolve(identityId, accountId, differing.operationId, "published", now()),
-  ).rejects.toMatchObject({ kind: "upstream_unavailable" });
-  f.raw.list = list;
-  const stuck = createDesktopWrites({
-    ...f.deps,
-    storageForIdentity: async () => f.storage,
-    repo: { ...f.repo, transition: async () => false, complete: async () => false },
-  });
-  await expect(
-    stuck.resolve(identityId, accountId, differing.operationId, "discarded", now()),
-  ).rejects.toThrow("changed while resolving");
-  const published = await f.stage("fresh.txt", "fresh");
-  await f.raw.upload("/fresh.txt", body("fresh"));
-  markUncertain(published.operationId);
-  await expect(
-    stuck.resolve(identityId, accountId, published.operationId, "published", now()),
-  ).rejects.toThrow("changed while resolving");
-  const halfway = createDesktopWrites({
-    ...f.deps,
-    storageForIdentity: async () => f.storage,
-    repo: { ...f.repo, complete: async () => false },
-  });
-  await expect(
-    halfway.resolve(identityId, accountId, published.operationId, "published", now()),
-  ).rejects.toThrow("changed while resolving");
-  expect((await f.service.status(f.principal, published.operationId)).state).toBe("committing");
+  expect(await g.read("/old.txt")).toBe("theirs");
+  // A move whose item someone moved on after its rename is a conflict too, and moves no links.
+  const h = await fixture();
+  const item = await h.service.stat(h.principal, "/old.txt");
+  const rename = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: item.id,
+    parentId: "root",
+    name: "renamed.txt",
+    base: item.version,
+  };
+  await h.service.prepare(h.principal, rename);
+  const lost = crashAt();
+  void createDesktopWrites({ ...h.deps, repo: { ...h.repo, complete: lost.call } }).commit(
+    h.principal,
+    rename.operationId,
+  );
+  await lost.made;
+  await h.raw.move("/renamed.txt", "/elsewhere.txt");
+  expect((await createDesktopWrites(h.deps).commit(h.principal, rename.operationId)).state).toBe(
+    "conflict",
+  );
+  expect(await h.read("/elsewhere.txt")).toBe("old");
+  expect(h.moved.has(rename.operationId)).toBe(false);
 });
 
 it("runs retention on a timer, logs failed passes and stops cleanly", async () => {
   vi.useFakeTimers();
+  /** A registry with nothing to clean up. */
+  const idle = {
+    expired: vi.fn(async () => []),
+    transition: vi.fn(async () => true),
+    forget: vi.fn(async () => true),
+  };
   try {
     const eventLog = { record: vi.fn() };
     const expired = vi
@@ -624,7 +769,7 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
       .mockRejectedValueOnce(Error("db down"))
       .mockResolvedValue([]);
     const retention = createDesktopRetention({
-      repo: { expired, transition: vi.fn(async () => true), reclaim: vi.fn(async () => true) },
+      repo: { ...idle, expired },
       storageForIdentity: async () => createMemoryStorage({}),
       clock: () => new Date(),
       eventLog,
@@ -632,19 +777,16 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
     retention.start();
     retention.start();
     await vi.advanceTimersByTimeAsync(0);
-    expect(eventLog.record).toHaveBeenCalledWith(
-      "general",
-      "error",
-      "Mac write recovery reclamation failed",
-      { error: "db down" },
-    );
+    expect(eventLog.record).toHaveBeenCalledWith("general", "error", "Mac write cleanup failed", {
+      error: "db down",
+    });
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(expired).toHaveBeenCalledTimes(2);
     await retention.stop();
     await vi.advanceTimersByTimeAsync(10 * 60_000);
     expect(expired).toHaveBeenCalledTimes(2);
     retention.start();
-    expect(await retention.sweep()).toEqual({ cancelled: 0, reclaimed: 0, deferred: 0 });
+    expect(await retention.sweep()).toEqual({ cancelled: 0, forgotten: 0, deferred: 0 });
     // A pass still running when the next tick fires is reused, not duplicated.
     let release: (value: never[]) => void = () => undefined;
     const slow = vi.fn(
@@ -654,11 +796,7 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
         }),
     );
     const overlapping = createDesktopRetention({
-      repo: {
-        expired: slow,
-        transition: vi.fn(async () => true),
-        reclaim: vi.fn(async () => true),
-      },
+      repo: { ...idle, expired: slow },
       storageForIdentity: async () => createMemoryStorage({}),
       clock: () => new Date(),
       eventLog,
@@ -672,6 +810,7 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
     // Stopping during a pass ends it after the current operation.
     const stopping = createDesktopRetention({
       repo: {
+        ...idle,
         expired: vi.fn(async () => [
           { id: randomUUID(), identityId: "a", accountId: "b", state: "conflict" } as never,
           { id: randomUUID(), identityId: "a", accountId: "b", state: "conflict" } as never,
@@ -680,87 +819,188 @@ it("runs retention on a timer, logs failed passes and stops cleanly", async () =
           void stopping.stop();
           return true;
         }),
-        reclaim: vi.fn(async () => true),
       },
       storageForIdentity: async () => createMemoryStorage({}),
       clock: () => new Date(),
       eventLog,
     });
-    expect(await stopping.sweep()).toEqual({ cancelled: 1, reclaimed: 0, deferred: 0 });
+    expect(await stopping.sweep()).toEqual({ cancelled: 1, forgotten: 0, deferred: 0 });
   } finally {
     vi.useRealTimers();
   }
 });
 
-it("refuses to remove anything outside the expected recovery layout", async () => {
-  const attempt = randomUUID();
-  const base = "/.fdrive-desktop/identity";
+it("removes everything one operation staged and nothing else", async () => {
+  const identity = randomUUID();
+  const operation = randomUUID();
+  const other = randomUUID();
+  const incoming = `/.fdrive-desktop/${identity}/incoming`;
   const storage = createMemoryStorage({
-    [`${base}/valid/${attempt}/previous`]: "backup",
-    [`${base}/valid/${attempt}/incoming`]: "staged",
-    [`${base}/file-op`]: "not a directory",
-    [`${base}/odd/notes/previous`]: "unexpected attempt name",
-    [`${base}/loose/${attempt}/extra.txt`]: "unexpected file",
-    [`${base}/nested/${attempt}/previous/inner`]: "unexpected directory",
+    [`${incoming}/${operation}/${randomUUID()}`]: "body",
+    [`${incoming}/${other}/${randomUUID()}`]: "another operation's body",
     "/keep.txt": "user data",
   });
-  const paths = async () => (await storage.list(base)).map((entry) => entry.path).sort();
-  await removeRecoveryTree(storage, "/.fdrive-desktop/missing-identity/op");
-  await removeRecoveryTree(storage, `${base}/absent`);
+  await storage.mkdir(`${incoming}/${operation}/${randomUUID()}`);
+  await removeIncoming(storage, identity, operation);
+  // Nothing there is nothing to do.
+  await removeIncoming(storage, identity, operation);
+  await removeIncoming(storage, randomUUID(), operation);
+  expect((await storage.list(incoming)).map((entry) => entry.name)).toEqual([other]);
+  expect(await new Response((await storage.open("/keep.txt")).stream()).text()).toBe("user data");
   const offline = {
     ...storage,
-    list: async () => {
-      throw new StorageError("upstream_unavailable", "Storage offline");
+    deleteDir: async () => {
+      throw new StorageError("internal", "Storage offline");
     },
   };
-  await expect(removeRecoveryTree(offline, `${base}/valid`)).rejects.toThrow("offline");
-  for (const op of ["file-op", "odd", "loose", "nested"])
-    await expect(removeRecoveryTree(storage, `${base}/${op}`)).rejects.toThrow("Unexpected");
-  expect(await paths()).toEqual(
-    [`${base}/valid`, `${base}/file-op`, `${base}/odd`, `${base}/loose`, `${base}/nested`].sort(),
-  );
-  await removeRecoveryTree(storage, `${base}/valid`);
-  expect(await paths()).not.toContain(`${base}/valid`);
-  expect(await new Response((await storage.download("/keep.txt")).body).text()).toBe("user data");
+  await expect(removeIncoming(offline, identity, other)).rejects.toThrow("offline");
 });
 
-it("never replays a publication with a lost response and retains recovery bytes", async () => {
+it("never publishes twice when the storage call's answer is lost", async () => {
   const f = await fixture();
-  const input = await f.stage("new", "complete");
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const input = await f.stage("old.txt", "complete", original);
   const move = f.raw.move.bind(f.raw);
-  f.raw.move = vi.fn(async (path: string, target: string) => {
-    await move(path, target);
-    throw Error("connection lost after commit");
+  f.raw.move = vi.fn(async (path: string, target: string, options?: MoveOptions) => {
+    await move(path, target, options);
+    throw Error("connection lost after the rename");
   });
-  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
-    details: { code: "operation_uncertain" },
+  // Disk shows it published, so the commit keeps its receipt.
+  const receipt = await f.service.commit(f.principal, input.operationId);
+  expect(receipt).toMatchObject({
+    state: "completed",
+    item: { version: { content: sha("complete") } },
   });
-  expect(await f.read("/new")).toBe("complete");
-  expect((await f.service.commit(f.principal, input.operationId)).state).toBe("uncertain");
+  expect(await f.read("/old.txt")).toBe("complete");
+  expect(await f.service.commit(f.principal, input.operationId)).toEqual(receipt);
   expect(f.raw.move).toHaveBeenCalledTimes(1);
   await expect(f.service.cancel(f.principal, input.operationId)).rejects.toMatchObject({
     kind: "conflict",
   });
+  // When disk cannot tell either, it stays committing for the retry to read.
+  const next = await f.stage("next.txt", "next");
+  const stat = f.raw.stat.bind(f.raw);
+  f.raw.move = vi.fn(async () => {
+    throw Error("disconnected");
+  });
+  f.raw.stat = vi.fn(async (path: string) => {
+    if (path === "/next.txt") throw new StorageError("internal", "Disk gone");
+    return stat(path);
+  });
+  await expect(f.service.commit(f.principal, next.operationId)).rejects.toMatchObject({
+    kind: "internal",
+  });
+  expect((await f.service.status(f.principal, next.operationId)).state).toBe("committing");
+  f.raw.move = vi.fn(move);
+  f.raw.stat = stat;
+  expect((await f.service.prepare(f.principal, next)).state).toBe("ready");
+  expect((await f.service.commit(f.principal, next.operationId)).state).toBe("completed");
+  expect(await f.read("/next.txt")).toBe("next");
 });
 
-it("leaves the original untouched when staging or lease acquisition fails", async () => {
+it("leaves a write ready when its storage call publishes nothing", async () => {
+  const f = await fixture();
+  const input = await f.stage("new.txt", "bytes");
+  const move = vi
+    .spyOn(f.raw, "move")
+    .mockRejectedValueOnce(new StorageError("payload_too_large", "Disk full"));
+  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
+    kind: "payload_too_large",
+  });
+  await expect(f.raw.stat("/new.txt")).rejects.toMatchObject({ kind: "not_found" });
+  expect((await f.service.status(f.principal, input.operationId)).state).toBe("ready");
+  move.mockRestore();
+  expect((await f.service.commit(f.principal, input.operationId)).state).toBe("completed");
+  expect(await f.read("/new.txt")).toBe("bytes");
+});
+
+it("stages a body durably in the files folder and publishes it with one storage call", async () => {
+  const f = await fixture();
+  const upload = vi.spyOn(f.raw, "upload");
+  const move = vi.spyOn(f.raw, "move");
+  const created = await f.stage("new.txt", "bytes");
+  const incoming = `/.fdrive-desktop/${f.principal.identityId}/incoming/${created.operationId}`;
+  expect(upload).toHaveBeenCalledWith(
+    expect.stringMatching(new RegExp(`^${incoming}/[0-9a-f-]{36}$`)),
+    expect.anything(),
+    expect.objectContaining({ durable: true, mkdirParents: true }),
+  );
+  await f.service.commit(f.principal, created.operationId);
+  expect(move).toHaveBeenCalledWith(upload.mock.calls[0]?.[0], "/new.txt", {
+    overwrite: false,
+    publish: true,
+  });
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const saved = await f.stage("old.txt", "saved", original);
+  await f.service.commit(f.principal, saved.operationId);
+  expect(move).toHaveBeenLastCalledWith(upload.mock.calls[1]?.[0], "/old.txt", {
+    overwrite: true,
+    publish: true,
+  });
+  // A staged body that is gone is asked for again.
+  const lost = await f.stage("lost.txt", "lost");
+  await f.raw.deleteDir(`/.fdrive-desktop/${f.principal.identityId}/incoming/${lost.operationId}`);
+  expect((await f.service.commit(f.principal, lost.operationId)).state).toBe("receiving");
+  await f.service.upload(f.principal, lost.operationId, body("lost"), new AbortController().signal);
+  expect((await f.service.commit(f.principal, lost.operationId)).state).toBe("completed");
+  expect(await f.read("/lost.txt")).toBe("lost");
+});
+
+it("holds the backups' write gate for a commit, never while its body is staged", async () => {
+  const f = await fixture();
+  const steps: string[] = [];
+  const service = createDesktopWrites({ ...f.deps, gate: recordingGate(steps) });
+  const upload = f.raw.upload.bind(f.raw);
+  vi.spyOn(f.raw, "upload").mockImplementation(async (path, staged, options) => {
+    steps.push("body staged");
+    return upload(path, staged, options);
+  });
+  const move = f.raw.move.bind(f.raw);
+  vi.spyOn(f.raw, "move").mockImplementation(async (from, to, options) => {
+    steps.push("published");
+    return move(from, to, options);
+  });
+  const request = {
+    kind: "upload" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "gated.txt",
+    base: null,
+    size: 5,
+    sha256: sha("bytes"),
+  };
+  await service.prepare(f.principal, request);
+  await service.upload(
+    f.principal,
+    request.operationId,
+    body("bytes"),
+    new AbortController().signal,
+  );
+  expect(steps).toEqual(["body staged"]);
+  expect((await service.commit(f.principal, request.operationId)).state).toBe("completed");
+  expect(steps).toEqual(["body staged", "gate held", "published", "gate let go"]);
+});
+
+it("leaves the original untouched when the body cannot be staged", async () => {
   const f = await fixture();
   const original = await f.service.stat(f.principal, "/old.txt");
-  const input = await f.stage("old.txt", "new", original);
-  f.raw.upload = vi.fn(async () => {
-    throw new StorageError("forbidden", "Denied");
-  });
-  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
-    kind: "forbidden",
-  });
+  const request = {
+    kind: "upload" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    itemId: original.id,
+    name: "old.txt",
+    base: { ...original.version, content: sha("old") },
+    size: 3,
+    sha256: sha("new"),
+  };
+  await f.service.prepare(f.principal, request);
+  vi.spyOn(f.raw, "upload").mockRejectedValueOnce(new StorageError("forbidden", "Denied"));
+  await expect(
+    f.service.upload(f.principal, request.operationId, body("new"), new AbortController().signal),
+  ).rejects.toMatchObject({ kind: "forbidden" });
   expect(await f.read("/old.txt")).toBe("old");
-  expect((await f.service.status(f.principal, input.operationId)).state).toBe("ready");
-  vi.mocked(required(f.storage.withWriteLease)).mockRejectedValueOnce(
-    new StorageError("conflict", "Locked"),
-  );
-  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
-    kind: "conflict",
-  });
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("receiving");
 });
 
 it("keeps internal storage out of ordinary reads and enforces opaque operation ownership", async () => {
@@ -774,18 +1014,21 @@ it("keeps internal storage out of ordinary reads and enforces opaque operation o
     kind: "forbidden",
   });
   expect(
-    await new Response(
-      (await f.service.files.content(f.principal, "/created", new AbortController().signal)).body,
-    ).text(),
+    await new Response((await f.service.files.content(f.principal, "/created")).stream()).text(),
   ).toBe("body");
   expect(
     (await f.service.files.versions(f.principal, ["/created"], new AbortController().signal))
       .items[0]?.version,
   ).toBe(sha("body"));
   expect((await f.service.stat(f.principal, DESKTOP_TRASH)).id).toBe("trash");
-  await expect(f.service.stat(f.principal, `${DESKTOP_TRASH}/unknown`)).rejects.toMatchObject({
+  // Trash is reached only through the Mac's Trash, by the handles of its items.
+  await expect(f.service.stat(f.principal, "/.trash")).rejects.toMatchObject({
     kind: "forbidden",
   });
+  for (const unknown of ["unknown", randomUUID(), `${randomUUID()}/inside`])
+    await expect(f.service.stat(f.principal, `${DESKTOP_TRASH}/${unknown}`)).rejects.toMatchObject({
+      kind: "not_found",
+    });
   await expect(
     f.service.prepare(f.principal, {
       kind: "folder",
@@ -824,20 +1067,31 @@ it("preserves file/folder contents and handles through scoped Trash and restore"
     expect(stat.id).toBe(original.id);
     const contentPath = original.kind === "file" ? trashed.path : `${trashed.path}/child`;
     expect(
-      await new Response(
-        (await f.service.files.content(f.principal, contentPath, new AbortController().signal))
-          .body,
-      ).text(),
+      await new Response((await f.service.files.content(f.principal, contentPath)).stream()).text(),
     ).toBe(original.kind === "file" ? "old" : "child");
     expect(
       (await f.service.files.versions(f.principal, [contentPath], new AbortController().signal))
         .items[0]?.version,
     ).toBe(sha(original.kind === "file" ? "old" : "child"));
+    if (original.kind === "file")
+      // Paths in and outside Trash are answered together, in the order asked.
+      expect(
+        (
+          await f.service.files.versions(
+            f.principal,
+            [contentPath, "/folder/child"],
+            new AbortController().signal,
+          )
+        ).items,
+      ).toEqual([
+        { path: contentPath, size: 3, version: sha("old") },
+        { path: "/folder/child", size: 5, version: sha("child") },
+      ]);
     if (original.kind === "dir") {
       expect((await f.service.list(f.principal, trashed.path, "token")).entries).toHaveLength(1);
-      await expect(
-        f.service.files.content(f.principal, trashed.path, new AbortController().signal),
-      ).rejects.toMatchObject({ kind: "bad_request" });
+      await expect(f.service.files.content(f.principal, trashed.path)).rejects.toMatchObject({
+        kind: "bad_request",
+      });
       await expect(
         f.service.files.versions(f.principal, [trashed.path], new AbortController().signal),
       ).rejects.toMatchObject({ kind: "bad_request" });
@@ -859,14 +1113,14 @@ it("preserves file/folder contents and handles through scoped Trash and restore"
   await expect(
     f.service.list(f.principal, DESKTOP_TRASH, "token", "expired"),
   ).rejects.toMatchObject({ kind: "conflict" });
+  // Only a move of an existing item goes to Trash.
   const create = {
     kind: "folder" as const,
     operationId: randomUUID(),
     parentId: "trash",
     name: "invalid",
   };
-  await f.service.prepare(f.principal, create);
-  await expect(f.service.commit(f.principal, create.operationId)).rejects.toMatchObject({
+  await expect(f.service.prepare(f.principal, create)).rejects.toMatchObject({
     kind: "bad_request",
   });
 });
@@ -947,7 +1201,7 @@ it("restarts an interrupted incoming body without letting the abandoned attempt 
   expect(await f.read("/new")).toBe("abc");
 });
 
-it("refuses invalid parents and replacement of directories, and translates capacity failures", async () => {
+it("refuses invalid parents and replacement of directories", async () => {
   const f = await fixture();
   const file = await f.service.stat(f.principal, "/old.txt");
   const folder = {
@@ -965,41 +1219,29 @@ it("refuses invalid parents and replacement of directories, and translates capac
   await expect(f.service.commit(f.principal, replacement.operationId)).rejects.toMatchObject({
     kind: "bad_request",
   });
-  const reserve = vi
-    .spyOn(f.repo, "reserve")
-    .mockRejectedValueOnce(Error("Desktop recovery capacity reached"));
-  await expect(
-    f.service.prepare(f.principal, { ...folder, operationId: randomUUID(), parentId: "root" }),
-  ).rejects.toMatchObject({ details: { code: "quota_exceeded" } });
-  reserve.mockRejectedValueOnce(Error("database unavailable"));
+  vi.spyOn(f.repo, "reserve").mockRejectedValueOnce(Error("database unavailable"));
   await expect(
     f.service.prepare(f.principal, { ...folder, operationId: randomUUID(), parentId: "root" }),
   ).rejects.toThrow("database unavailable");
 });
 
-it("preserves the source on corrupt staging, corrupt backups and incomplete hashes", async () => {
-  for (const fault of ["stage", "backup", "incomplete"] as const) {
-    const f = await fixture();
-    const original = await f.service.stat(f.principal, "/old.txt");
-    const input = await f.stage("old.txt", "new", original);
-    const download = f.raw.download.bind(f.raw);
-    f.raw.download = async (path, options) => {
-      const result = await download(path, options);
-      if (
-        (fault === "stage" && path.endsWith("/incoming")) ||
-        (fault === "backup" && path.endsWith("/previous"))
-      )
-        return { ...result, body: body("bad") };
-      if (fault === "incomplete" && path === "/old.txt") return { ...result, contentLength: 999 };
-      return result;
-    };
-    await expect(f.service.commit(f.principal, input.operationId)).rejects.toThrow();
-    expect(await f.read("/old.txt")).toBe("old");
-    expect((await f.service.status(f.principal, input.operationId)).state).toBe("ready");
-  }
+it("preserves the source when its base cannot be read in full", async () => {
+  const f = await fixture();
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const input = await f.stage("old.txt", "new", original);
+  const open = f.raw.open.bind(f.raw);
+  f.raw.open = async (path) => {
+    const result = await open(path);
+    return path === "/old.txt" ? { ...result, size: 999 } : result;
+  };
+  await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
+    kind: "upstream_unavailable",
+  });
+  expect(await f.read("/old.txt")).toBe("old");
+  expect((await f.service.status(f.principal, input.operationId)).state).toBe("ready");
 });
 
-it("commits a combined save and rename only after preserving the previous bytes", async () => {
+it("commits a combined save and rename, and keeps an old name written meanwhile", async () => {
   const f = await fixture();
   const original = await f.service.stat(f.principal, "/old.txt");
   const input = await f.stage("renamed.txt", "new", original);
@@ -1007,6 +1249,26 @@ it("commits a combined save and rename only after preserving the previous bytes"
   expect(result.item?.id).toBe(original.id);
   expect(await f.read("/renamed.txt")).toBe("new");
   await expect(f.raw.stat("/old.txt")).rejects.toMatchObject({ kind: "not_found" });
+  // Someone writes the old name once the new one is published: it stays.
+  await f.raw.upload("/old.txt", body("old"));
+  const again = await f.service.stat(f.principal, "/old.txt");
+  const warn = vi.fn();
+  const service = createDesktopWrites({ ...f.deps, logger: { warn } });
+  const second = await f.stage("other.txt", "newer", again);
+  const move = f.raw.move.bind(f.raw);
+  vi.spyOn(f.raw, "move").mockImplementation(async (path, target, options) => {
+    const moved = await move(path, target, options);
+    if (target === "/other.txt")
+      await f.raw.upload("/old.txt", body("theirs"), { overwrite: true });
+    return moved;
+  });
+  expect((await service.commit(f.principal, second.operationId)).state).toBe("completed");
+  expect(await f.read("/other.txt")).toBe("newer");
+  expect(await f.read("/old.txt")).toBe("theirs");
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ operationId: second.operationId }),
+    expect.stringContaining("old name stays"),
+  );
 });
 
 it("retains verified upload bytes when the database loses its ready response", async () => {
@@ -1041,34 +1303,55 @@ it("retains verified upload bytes when the database loses its ready response", a
   expect(await f.read("/new")).toBe("abc");
 });
 
-it("serializes duplicate commits and marks a lost final receipt uncertain", async () => {
+it("serializes duplicate commits and never reports a lost receipt as success", async () => {
   const f = await fixture();
   const request = await f.stage("new", "abc");
   const results = await Promise.all([
     f.service.commit(f.principal, request.operationId),
     f.service.commit(f.principal, request.operationId),
   ]);
-  expect(results.some((result) => result.state === "completed")).toBe(true);
-  expect(f.storage.withWriteLease).toHaveBeenCalledTimes(1);
+  expect(results[0]).toMatchObject({ state: "completed" });
+  expect(results[1]).toEqual(results[0]);
+  expect(await f.read("/new")).toBe("abc");
   const second = await f.stage("receipt-lost", "def");
   const transition = f.repo.transition.bind(f.repo);
-  vi.spyOn(f.repo, "transition").mockImplementation(async (...args) =>
-    args[4] === "completed" ? false : transition(...args),
-  );
+  const lost = vi
+    .spyOn(f.repo, "transition")
+    .mockImplementation(async (...args) => (args[4] === "completed" ? false : transition(...args)));
   await expect(f.service.commit(f.principal, second.operationId)).rejects.toMatchObject({
-    details: { code: "operation_uncertain" },
+    kind: "internal",
   });
   expect(await f.read("/receipt-lost")).toBe("def");
+  expect((await f.service.status(f.principal, second.operationId)).state).toBe("committing");
+  lost.mockRestore();
+  expect((await f.service.commit(f.principal, second.operationId)).state).toBe("completed");
 });
 
-it("rejects a substituted recovery directory and a missing payload receipt", async () => {
+it("stages nothing through a substituted folder and needs the upload's receipt", async () => {
   const f = await fixture();
-  const request = await f.stage("new", "abc");
-  await f.raw.upload("/.fdrive-desktop", new Uint8Array());
-  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
-    kind: "forbidden",
-  });
-  expect(await f.read("/old.txt")).toBe("old");
+  // The files folder refuses to create the staging folder through a file.
+  const home = await mkdtemp(join(tmpdir(), "desktop-home-"));
+  temporary.push(home);
+  const local = { ...f.principal, storage: createLocalStorage({ home }) };
+  await local.storage.upload("/saved.txt", new TextEncoder().encode("old"));
+  await local.storage.upload("/.fdrive-desktop", new Uint8Array());
+  const original = await f.service.stat(local, "/saved.txt");
+  const request = {
+    kind: "upload" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    itemId: original.id,
+    name: "saved.txt",
+    base: { ...original.version, content: sha("old") },
+    size: 3,
+    sha256: sha("abc"),
+  };
+  await f.service.prepare(local, request);
+  await expect(
+    f.service.upload(local, request.operationId, body("abc"), new AbortController().signal),
+  ).rejects.toThrow();
+  expect(await new Response((await local.storage.open("/saved.txt")).stream()).text()).toBe("old");
+  expect((await f.service.status(local, request.operationId)).state).toBe("receiving");
   const second = await fixture();
   const input = await second.stage("new", "abc");
   const op = required(second.operations.get(second.principal.identityId + input.operationId));
@@ -1092,21 +1375,22 @@ it("bounds Trash listings and surfaces upstream failures instead of returning an
   };
   await f.service.prepare(f.principal, move);
   const result = required((await f.service.commit(f.principal, move.operationId)).item);
-  const list = f.storage.list.bind(f.storage);
+  const leaf = await onlyLeaf(f);
+  const stat = f.storage.stat.bind(f.storage);
   const denied = vi
-    .spyOn(f.storage, "list")
+    .spyOn(f.storage, "stat")
     .mockRejectedValueOnce(new StorageError("upstream_unavailable", "Offline"));
   await expect(f.service.list(f.principal, DESKTOP_TRASH, "token")).rejects.toThrow("Offline");
-  denied.mockImplementation(async (path) =>
-    (await list(path)).map((item) =>
-      item.path.endsWith(`/${original.id}`) ? { ...item, kind: "symlink" } : item,
-    ),
-  );
+  denied.mockImplementation(async (path) => {
+    if (path === leaf) throw new StorageError("forbidden", "a link");
+    return stat(path);
+  });
   await expect(f.service.stat(f.principal, result.path)).rejects.toMatchObject({
     kind: "forbidden",
   });
+  // An item no one can read is left out; the rest of Trash still lists.
   expect((await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries).toEqual([]);
-  vi.spyOn(f.repo, "children").mockResolvedValueOnce(Array(100_001).fill({}));
+  vi.spyOn(f.trash, "list").mockResolvedValueOnce({ items: [], truncated: true });
   await expect(f.service.list(f.principal, DESKTOP_TRASH, "token")).rejects.toMatchObject({
     kind: "rate_limited",
   });
@@ -1132,7 +1416,7 @@ it("registers a listing in one call and never returns ids its own registration r
   expect(ensureMany).toHaveBeenCalledTimes(1);
 });
 
-it("lists each Trash ancestor upstream once per request", async () => {
+it("reads each Trash entry with one stat and lists no ancestors", async () => {
   const f = await fixture();
   for (const path of ["/old.txt", "/folder"]) {
     const original = await f.service.stat(f.principal, path);
@@ -1150,16 +1434,24 @@ it("lists each Trash ancestor upstream once per request", async () => {
     await f.service.prepare(f.principal, move);
     await f.service.commit(f.principal, move.operationId);
   }
+  const leaves = (await f.trash.list(f.principal.identityId, 10)).items.map((item) =>
+    trashItemPath(item.id, item.name),
+  );
   const list = vi.spyOn(f.storage, "list");
+  const stat = vi.spyOn(f.storage, "stat");
   const trashed = (await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries;
   expect(trashed).toHaveLength(2);
-  const listed = list.mock.calls.map(([path]) => path);
-  expect(new Set(listed).size).toBe(listed.length);
+  // Trash's rows say what it holds, without a listing; each item takes one stat.
+  expect(stat.mock.calls.map(([path]) => path)).toEqual(leaves);
   list.mockClear();
+  stat.mockClear();
   const folder = required(trashed.find((entry) => entry.kind === "dir"));
   expect((await f.service.list(f.principal, folder.path, "token")).entries).toHaveLength(1);
-  const nested = list.mock.calls.map(([path]) => path);
-  expect(new Set(nested).size).toBe(nested.length);
+  // The folder itself, then one listing of it.
+  const physical = required(await f.repo.item(f.principal.identityId, folder.id)).path;
+  expect(leaves).toContain(physical);
+  expect(list.mock.calls).toEqual([[physical]]);
+  expect(stat.mock.calls).toEqual([[physical]]);
 });
 
 it("cancels an active body even when stream cancellation fails and preserves its original error", async () => {
@@ -1190,7 +1482,7 @@ it("cancels an active body even when stream cancellation fails and preserves its
     f.service.upload(f.principal, request.operationId, stream, controller.signal),
   ).rejects.toBeDefined();
   expect((await f.service.status(f.principal, request.operationId)).state).toBe("receiving");
-  expect(await readdir(join(f.stateDir, f.principal.identityId, request.operationId))).toEqual([]);
+  expect(await staged(f, request.operationId)).toEqual([]);
   await f.service.upload(
     f.principal,
     request.operationId,
@@ -1201,7 +1493,7 @@ it("cancels an active body even when stream cancellation fails and preserves its
   expect(await f.read("/new")).toBe("abc");
 });
 
-it("keeps an interrupted payload if both database status and reset are unavailable", async () => {
+it("keeps a staged body while the database cannot say whose it is", async () => {
   const f = await fixture();
   const request = {
     kind: "upload" as const,
@@ -1221,19 +1513,17 @@ it("keeps an interrupted payload if both database status and reset are unavailab
   });
   const transition = f.repo.transition.bind(f.repo);
   vi.spyOn(f.repo, "transition").mockImplementation(async (...args) => {
-    if (args[4] === "receiving") throw Error("Database unavailable");
+    if (args[4] === "ready" || args[4] === "receiving") throw Error("Database unavailable");
     return transition(...args);
   });
   await expect(
-    f.service.upload(f.principal, request.operationId, body("wrong"), new AbortController().signal),
-  ).rejects.toMatchObject({ details: { code: "invalid_upload" } });
-  expect(await readdir(join(f.stateDir, f.principal.identityId, request.operationId))).toHaveLength(
-    1,
-  );
+    f.service.upload(f.principal, request.operationId, body("abc"), new AbortController().signal),
+  ).rejects.toThrow("Database unavailable");
+  expect(await staged(f, request.operationId)).toHaveLength(1);
   expect(await f.read("/old.txt")).toBe("old");
 });
 
-it("rechecks source grants and metadata under the lease and forbids editing recovery entries", async () => {
+it("rechecks source grants and metadata at commit and forbids editing recovery entries", async () => {
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const input = await f.stage("old.txt", "changed", source);
@@ -1257,7 +1547,8 @@ it("rechecks source grants and metadata under the lease and forbids editing reco
       move.operationId,
     ),
   ).rejects.toMatchObject({ kind: "forbidden" });
-  await f.repo.update(f.principal.identityId, source.id, { contentVersion: "new metadata" });
+  // Any registry update gives the item new metadata.
+  await f.repo.update(f.principal.identityId, source.id, { kind: "file" });
   await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
     details: { code: "version_conflict" },
   });
@@ -1270,58 +1561,54 @@ it("rechecks source grants and metadata under the lease and forbids editing reco
   });
 });
 
-it("reuses one durable staging directory after interruption and never duplicates its backup", async () => {
+it("keeps the staged body when a commit stops before publishing, and removes it once published", async () => {
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const request = await f.stage("old.txt", "new", source);
-  const download = f.raw.download.bind(f.raw);
-  const copy = vi.spyOn(f.raw, "copy");
-  let interrupted = true;
-  f.raw.download = async (path, options) => {
-    if (path.endsWith("/previous") && interrupted) {
-      interrupted = false;
-      throw new StorageError("upstream_unavailable", "Disconnected after backup");
-    }
-    return download(path, options);
-  };
+  const stamp = required(f.raw.contentStamp).bind(f.raw);
+  let reads = 0;
+  vi.spyOn(f.raw, "contentStamp").mockImplementation(async (path) => {
+    // The second read is the one right before the rename.
+    if (++reads === 2) throw new StorageError("internal", "Disconnected before the rename");
+    return stamp(path);
+  });
   await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow("Disconnected");
   const receipt = required(
     (await f.repo.operation(f.principal.identityId, f.principal.accountId, request.operationId))
       ?.result,
   );
-  const root = `/.fdrive-desktop/${f.principal.identityId}/${request.operationId}`;
-  expect(await f.raw.list(root)).toHaveLength(1);
+  expect(await staged(f, request.operationId)).toEqual([receipt.uploadFile]);
+  expect(receipt.publication).toBeUndefined();
+  expect(await f.read("/old.txt")).toBe("old");
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
   const result = await f.service.commit(f.principal, request.operationId);
   expect(result.state).toBe("completed");
   expect(await f.read("/old.txt")).toBe("new");
-  expect(copy.mock.calls.filter((call) => call[1].endsWith("/previous"))).toHaveLength(1);
-  expect((await f.raw.list(root))[0]?.name).toBe(receipt.remoteAttempt);
+  expect(await staged(f, request.operationId)).toEqual([]);
   // Replaying prepare after a later rename must still return the original receipt.
   await f.raw.move("/old.txt", "/later");
   await f.repo.move(f.principal.identityId, "/old.txt", "/later");
   expect(await f.service.prepare(f.principal, request)).toEqual(result);
 });
 
-it("rejects substituted staging entries and cannot publish without a durable recovery reservation", async () => {
-  for (const fault of ["incoming", "previous", "receipt"] as const) {
+it("publishes nothing from a staged entry that is not a file, or without recording it first", async () => {
+  for (const fault of ["entry", "record"] as const) {
     const f = await fixture();
     const source = await f.service.stat(f.principal, "/old.txt");
     const request = await f.stage("old.txt", "new", source);
-    const attempt = randomUUID();
-    const operation = required(f.operations.get(f.principal.identityId + request.operationId));
-    operation.result = { ...operation.result, remoteAttempt: attempt };
-    const root = `/.fdrive-desktop/${f.principal.identityId}/${request.operationId}/${attempt}`;
-    if (fault === "receipt") {
+    if (fault === "record") {
       const transition = f.repo.transition.bind(f.repo);
       vi.spyOn(f.repo, "transition").mockImplementation(async (...args) =>
         args[3] === "committing" && args[4] === "committing" ? false : transition(...args),
       );
     } else {
-      let current = "";
-      for (const part of `${root}/${fault}`.slice(1).split("/")) {
-        current += `/${part}`;
-        await f.raw.mkdir(current);
-      }
+      const attempt = randomUUID();
+      await f.raw.mkdir(
+        `/.fdrive-desktop/${f.principal.identityId}/incoming/${request.operationId}/${attempt}`,
+        { parents: true },
+      );
+      const operation = required(f.operations.get(f.principal.identityId + request.operationId));
+      operation.result = { ...operation.result, uploadFile: attempt };
     }
     await expect(f.service.commit(f.principal, request.operationId)).rejects.toThrow();
     expect(await f.read("/old.txt")).toBe("old");
@@ -1388,20 +1675,19 @@ it("fences an old upload process and cleans its unreferenced snapshot", async ()
   );
   const rejected = expect(first).rejects.toThrow("superseded");
   await ready;
-  // Wait for the first receiver's durable uploading receipt, not elapsed time.
+  // Wait for the first receiver's attempt to be the operation's, not elapsed time.
   await vi.waitFor(async () =>
-    expect(await readdir(join(f.stateDir, f.principal.identityId, input.operationId))).toHaveLength(
-      1,
-    ),
+    expect((await f.service.status(f.principal, input.operationId)).state).toBe("uploading"),
   );
   const second = createDesktopWrites(f.deps);
   await second.upload(f.principal, input.operationId, body("abc"), new AbortController().signal);
   required(sink).enqueue(new TextEncoder().encode("abc"));
   required(sink).close();
   await rejected;
-  expect(await readdir(join(f.stateDir, f.principal.identityId, input.operationId))).toHaveLength(
-    1,
-  );
+  // Only the body the operation names stays staged.
+  expect(await staged(f, input.operationId)).toEqual([
+    required(f.operations.get(f.principal.identityId + input.operationId)?.result).uploadFile,
+  ]);
   await second.commit(f.principal, input.operationId);
   expect(await f.read("/new")).toBe("abc");
 });
@@ -1434,19 +1720,20 @@ it("preserves a save when its source is trashed after preparation or a hashing s
   const f = await fixture();
   const source = await f.service.stat(f.principal, "/old.txt");
   const upload = await f.stage("old.txt", "new", source);
-  const download = f.raw.download.bind(f.raw);
-  f.raw.download = async (...args) => ({
-    ...(await download(...args)),
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.error(new Error("Hash stream failed"));
-      },
-    }),
+  const open = f.raw.open.bind(f.raw);
+  f.raw.open = async (path) => ({
+    ...(await open(path)),
+    stream: () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("Hash stream failed"));
+        },
+      }),
   });
   await expect(f.service.commit(f.principal, upload.operationId)).rejects.toThrow(
     "Hash stream failed",
   );
-  f.raw.download = download;
+  f.raw.open = open;
   const trash = {
     kind: "move" as const,
     operationId: randomUUID(),
@@ -1461,55 +1748,87 @@ it("preserves a save when its source is trashed after preparation or a hashing s
     kind: "forbidden",
   });
   expect(
-    await new Response(
-      (await f.service.files.content(f.principal, receipt.path, new AbortController().signal)).body,
-    ).text(),
+    await new Response((await f.service.files.content(f.principal, receipt.path)).stream()).text(),
   ).toBe("old");
 });
 
-it("blocks a new publication while an earlier save needs metadata recovery", async () => {
+it("moves metadata with a Mac move once", async () => {
   const f = await fixture();
-  const request = await f.stage("new.txt", "saved");
-  const effects = {
-    beforeWrite: vi.fn(async (): Promise<void> => {
-      throw new StorageError("upstream_unavailable", "Recovery pending");
-    }),
-    kick: vi.fn(),
-  };
-  const service = createDesktopWrites({ ...f.deps, effects });
-  await expect(service.commit(f.principal, request.operationId)).rejects.toThrow(
-    "Recovery pending",
-  );
-  expect(
-    (await f.repo.operation(f.principal.identityId, f.principal.accountId, request.operationId))
-      ?.state,
-  ).toBe("ready");
-  expect((await f.raw.list("/")).map((item) => item.path)).not.toContain("/new.txt");
-  effects.beforeWrite.mockResolvedValueOnce(undefined);
-  expect((await service.commit(f.principal, request.operationId)).state).toBe("completed");
-  expect(await f.read("/new.txt")).toBe("saved");
-});
-
-it("keeps the committed receipt when waking metadata recovery fails", async () => {
-  const f = await fixture();
-  const request = await f.stage("saved.txt", "saved");
-  const service = createDesktopWrites({
-    ...f.deps,
-    effects: {
-      beforeWrite: async () => {},
-      kick: () => {
-        throw Error("worker unavailable");
-      },
-    },
+  const item = await f.service.stat(f.principal, "/old.txt");
+  const folder = await f.service.stat(f.principal, "/folder");
+  const operationId = randomUUID();
+  await f.service.prepare(f.principal, {
+    kind: "move",
+    operationId,
+    itemId: item.id,
+    parentId: folder.id,
+    name: "moved.txt",
+    base: item.version,
   });
-  const receipt = await service.commit(f.principal, request.operationId);
-  expect(receipt.state).toBe("completed");
-  expect(await service.commit(f.principal, request.operationId)).toEqual(receipt);
-  expect(await f.read("/saved.txt")).toBe("saved");
+  await f.service.commit(f.principal, operationId);
+  // Links and shares move with the receipt; the rest right after it.
+  expect(f.moved.get(operationId)).toEqual({
+    directory: false,
+    shares: { identityId: f.principal.identityId, from: "/old.txt", to: "/folder/moved.txt" },
+    grants: null,
+  });
+  expect(f.metadata.onMoved.mock.calls).toEqual([
+    [f.principal.identityId, "/old.txt", "/folder/moved.txt", false],
+  ]);
+  // A replayed commit returns its receipt without applying anything again.
+  await f.service.commit(f.principal, operationId);
+  expect(f.access).toHaveBeenCalledTimes(1);
+  expect(f.metadata.onMoved).toHaveBeenCalledTimes(1);
 });
 
-it("refuses overlapping restore metadata paths before changing storage", async () => {
+it("keeps an item's handle in Trash, and what is kept by path follows it in and back out", async () => {
   const f = await fixture();
+  const { identityId } = f.principal;
+  const links = () => [...f.moved.values()].at(-1)?.shares;
+  const move = async (item: DesktopWriteEntry, parentId: string, name = item.name) => {
+    const operationId = randomUUID();
+    await f.service.prepare(f.principal, {
+      kind: "move",
+      operationId,
+      itemId: item.id,
+      parentId,
+      name,
+      base: item.version,
+    });
+    return required((await f.service.commit(f.principal, operationId)).item);
+  };
+  const file = await f.service.stat(f.principal, "/old.txt");
+  const trashed = await move(file, "trash");
+  expect(trashed).toMatchObject({ id: file.id, parentId: "trash", trashed: true });
+  // fdrive's Trash took it; the Mac's Trash shows it under its handle.
+  const leaf = await onlyLeaf(f);
+  expect(trashed.path).toBe(`${DESKTOP_TRASH}/${file.id}`);
+  // What grants access follows the item into Trash, the rest after it; its handle is kept.
+  expect(links()).toEqual({ identityId, from: "/old.txt", to: leaf });
+  expect(f.metadata.onMoved.mock.calls).toEqual([[identityId, "/old.txt", leaf, false]]);
+  expect(required(await f.repo.item(identityId, file.id)).path).toBe(leaf);
+  // Put back under its own name: what followed it comes back with it.
+  const back = await move(trashed, "root");
+  expect(back).toMatchObject({ id: file.id, path: "/old.txt", trashed: false });
+  expect(links()).toEqual({ identityId, from: leaf, to: "/old.txt" });
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, leaf, "/old.txt", false);
+  expect([...f.completed.values()].at(-1)).toMatchObject({
+    from: "/old.txt",
+    to: "/old.txt",
+    restored: true,
+    trash: false,
+  });
+  // Put back under a new name: it all follows there.
+  const again = await move(await f.service.stat(f.principal, "/old.txt"), "trash");
+  const second = await onlyLeaf(f);
+  await move(again, "root", "renamed.txt");
+  expect(links()).toEqual({ identityId, from: second, to: "/renamed.txt" });
+  expect(f.metadata.onMoved).toHaveBeenLastCalledWith(identityId, second, "/renamed.txt", false);
+});
+
+it("restores into a folder that took the item's place without taking that folder's metadata", async () => {
+  const f = await fixture();
+  const { identityId } = f.principal;
   const source = await f.service.stat(f.principal, "/folder");
   const trashId = randomUUID();
   await f.service.prepare(f.principal, {
@@ -1521,6 +1840,7 @@ it("refuses overlapping restore metadata paths before changing storage", async (
     base: source.version,
   });
   const trashed = required((await f.service.commit(f.principal, trashId)).item);
+  const binned = await onlyLeaf(f);
   await f.raw.mkdir("/folder");
   const parent = await f.service.stat(f.principal, "/folder");
   const restoreId = randomUUID();
@@ -1532,658 +1852,143 @@ it("refuses overlapping restore metadata paths before changing storage", async (
     name: "nested",
     base: trashed.version,
   });
-  await expect(f.service.commit(f.principal, restoreId)).rejects.toMatchObject({
-    kind: "conflict",
-    details: { code: "unsupported" },
+  const restored = await f.service.commit(f.principal, restoreId);
+  expect(restored.item).toMatchObject({ path: "/folder/nested", trashed: false });
+  expect(await f.read("/folder/nested/child")).toBe("child");
+  // `/folder` is someone else now, so only what followed the item into Trash comes back.
+  expect(f.moved.get(restoreId)).toEqual({
+    directory: true,
+    shares: { identityId, from: binned, to: "/folder/nested" },
+    grants: null,
   });
-  expect((await f.service.stat(f.principal, trashed.path)).trashed).toBe(true);
-  expect(await f.raw.list("/folder")).toEqual([]);
-});
-
-it.each(["folder", "move"] as const)(
-  "rechecks authority after recovery waits before publishing a %s",
-  async (kind) => {
-    const f = await fixture();
-    const item = await f.service.stat(f.principal, "/old.txt");
-    const operationId = randomUUID();
-    await f.service.prepare(
-      f.principal,
-      kind === "folder"
-        ? { kind, operationId, parentId: "root", name: "new" }
-        : { kind, operationId, parentId: "root", itemId: item.id, name: "new", base: item.version },
-    );
-    const service = createDesktopWrites({
-      ...f.deps,
-      effects: {
-        beforeWrite: async () => {
-          vi.mocked(required(f.principal.verifyAuthority)).mockResolvedValue(false);
-        },
-        kick: () => {},
-      },
-    });
-    await expect(service.commit(f.principal, operationId)).rejects.toMatchObject({
-      kind: "unauthorized",
-    });
-    expect((await f.raw.list("/")).map((entry) => entry.path)).not.toContain("/new");
-    expect(await f.read("/old.txt")).toBe("old");
-  },
-);
-
-it("rejects metadata capacity before staging or publishing, and retries the same operation", async () => {
-  const f = await fixture();
-  const existing = await f.service.stat(f.principal, "/old.txt");
-  const request = await f.stage("old.txt", "new", existing);
-  vi.spyOn(f.repo, "captureEffects").mockRejectedValueOnce(
-    Error("Desktop metadata recovery capacity reached"),
-  );
-  const upload = vi.spyOn(f.raw, "upload");
-  const move = vi.spyOn(f.raw, "move");
-  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
-    kind: "rate_limited",
-    details: { code: "quota_exceeded" },
-  });
-  expect(upload).not.toHaveBeenCalled();
-  expect(move).not.toHaveBeenCalled();
-  expect(await f.read("/old.txt")).toBe("old");
-  expect((await f.service.status(f.principal, request.operationId)).state).toBe("ready");
-  expect((await f.service.commit(f.principal, request.operationId)).state).toBe("completed");
-  expect(await f.read("/old.txt")).toBe("new");
-});
-
-it("reports every precondition a full grant is missing, and none for a read grant", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({});
-  const withStorage = (storage: StorageProvider): Principal => ({ ...f.principal, storage });
-  expect(f.service.availability(f.principal)).toEqual({ capabilities: ALL_WRITES, missing: [] });
-  expect(
-    f.service.availability({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }),
-  ).toEqual({ capabilities: NO_WRITES, missing: [] });
-  // Storage without a lease waits only for fdrive's own serialization.
-  expect(f.service.availability(withStorage(raw))).toEqual({
-    capabilities: NO_WRITES,
-    missing: ["publish_lock"],
-  });
-  const serialized = createDesktopWrites({
-    ...f.deps,
-    publishLock: async (_identityId, run) => run(),
-  });
-  expect(serialized.availability(withStorage(raw))).toEqual({
-    capabilities: ALL_WRITES,
-    missing: [],
-  });
-  // Without recovery storage every gate is still reported, so one fix never masks the next.
-  const { stateDir: _unused, ...withoutStateDir } = f.deps;
-  const unrecoverable = createDesktopWrites(withoutStateDir);
-  expect(unrecoverable.availability(f.principal)).toEqual({
-    capabilities: NO_WRITES,
-    missing: ["state_dir"],
-  });
-  expect(unrecoverable.availability(withStorage(raw)).missing).toEqual([
-    "state_dir",
-    "publish_lock",
+  expect(f.metadata.onMoved.mock.calls).toEqual([
+    [identityId, "/folder", binned, true],
+    [identityId, binned, "/folder/nested", true],
   ]);
-  expect(unrecoverable.capabilities(f.principal)).toEqual(NO_WRITES);
 });
 
-it("refuses a file the storage could never publish, before any of it is transferred", async () => {
+it("never reports success when the receipt cannot be kept, and the app's retry keeps it", async () => {
   const f = await fixture();
-  // A backend that publishes with a copy may refuse a size, however the bytes arrived.
-  const bounded: Principal = { ...f.principal, storage: { ...f.storage, maxPublishBytes: 8 } };
-  const upload = vi.spyOn(f.raw, "upload");
-  const request = {
-    kind: "upload" as const,
+  const { identityId } = f.principal;
+  const item = await f.service.stat(f.principal, "/old.txt");
+  const move = {
+    kind: "move" as const,
     operationId: randomUUID(),
+    itemId: item.id,
     parentId: "root",
-    name: "big.bin",
-    base: null,
-    size: 9,
-    sha256: sha("123456789"),
+    name: "renamed.txt",
+    base: item.version,
   };
-  await expect(f.service.prepare(bounded, request)).rejects.toMatchObject({
-    kind: "bad_request",
-    details: { code: "quota_exceeded" },
+  await f.service.prepare(f.principal, move);
+  // The receipt's transaction fails on the links: nothing of it is kept.
+  const complete = vi.spyOn(f.repo, "complete").mockRejectedValueOnce(Error("links unavailable"));
+  await expect(f.service.commit(f.principal, move.operationId)).rejects.toMatchObject({
+    kind: "internal",
   });
-  expect(upload).not.toHaveBeenCalled();
-  // The bound is the storage's, not a rejection of everything: its own size fits.
-  expect(
-    (await f.service.prepare(bounded, { ...request, size: 8, sha256: sha("12345678") })).state,
-  ).toBe("receiving");
-  // The replaced file is copied to recovery first, so it meets the same bound
-  // even when the incoming one does. "/old.txt" holds three bytes.
-  const tight: Principal = { ...f.principal, storage: { ...f.storage, maxPublishBytes: 2 } };
-  const existing = await f.service.stat(f.principal, "/old.txt");
-  await expect(
-    f.service.prepare(tight, {
-      ...request,
-      operationId: randomUUID(),
-      name: "old.txt",
-      itemId: existing.id,
-      base: { ...existing.version, content: sha("old") },
-      size: 1,
-      sha256: sha("x"),
-    }),
-  ).rejects.toMatchObject({ kind: "bad_request", details: { code: "quota_exceeded" } });
-  expect(await f.read("/old.txt")).toBe("old");
+  expect(await f.read("/renamed.txt")).toBe("old");
+  expect((await f.service.status(f.principal, move.operationId)).state).toBe("committing");
+  expect(f.moved.has(move.operationId)).toBe(false);
+  // The rest of the metadata waits for the receipt too.
+  expect(f.metadata.onMoved).not.toHaveBeenCalled();
+  await expect(f.service.cancel(f.principal, move.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+  });
+  // The retry keeps it, moving them from where the item was, though its handle moved already.
+  complete.mockRestore();
+  expect(await f.service.prepare(f.principal, move)).toMatchObject({
+    state: "completed",
+    item: { path: "/renamed.txt" },
+  });
+  expect(f.moved.get(move.operationId)?.shares).toEqual({
+    identityId,
+    from: "/old.txt",
+    to: "/renamed.txt",
+  });
+  expect(f.metadata.onMoved).toHaveBeenCalledTimes(1);
 });
 
-it("leaves a publication the storage refused discardable rather than uncertain", async () => {
+it("never refuses a new Mac write over earlier metadata, which cannot fail a published one", async () => {
+  const f = await fixture();
+  const warn = vi.fn();
+  const service = createDesktopWrites({ ...f.deps, logger: { warn } });
+  const item = await f.service.stat(f.principal, "/old.txt");
+  const operationId = randomUUID();
+  await service.prepare(f.principal, {
+    kind: "move",
+    operationId,
+    itemId: item.id,
+    parentId: "root",
+    name: "renamed.txt",
+    base: item.version,
+  });
+  f.metadata.onMoved.mockRejectedValueOnce(Error("database unavailable"));
+  const receipt = await service.commit(f.principal, operationId);
+  expect(receipt).toMatchObject({ state: "completed", item: { path: "/renamed.txt" } });
+  // Failing tags never hold back what grants access, which moved with the receipt.
+  expect(f.moved.get(operationId)?.shares).toEqual({
+    identityId: f.principal.identityId,
+    from: "/old.txt",
+    to: "/renamed.txt",
+  });
+  expect(warn).toHaveBeenCalledWith(
+    expect.objectContaining({ identityId: f.principal.identityId, operationId }),
+    expect.stringContaining("could not follow"),
+  );
+  // A replay returns the same receipt.
+  expect(await service.commit(f.principal, operationId)).toEqual(receipt);
+  // The next write publishes at once; nothing waits on the metadata that failed.
+  const next = await f.stage("next.txt", "next");
+  expect((await service.commit(f.principal, next.operationId)).state).toBe("completed");
+  expect(await f.read("/next.txt")).toBe("next");
+});
+
+it("reports a name the storage refused as a collision the Mac can retry under another", async () => {
   const f = await fixture();
   const request = await f.stage("fresh.txt", "bytes");
-  // Every backend evaluates `overwrite: false` before writing, so a conflict
-  // here means the destination was never touched.
+  // Storage refuses a taken name before writing anything, so the destination
+  // was never touched.
   vi.spyOn(f.raw, "move").mockRejectedValueOnce(
     new StorageError("conflict", "The destination already exists"),
   );
-  const failure = await f.service.commit(f.principal, request.operationId).catch((e: unknown) => e);
-  expect(failure).toMatchObject({ kind: "conflict" });
-  expect((failure as { details?: { code?: string } }).details?.code).not.toBe(
-    "operation_uncertain",
-  );
-  const state = (await f.service.status(f.principal, request.operationId)).state;
-  expect(state).not.toBe("uncertain");
-  // The Mac app clears it on its own; an uncertain commit would need an administrator.
+  await expect(f.service.commit(f.principal, request.operationId)).rejects.toMatchObject({
+    kind: "conflict",
+    details: { code: "name_collision" },
+  });
+  expect((await f.service.status(f.principal, request.operationId)).state).toBe("conflict");
+  // The Mac app clears it on its own.
   expect((await f.service.cancel(f.principal, request.operationId)).state).toBe("cancelled");
-});
-
-/** A storage with no rename, like an object store: moving a folder copies every object. */
-function copyingStorage(seed: Record<string, string>) {
-  const raw = createMemoryStorage(seed);
-  const moves: { path: string; resume: boolean | undefined; overwrite: boolean | undefined }[] = [];
-  let fail: string | undefined;
-  const storage: StorageProvider = {
-    ...raw,
-    movesDirectoriesByCopy: true,
-    move: async (path, target, opts) => {
-      moves.push({ path, resume: opts?.resume, overwrite: opts?.overwrite });
-      if (fail !== undefined) {
-        const message = fail;
-        fail = undefined;
-        // The port copies every object before removing any, so an interruption
-        // leaves the source whole — nothing is mutated here.
-        throw new StorageError("upstream_unavailable", message);
-      }
-      return raw.move(path, target, opts);
-    },
+  // A move and a new folder are refused the same way.
+  const item = await f.service.stat(f.principal, "/old.txt");
+  const move = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: item.id,
+    parentId: "root",
+    name: "taken.txt",
+    base: item.version,
   };
-  return { raw, storage, moves, interrupt: (message: string) => (fail = message) };
-}
-
-it("copies a folder move outside the publication lock, and keeps a file move inside it", async () => {
-  const f = await fixture();
-  const { storage, raw } = copyingStorage({ "/folder/child": "child", "/note.txt": "note" });
-  let held = 0;
-  const heldDuring: Record<string, boolean> = {};
-  const watched: StorageProvider = {
-    ...storage,
-    move: async (path, target, opts) => {
-      heldDuring[path] = held > 0;
-      return storage.move(path, target, opts);
-    },
+  const folder = {
+    kind: "folder" as const,
+    operationId: randomUUID(),
+    parentId: "root",
+    name: "d",
   };
-  const principal: Principal = { ...f.principal, storage: watched };
-  const service = createDesktopWrites({
-    ...f.deps,
-    publishLock: async (_identityId, run) => {
-      held += 1;
-      try {
-        return await run();
-      } finally {
-        held -= 1;
-      }
-    },
-  });
-  const move = async (path: string, name: string) => {
-    const item = await service.stat(principal, path);
-    const operationId = randomUUID();
-    await service.prepare(principal, {
-      kind: "move" as const,
-      operationId,
-      itemId: item.id,
-      parentId: "root",
-      name,
-      base: item.version,
+  for (const input of [move, folder]) await f.service.prepare(f.principal, input);
+  vi.spyOn(f.raw, "move")
+    .mockRejectedValueOnce(new StorageError("conflict", "taken"))
+    .mockRejectedValueOnce(new StorageError("conflict", "taken"));
+  for (const input of [move, folder]) {
+    await expect(f.service.commit(f.principal, input.operationId)).rejects.toMatchObject({
+      details: { code: "name_collision" },
     });
-    return service.commit(principal, operationId);
-  };
-  expect((await move("/folder", "folder-moved")).state).toBe("completed");
-  expect((await move("/note.txt", "note-moved.txt")).state).toBe("completed");
-  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
-  // The folder copy is proportional to the tree and the lock is per identity
-  // with a 30s wait, so holding it would refuse every other Mac write meanwhile.
-  expect(heldDuring["/folder"]).toBe(false);
-  // A file move is one operation; it stays inside, where the checks are.
-  expect(heldDuring["/note.txt"]).toBe(true);
-});
-
-it("resumes an interrupted folder move on its own destination instead of starting a second", async () => {
-  const f = await fixture();
-  const { storage, raw, moves, interrupt } = copyingStorage({ "/folder/child": "child" });
-  const principal: Principal = { ...f.principal, storage };
-  const service = createDesktopWrites({
-    ...f.deps,
-    publishLock: async (_identityId, run) => run(),
-  });
-  const item = await service.stat(principal, "/folder");
-  const operationId = randomUUID();
-  await service.prepare(principal, {
-    kind: "move" as const,
-    operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  interrupt("connection reset");
-  await expect(service.commit(principal, operationId)).rejects.toMatchObject({
-    kind: "upstream_unavailable",
-  });
-  // Resumable, so never an outcome only an administrator can clear.
-  const failed = await service.status(principal, operationId);
-  expect(failed.state).not.toBe("uncertain");
-  // The retry finishes the reserved destination rather than moving beside it.
-  expect((await service.commit(principal, operationId)).state).toBe("completed");
-  expect(moves.map((entry) => entry.resume)).toEqual([false, true]);
-  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
-  await expect(raw.stat("/folder-moved 2")).rejects.toMatchObject({ kind: "not_found" });
-});
-
-it("completes a folder move whose last object landed before its receipt was written", async () => {
-  const f = await fixture();
-  const { storage, raw, moves } = copyingStorage({ "/folder/child": "child" });
-  // The move itself succeeds; the receipt after it does not, which is the window
-  // a crash between the last copied object and the commit record leaves behind.
-  let breakReceipt = true;
-  const principal: Principal = { ...f.principal, storage };
-  const service = createDesktopWrites({
-    ...f.deps,
-    repo: {
-      ...f.repo,
-      complete: async (...args: Parameters<typeof f.repo.complete>) => {
-        if (breakReceipt) {
-          breakReceipt = false;
-          throw new StorageError("upstream_unavailable", "database went away");
-        }
-        return f.repo.complete(...args);
-      },
-    },
-    publishLock: async (_identityId, run) => run(),
-  });
-  const item = await service.stat(principal, "/folder");
-  const operationId = randomUUID();
-  await service.prepare(principal, {
-    kind: "move" as const,
-    operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
-  // Storage is already done: the source is gone and everything is at the target.
-  await expect(raw.stat("/folder")).rejects.toMatchObject({ kind: "not_found" });
-  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
-  // The retry must finish the receipt rather than fail forever on the source it
-  // has itself just moved away.
-  expect((await service.commit(principal, operationId)).state).toBe("completed");
-  expect(moves).toHaveLength(1);
-  expect((await service.stat(principal, "/folder-moved")).id).toBe(item.id);
-});
-
-it("copies nothing when the destination it needs to reserve cannot be recorded", async () => {
-  const f = await fixture();
-  const { storage, moves } = copyingStorage({ "/folder/child": "child" });
-  const principal: Principal = { ...f.principal, storage };
-  const service = createDesktopWrites({
-    ...f.deps,
-    repo: {
-      ...f.repo,
-      transition: async (...args: Parameters<typeof f.repo.transition>) =>
-        // Reserving is the one transition this move makes from committing to
-        // itself; losing it would leave a copy no retry could ever find again.
-        args[3] === "committing" && args[4] === "committing" ? false : f.repo.transition(...args),
-    },
-    publishLock: async (_identityId, run) => run(),
-  });
-  const item = await service.stat(principal, "/folder");
-  const operationId = randomUUID();
-  await service.prepare(principal, {
-    kind: "move" as const,
-    operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
-  expect(moves).toEqual([]);
-  expect((await service.stat(principal, "/folder/child")).id).toBeTruthy();
-});
-
-it("finishes a folder move whose item record had not yet followed the copy", async () => {
-  const f = await fixture();
-  const { storage, raw, moves } = copyingStorage({ "/folder/child": "child" });
-  // Stopping between the storage move and the record that follows it leaves the
-  // source gone from storage while the item still points at where it used to be.
-  let breakRecord = true;
-  const principal: Principal = { ...f.principal, storage };
-  const service = createDesktopWrites({
-    ...f.deps,
-    repo: {
-      ...f.repo,
-      move: async (...args: Parameters<typeof f.repo.move>) => {
-        if (breakRecord) {
-          breakRecord = false;
-          throw Error("record store went away");
-        }
-        return f.repo.move(...args);
-      },
-    },
-    publishLock: async (_identityId, run) => run(),
-  });
-  const item = await service.stat(principal, "/folder");
-  const operationId = randomUUID();
-  await service.prepare(principal, {
-    kind: "move" as const,
-    operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  await expect(service.commit(principal, operationId)).rejects.toBeTruthy();
-  await expect(raw.stat("/folder")).rejects.toMatchObject({ kind: "not_found" });
-  expect((await service.commit(principal, operationId)).state).toBe("completed");
-  // The retry writes the record rather than copying the tree a second time.
-  expect(moves).toHaveLength(1);
-  expect((await service.stat(principal, "/folder-moved")).id).toBe(item.id);
-});
-
-it("records how far a folder copy has got, often enough to watch and no oftener", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child" });
-  let now = new Date("2026-09-18T12:00:00.000Z");
-  const seen: (unknown | undefined)[] = [];
-  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
-  const principal: Principal = {
-    ...f.principal,
-    storage: {
-      ...raw,
-      movesDirectoriesByCopy: true,
-      move: async (path, target, opts) => {
-        // The tick records out of band so it never holds up the copy; let it land.
-        const look = async () => {
-          await new Promise((resolve) => setTimeout(resolve, 0));
-          seen.push((await held.service?.status(principal, held.operationId as string))?.progress);
-        };
-        opts?.onProgress?.(0, 1_000);
-        await look();
-        now = new Date(now.getTime() + 2 * DESKTOP_PROGRESS_INTERVAL_MS);
-        opts?.onProgress?.(600, 1_000);
-        await look();
-        // Inside the interval: a tree of any size costs a handful of writes.
-        opts?.onProgress?.(700, 1_000);
-        await look();
-        // The last one lands whatever the interval says, so the bar finishes.
-        opts?.onProgress?.(1_000, 1_000);
-        await look();
-        return raw.move(path, target, opts);
-      },
-    },
-  };
-  held.service = createDesktopWrites({
-    ...f.deps,
-    clock: () => now,
-    publishLock: async (_identityId, run) => run(),
-  });
-  const item = await held.service.stat(principal, "/folder");
-  held.operationId = randomUUID();
-  await held.service.prepare(principal, {
-    kind: "move" as const,
-    operationId: held.operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  expect((await held.service.commit(principal, held.operationId)).state).toBe("completed");
-  expect(seen).toEqual([
-    { completed: 0, total: 1_000 },
-    { completed: 600, total: 1_000 },
-    { completed: 600, total: 1_000 },
-    { completed: 1_000, total: 1_000 },
-  ]);
-  // The receipt replaces it: a finished operation reports its item, not a bar.
-  expect((await held.service.status(principal, held.operationId)).progress).toBeUndefined();
-});
-
-it("stops a folder copy asked to cancel, and takes back what it had copied", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child", "/folder/other": "other" });
-  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
-  let copied = false;
-  const principal: Principal = {
-    ...f.principal,
-    storage: {
-      ...raw,
-      movesDirectoriesByCopy: true,
-      move: async (path, target, opts) => {
-        // What a copying backend does: it writes the destination as it goes and
-        // takes nothing from the source until every entry is across.
-        await raw.copy(path, target, { overwrite: true });
-        copied = true;
-        // The cancel arrives mid-copy, from a request this one cannot see.
-        await held.service?.cancel(principal, held.operationId as string);
-        opts?.onProgress?.(1, 2);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (opts?.signal?.aborted)
-          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
-        return raw.move(path, target, opts);
-      },
-    },
-  };
-  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
-  const item = await held.service.stat(principal, "/folder");
-  held.operationId = randomUUID();
-  await held.service.prepare(principal, {
-    kind: "move" as const,
-    operationId: held.operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
-    details: { code: "operation_cancelled" },
-  });
-  expect(copied).toBe(true);
-  // The half-written destination is taken back, and the source is untouched.
-  await expect(raw.stat("/folder-moved")).rejects.toMatchObject({ kind: "not_found" });
-  expect(await new Response((await raw.download("/folder/child")).body).text()).toBe("child");
-  // Cancelled is a settled end: no administrator, and no retry of what was asked to stop.
-  expect((await held.service.status(principal, held.operationId)).state).toBe("cancelled");
-});
-
-it("never takes back a copy whose source has already gone", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child" });
-  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
-  const principal: Principal = {
-    ...f.principal,
-    storage: {
-      ...raw,
-      movesDirectoriesByCopy: true,
-      move: async (path, target, opts) => {
-        // The cancel loses its race: the move completed, so the destination now
-        // holds the only copy and taking it back would destroy the item.
-        await raw.move(path, target, opts);
-        await held.service?.cancel(principal, held.operationId as string);
-        opts?.onProgress?.(1, 2);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        if (opts?.signal?.aborted)
-          throw new StorageError("upstream_unavailable", "the transfer was cancelled");
-      },
-    },
-  };
-  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
-  const item = await held.service.stat(principal, "/folder");
-  held.operationId = randomUUID();
-  await held.service.prepare(principal, {
-    kind: "move" as const,
-    operationId: held.operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  await expect(held.service.commit(principal, held.operationId)).rejects.toMatchObject({
-    details: { code: "operation_cancelled" },
-  });
-  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
-});
-
-/** A copying storage that asks for its own cancellation part-way through. */
-function cancellingFixture(
-  f: Awaited<ReturnType<typeof fixture>>,
-  raw: StorageProvider,
-  overrides: (
-    base: StorageProvider,
-    cancelled: () => boolean,
-  ) => Partial<StorageProvider> = () => ({}),
-) {
-  const held: { service?: ReturnType<typeof createDesktopWrites>; operationId?: string } = {};
-  let cancelled = false;
-  const storage: StorageProvider = {
-    ...raw,
-    movesDirectoriesByCopy: true,
-    move: async (path, target, opts) => {
-      // Half across: the destination is written, the source still whole.
-      await raw.copy(path, target, { overwrite: true });
-      await held.service?.cancel(principal, held.operationId as string);
-      cancelled = true;
-      opts?.onProgress?.(1, 2);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      if (opts?.signal?.aborted)
-        throw new StorageError("upstream_unavailable", "the transfer was cancelled");
-    },
-    ...overrides(raw, () => cancelled),
-  };
-  const principal: Principal = { ...f.principal, storage };
-  held.service = createDesktopWrites({ ...f.deps, publishLock: async (_id, run) => run() });
-  const service = held.service;
-  const run = async () => {
-    const item = await service.stat(principal, "/folder");
-    held.operationId = randomUUID();
-    await service.prepare(principal, {
-      kind: "move" as const,
-      operationId: held.operationId,
-      itemId: item.id,
-      parentId: "root",
-      name: "folder-moved",
-      base: item.version,
-    });
-    return service.commit(principal, held.operationId);
-  };
-  return { held, principal, service, run };
-}
-
-it("counts a destination already gone as taken back, and still settles as cancelled", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child" });
-  // Something else removed the half-copy first; there is nothing left to undo.
-  const { held, principal, service, run } = cancellingFixture(f, raw, (base, cancelled) => ({
-    deleteDir: async (path: string) => {
-      if (!cancelled()) return base.deleteDir(path);
-      await base.deleteDir(path);
-      throw new StorageError("not_found", "already gone");
-    },
-  }));
-  await expect(run()).rejects.toMatchObject({ details: { code: "operation_cancelled" } });
-  expect((await service.status(principal, held.operationId as string)).state).toBe("cancelled");
-});
-
-it("surfaces a failure to take back a cancelled copy instead of claiming it was", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child" });
-  const refusing = cancellingFixture(f, raw, (base, cancelled) => ({
-    deleteDir: async (path: string) => {
-      if (!cancelled()) return base.deleteDir(path);
-      throw new StorageError("forbidden", "the destination cannot be removed");
-    },
-  }));
-  // Not reported as cancelled: the half-copy is still there and someone must see it.
-  await expect(refusing.run()).rejects.toMatchObject({ kind: "forbidden" });
-  expect(
-    (await refusing.service.status(refusing.principal, refusing.held.operationId as string)).state,
-  ).not.toBe("cancelled");
-
-  const other = await fixture();
-  // Proving the source is still there is the guard that makes undoing safe, so a
-  // storage that cannot answer has to stop rather than guess.
-  const unreadable = cancellingFixture(
-    other,
-    createMemoryStorage({ "/folder/child": "child" }),
-    (base, cancelled) => ({
-      stat: async (path: string) => {
-        if (!cancelled()) return base.stat(path);
-        throw new StorageError("upstream_unavailable", "the source cannot be read");
-      },
-    }),
-  );
-  await expect(unreadable.run()).rejects.toMatchObject({ kind: "upstream_unavailable" });
-});
-
-it("keeps copying when the operation cannot be read back mid-move", async () => {
-  const f = await fixture();
-  const raw = createMemoryStorage({ "/folder/child": "child" });
-  let copying = false;
-  const principal: Principal = {
-    ...f.principal,
-    storage: {
-      ...raw,
-      movesDirectoriesByCopy: true,
-      move: async (path, target, opts) => {
-        copying = true;
-        opts?.onProgress?.(1, 2);
-        await new Promise((resolve) => setTimeout(resolve, 0));
-        copying = false;
-        return raw.move(path, target, opts);
-      },
-    },
-  };
-  // The tick is advisory: an unreadable ledger costs a progress update and a
-  // chance to notice a cancellation, never the move itself.
-  const service = createDesktopWrites({
-    ...f.deps,
-    repo: {
-      ...f.repo,
-      operation: async (...args: Parameters<typeof f.repo.operation>) => {
-        if (copying) throw Error("ledger unreachable");
-        return f.repo.operation(...args);
-      },
-    },
-    publishLock: async (_id, run) => run(),
-  });
-  const item = await service.stat(principal, "/folder");
-  const operationId = randomUUID();
-  await service.prepare(principal, {
-    kind: "move" as const,
-    operationId,
-    itemId: item.id,
-    parentId: "root",
-    name: "folder-moved",
-    base: item.version,
-  });
-  expect((await service.commit(principal, operationId)).state).toBe("completed");
-  expect(await new Response((await raw.download("/folder-moved/child")).body).text()).toBe("child");
+    expect((await f.service.status(f.principal, input.operationId)).state).toBe("conflict");
+  }
+  expect(await f.read("/old.txt")).toBe("old");
 });
 
 it("reserves the action and paths history will need before the native write starts", async () => {
   const f = await fixture();
   const identityId = f.principal.identityId;
-  const trashRoot = `/.fdrive-desktop/${identityId}/trash`;
-  await f.raw.mkdir("/.fdrive-desktop");
-  await f.raw.mkdir(`/.fdrive-desktop/${identityId}`);
-  await f.raw.mkdir(trashRoot);
   const reserved = async (operationId: string) =>
     required(await f.repo.operation(identityId, f.principal.accountId, operationId)).request;
 
@@ -2242,7 +2047,11 @@ it("reserves the action and paths history will need before the native write star
     base: afterRename.version,
   };
   await f.service.prepare(f.principal, trashed);
-  expect(await reserved(trashed.operationId)).toMatchObject({ activityAction: "file.trash" });
+  expect(await reserved(trashed.operationId)).toMatchObject({
+    activityAction: "file.trash",
+    activityPath: "/renamed.txt",
+    activityTarget: "/.trash",
+  });
   const inTrash = required((await f.service.commit(f.principal, trashed.operationId)).item);
 
   const restore = {
@@ -2254,10 +2063,14 @@ it("reserves the action and paths history will need before the native write star
     base: inTrash.version,
   };
   await f.service.prepare(f.principal, restore);
-  expect(await reserved(restore.operationId)).toMatchObject({ activityAction: "file.restore" });
+  expect(await reserved(restore.operationId)).toMatchObject({
+    activityAction: "file.restore",
+    activityPath: await onlyLeaf(f),
+    activityTarget: `/${inTrash.name}`,
+  });
   await f.service.commit(f.principal, restore.operationId);
   // The receipt says this was a restore, so history does not read it as a plain move.
-  expect(f.effectContext.mock.calls.at(-1)?.[1]).toMatchObject({ restored: true, trash: false });
+  expect(f.completed.get(restore.operationId)).toMatchObject({ restored: true, trash: false });
 });
 
 const files = (parent: string, count: number) =>
@@ -2313,14 +2126,13 @@ it("checks folders against their tokens without registering or relisting anythin
   const ensureMany = vi.spyOn(f.repo, "ensureMany");
   expect(await f.service.check(f.principal, ask("/folder/sub", "/", "/folder"), signal)).toEqual({
     folders: [
+      { path: "/folder/sub", status: "unchanged" },
       { path: "/", status: "unchanged" },
       { path: "/folder", status: "unchanged" },
-      { path: "/folder/sub", status: "unchanged" },
     ],
   });
-  // Each folder and ancestor is read upstream once.
-  const listed = list.mock.calls.map(([path]) => path);
-  expect(listed.sort()).toEqual(["/", "/folder", "/folder/sub"]);
+  // Each folder is read upstream once, and none of its ancestors is.
+  expect(list.mock.calls.map(([path]) => path)).toEqual(["/folder/sub", "/", "/folder"]);
   // Changed content and unregistered entries both read as changed, and stay unregistered.
   await f.raw.upload("/folder/child", body("changed"), { overwrite: true });
   await f.raw.upload("/folder/sub/new.txt", body("new"));
@@ -2347,9 +2159,9 @@ it("checks folders against their tokens without registering or relisting anythin
     ).folders,
   ).toEqual([
     { path: "/", status: "changed" },
-    { path: "/.fdrive-desktop/x", status: "forbidden" },
-    { path: "/gone", status: "missing" },
     { path: "/old.txt", status: "missing" },
+    { path: "/gone", status: "missing" },
+    { path: "/.fdrive-desktop/x", status: "forbidden" },
   ]);
   // Trash is always relisted, without touching storage.
   list.mockClear();
@@ -2365,7 +2177,7 @@ it("checks folders against their tokens without registering or relisting anythin
   expect(list).not.toHaveBeenCalled();
 });
 
-it("bounds folder checks by size, time and access, and fails on upstream outages", async () => {
+it("bounds folder checks by size and access, and fails on upstream outages", async () => {
   const f = await fixture();
   const tokens = new Map<string, string>();
   for (const path of ["/", "/folder"])
@@ -2379,32 +2191,372 @@ it("bounds folder checks by size, time and access, and fails on upstream outages
   expect((await f.service.check(f.principal, ask("/folder"), signal)).folders).toEqual([
     { path: "/folder", status: "changed" },
   ]);
-  spy.mockImplementation(async (path) =>
-    (await list(path)).map((item) =>
-      item.path === "/folder" ? { ...item, kind: "symlink" } : item,
-    ),
-  );
+  const stat = f.storage.stat.bind(f.storage);
+  const link = vi.spyOn(f.storage, "stat").mockImplementation(async (path) => {
+    if (path === "/folder") throw new StorageError("forbidden", "a link");
+    return stat(path);
+  });
   expect((await f.service.check(f.principal, ask("/folder"), signal)).folders).toEqual([
     { path: "/folder", status: "forbidden" },
   ]);
+  link.mockRestore();
   spy.mockRejectedValue(new StorageError("upstream_unavailable", "Offline"));
   await expect(f.service.check(f.principal, ask("/folder"), signal)).rejects.toThrow("Offline");
   spy.mockImplementation(list);
-  // Past its time budget a check answers what it finished; at least one folder.
-  const ticking = (step: number) => {
-    let now = 0;
-    return () => {
-      now += step;
-      return new Date(now);
-    };
-  };
-  const slow = createDesktopWrites({ ...f.deps, clock: ticking(20_000) });
-  expect((await slow.check(f.principal, ask("/", "/folder"), signal)).folders).toHaveLength(2);
-  const slower = createDesktopWrites({ ...f.deps, clock: ticking(40_000) });
-  expect((await slower.check(f.principal, ask("/", "/folder"), signal)).folders).toEqual([
+  // Every folder asked about is answered, however many there are.
+  expect((await f.service.check(f.principal, ask("/", "/folder"), signal)).folders).toEqual([
     { path: "/", status: "unchanged" },
+    { path: "/folder", status: "unchanged" },
   ]);
   const aborted = new AbortController();
   aborted.abort();
   await expect(f.service.check(f.principal, ask("/"), aborted.signal)).rejects.toThrow();
+});
+
+it("answers a retry that comes while the commit runs with that commit's outcome", async () => {
+  const f = await fixture();
+  const original = await f.service.stat(f.principal, "/old.txt");
+  const save = await f.stage("old.txt", "saved", original);
+  const move = f.raw.move.bind(f.raw);
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = crashAt();
+  f.raw.move = vi.fn(async (path: string, target: string, options?: MoveOptions) => {
+    void reached.call();
+    await held;
+    return move(path, target, options);
+  });
+  const commit = f.service.commit(f.principal, save.operationId);
+  await reached.made;
+  // The app's request timed out and it retries: the retry waits instead of
+  // reading a publication still under way.
+  const retry = f.service.prepare(f.principal, save);
+  release();
+  const [committed, retried] = await Promise.all([commit, retry]);
+  expect(retried).toEqual(committed);
+  expect(committed).toMatchObject({ state: "completed" });
+  expect(f.raw.move).toHaveBeenCalledTimes(1);
+  // A commit that stopped before it recorded anything is simply ready again.
+  const next = await f.stage("next.txt", "next");
+  const key = f.principal.identityId + next.operationId;
+  f.operations.set(key, { ...required(f.operations.get(key)), state: "committing" });
+  expect((await f.service.prepare(f.principal, next)).state).toBe("ready");
+  expect((await f.service.commit(f.principal, next.operationId)).state).toBe("completed");
+});
+
+it("returns the receipt another settlement kept first, and makes a lost publication a conflict", async () => {
+  const f = await fixture();
+  const created = await f.stage("new.txt", "bytes");
+  const complete = f.repo.complete.bind(f.repo);
+  vi.spyOn(f.repo, "complete").mockImplementationOnce(async (...args) => {
+    await complete(...args);
+    return false;
+  });
+  const receipt = await f.service.commit(f.principal, created.operationId);
+  expect(receipt).toMatchObject({ state: "completed", item: { path: "/new.txt" } });
+  expect(await f.service.status(f.principal, created.operationId)).toEqual(receipt);
+  // The storage call fails, and by then the staged body has gone elsewhere:
+  // neither end holds it, so nothing is published over anything.
+  const lost = await f.stage("lost.txt", "lost");
+  const move = f.raw.move.bind(f.raw);
+  f.raw.move = vi.fn(async (path: string) => {
+    await move(path, "/somewhere-else.txt");
+    throw Error("disconnected");
+  });
+  await expect(f.service.commit(f.principal, lost.operationId)).rejects.toMatchObject({
+    details: { code: "version_conflict" },
+  });
+  expect((await f.service.status(f.principal, lost.operationId)).state).toBe("conflict");
+  expect(f.raw.dump()["/lost.txt"]).toBeUndefined();
+});
+
+/** Moves `item` through the Mac's write ledger and answers its receipt. */
+async function macMove(
+  f: Awaited<ReturnType<typeof fixture>>,
+  item: DesktopWriteEntry,
+  parentId: string,
+  name = item.name,
+) {
+  const operationId = randomUUID();
+  await f.service.prepare(f.principal, {
+    kind: "move",
+    operationId,
+    itemId: item.id,
+    parentId,
+    name,
+    base: item.version,
+  });
+  return required((await f.service.commit(f.principal, operationId)).item);
+}
+
+it("shows what the web deleted in the Mac's Trash under a handle, and restores it from there", async () => {
+  const f = await fixture();
+  const before = await f.service.stat(f.principal, "/folder");
+  // Deleted on the web: the handle follows the item into Trash.
+  const { leaf } = (await f.files.trash(fileActor(f.principal, { source: "web" }), "/folder")).item;
+  await f.repo.move(f.principal.identityId, "/folder", leaf);
+  const [entry] = (await f.service.list(f.principal, DESKTOP_TRASH, "token")).entries;
+  expect(entry).toMatchObject({
+    id: before.id,
+    parentId: "trash",
+    path: `${DESKTOP_TRASH}/${before.id}`,
+    name: `folder (deleted ${before.id.slice(0, 8)})`,
+    kind: "dir",
+    trashed: true,
+  });
+  const [child] = (await f.service.list(f.principal, required(entry).path, "token")).entries;
+  expect(child).toMatchObject({
+    path: `${DESKTOP_TRASH}/${before.id}/child`,
+    name: "child",
+    parentId: before.id,
+    trashed: true,
+  });
+  expect((await f.service.stat(f.principal, required(child).path)).id).toBe(required(child).id);
+  // Something inside a Trash item moves out like any item; the rest stays in Trash.
+  const out = await macMove(f, required(child), "root", "child");
+  expect(out).toMatchObject({ path: "/child", trashed: false, id: required(child).id });
+  expect(await f.read("/child")).toBe("child");
+  expect([...f.completed.values()].at(-1)).toMatchObject({
+    from: "/folder/child",
+    restored: true,
+  });
+  // The Trash item itself goes back through Trash, which removes its row and its folder.
+  const back = await macMove(f, required(entry), "root");
+  expect(back).toMatchObject({ id: before.id, path: "/folder", trashed: false });
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(Object.keys(f.raw.dump()).filter((path) => path.startsWith("/.trash"))).toEqual([]);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
+  // Trash itself is no item a write changes.
+  await expect(
+    f.service.prepare(f.principal, {
+      kind: "move",
+      operationId: randomUUID(),
+      itemId: "trash",
+      parentId: "root",
+      name: "Trash",
+      base: { content: "trash", metadata: "trash" },
+    }),
+  ).rejects.toMatchObject({ kind: "bad_request" });
+});
+
+it("deletes only a whole item in Trash for good, and an item gone already is done", async () => {
+  const f = await fixture();
+  const { identityId } = f.principal;
+  const folder = await f.service.stat(f.principal, "/folder");
+  const live = await f.service.stat(f.principal, "/old.txt");
+  const trashed = await macMove(f, folder, "trash");
+  const leaf = await onlyLeaf(f);
+  const [child] = (await f.service.list(f.principal, trashed.path, "token")).entries;
+  // A live item, or something inside a Trash item, is refused.
+  for (const item of [live, required(child)])
+    await expect(f.service.purge(f.principal, item.id)).rejects.toMatchObject({
+      kind: "conflict",
+    });
+  // Where this connection's grants do not reach, it is refused.
+  await expect(
+    f.service.purge(
+      { ...f.principal, tokenAccess: { mode: "full", paths: ["/old.txt"] } },
+      trashed.id,
+    ),
+  ).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(
+    f.service.purge({ ...f.principal, tokenAccess: { mode: "read", paths: ["/"] } }, trashed.id),
+  ).rejects.toMatchObject({ kind: "forbidden" });
+  expect(f.purge).not.toHaveBeenCalled();
+  const { id } = onlyItem(f);
+  await f.service.purge(f.principal, trashed.id);
+  expect(f.purge).toHaveBeenCalledWith(f.principal, id);
+  expect(f.trashRepo.rows.size).toBe(0);
+  expect(f.raw.dirs().filter((dir) => dir.startsWith("/.trash/"))).toEqual([]);
+  // Gone, as Delete permanently leaves it: asking again is done.
+  await f.repo.remove(identityId, leaf);
+  await f.service.purge(f.principal, trashed.id);
+  expect(f.purge).toHaveBeenCalledTimes(1);
+});
+
+it("keeps the Mac's Trash to whole Trash items its grants reach", async () => {
+  const f = await fixture();
+  const { identityId } = f.principal;
+  const folder = await f.service.stat(f.principal, "/folder");
+  const trashed = await macMove(f, folder, "trash");
+  const narrow = { ...f.principal, tokenAccess: { mode: "full" as const, paths: ["/old.txt"] } };
+  // Deleted from outside this connection's grants: not listed, and not readable.
+  expect((await f.service.list(narrow, DESKTOP_TRASH, "token")).entries).toEqual([]);
+  await expect(f.service.stat(narrow, trashed.path)).rejects.toMatchObject({ kind: "forbidden" });
+  // Moving what is in Trash to Trash again is refused at commit.
+  const again = { ...trashed, version: trashed.version };
+  await expect(macMove(f, again, "trash")).rejects.toMatchObject({ kind: "bad_request" });
+  // A file in the Trash folder that Trash did not put there is no Trash item.
+  await f.raw.upload("/.trash/stray.txt", body("stray"), { mkdirParents: true });
+  const stray = await f.repo.ensure(identityId, "/.trash/stray.txt", "file");
+  await expect(f.service.stat(f.principal, `${DESKTOP_TRASH}/${stray.id}`)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  await expect(
+    f.service.prepare(f.principal, {
+      kind: "move",
+      operationId: randomUUID(),
+      itemId: stray.id,
+      parentId: "root",
+      name: "stray.txt",
+      base: { content: "c", metadata: "m" },
+    }),
+  ).rejects.toMatchObject({ kind: "not_found" });
+  // Nor is one shaped like a Trash item that Trash has no row for.
+  const unknown = `/.trash/${randomUUID()}/unknown.txt`;
+  await f.raw.upload(unknown, body("unknown"), { mkdirParents: true });
+  const orphan = await f.repo.ensure(identityId, unknown, "file");
+  await expect(f.service.stat(f.principal, `${DESKTOP_TRASH}/${orphan.id}`)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  await expect(f.service.purge(f.principal, orphan.id)).resolves.toBeUndefined();
+  expect(f.purge).not.toHaveBeenCalled();
+  expect(await f.read(unknown)).toBe("unknown");
+  // A folder in Trash lists in one page, within the same bound as Trash itself.
+  vi.spyOn(f.storage, "list").mockResolvedValueOnce(Array(100_001).fill({}));
+  await expect(f.service.list(f.principal, trashed.path, "token")).rejects.toMatchObject({
+    kind: "rate_limited",
+  });
+});
+
+/**
+ * alice's Mac, with bob's `/Projects` shared with her to edit, on real
+ * homes: what she deletes there goes to bob's Trash.
+ */
+async function sharedFixture() {
+  const root = await mkdtemp(join(tmpdir(), "fdrive-mac-shared-"));
+  temporary.push(root);
+  const homes = { alice: join(root, "alice"), bob: join(root, "bob") };
+  await mkdir(join(homes.bob, "Projects"), { recursive: true });
+  await mkdir(homes.alice, { recursive: true });
+  await writeFile(join(homes.bob, "Projects", "plan.txt"), "plan");
+  const bob = createUserStorage({ home: homes.bob, shared: async () => [] });
+  const alice = createUserStorage({
+    home: homes.alice,
+    shared: async () => [
+      {
+        name: "Projects",
+        owner: "bob",
+        dir: join(homes.bob, "Projects"),
+        ownerHome: homes.bob,
+        writable: true,
+      },
+    ],
+  });
+  const ids = { alice: randomUUID(), bob: randomUUID() };
+  const shelf = "/Shared with me/Projects";
+  const principal: Principal = {
+    accountId: randomUUID(),
+    identityId: ids.alice,
+    username: "alice",
+    isAdmin: false,
+    storage: alice,
+    tokenAccess: { mode: "full", paths: ["/"] },
+  };
+  const trashRepo = memoryTrashItemRepo();
+  const memory = memoryRepo(trashRepo);
+  const metadata = { onMoved: vi.fn(async () => {}), onDeleted: vi.fn(async () => {}) };
+  const access = vi.fn(
+    async (identityId: string, from: string, to: string, directory: boolean) =>
+      ({ directory, shares: { identityId, from, to }, grants: null }) as DesktopAccessMove,
+  );
+  const homeOf = async (id: string) => (id === ids.bob ? bob : alice);
+  const trash = testTrashItems({ repo: trashRepo, homeOf }).items;
+  const deps = {
+    repo: memory.repo,
+    storageForIdentity: homeOf,
+    clock: () => new Date(),
+    access,
+    metadata,
+    purge: async () => {},
+    trash,
+    ownerPath: async (identityId: string, path: string) =>
+      path.startsWith(`${shelf}/`)
+        ? { identityId: ids.bob, path: `/Projects${path.slice(shelf.length)}` }
+        : { identityId, path },
+  };
+  const file = await createDesktopWrites(deps).stat(principal, `${shelf}/plan.txt`);
+  const request = {
+    kind: "move" as const,
+    operationId: randomUUID(),
+    itemId: file.id,
+    parentId: "trash",
+    name: file.name,
+    base: file.version,
+  };
+  return {
+    ...memory,
+    alice,
+    bob,
+    ids,
+    principal,
+    metadata,
+    access,
+    deps,
+    file,
+    request,
+    trash,
+    trashRepo,
+    homes,
+  };
+}
+
+it("follows an item in a folder shared with the login into its owner's Trash", async () => {
+  const f = await sharedFixture();
+  const service = createDesktopWrites(f.deps);
+  await service.prepare(f.principal, f.request);
+  const receipt = required((await service.commit(f.principal, f.request.operationId)).item);
+  // bob's Trash has it, deleted from where it is in his files; alice's has nothing.
+  const { items } = await f.trash.list(f.ids.bob, 10);
+  expect(items).toMatchObject([{ originalPath: "/Projects/plan.txt", name: "plan.txt" }]);
+  expect((await f.trash.list(f.ids.alice, 10)).items).toEqual([]);
+  const leaf = trashItemPath(required(items[0]).id, "plan.txt");
+  expect(await readFile(join(f.homes.bob, leaf), "utf8")).toBe("plan");
+  // alice only hears where it went, until her Mac lists Trash again.
+  expect(receipt).toMatchObject({
+    id: f.file.id,
+    parentId: "trash",
+    trashed: true,
+    path: `${DESKTOP_TRASH}/${f.file.id}`,
+    name: `plan (deleted ${f.file.id.slice(0, 8)}).txt`,
+    size: 4,
+  });
+  expect((await service.list(f.principal, DESKTOP_TRASH, "token")).entries).toEqual([]);
+  expect(await f.repo.item(f.ids.alice, f.file.id)).toBeNull();
+  // What bob kept follows it into his Trash; what alice kept there ends.
+  expect(f.moved.get(f.request.operationId)?.shares).toEqual({
+    identityId: f.ids.bob,
+    from: "/Projects/plan.txt",
+    to: leaf,
+  });
+  expect(f.completed.get(f.request.operationId)).toMatchObject({
+    from: "/Shared with me/Projects/plan.txt",
+    to: leaf,
+    trash: true,
+  });
+  expect(f.metadata.onMoved).toHaveBeenCalledWith(f.ids.bob, "/Projects/plan.txt", leaf, false);
+  expect(f.metadata.onDeleted).toHaveBeenCalledWith(
+    f.ids.alice,
+    "/Shared with me/Projects/plan.txt",
+    false,
+  );
+});
+
+it("finishes a move to its owner's Trash on the retry when its receipt could not be kept", async () => {
+  const f = await sharedFixture();
+  const service = createDesktopWrites(f.deps);
+  await service.prepare(f.principal, f.request);
+  vi.spyOn(f.repo, "complete").mockRejectedValueOnce(Error("database unavailable"));
+  await expect(service.commit(f.principal, f.request.operationId)).rejects.toMatchObject({
+    kind: "internal",
+  });
+  expect((await service.status(f.principal, f.request.operationId)).state).toBe("committing");
+  // The retry finds it in bob's Trash, deleted from where it was in his files.
+  expect(await createDesktopWrites(f.deps).prepare(f.principal, f.request)).toMatchObject({
+    state: "completed",
+    item: { id: f.file.id, parentId: "trash", trashed: true },
+  });
+  expect((await f.trash.list(f.ids.bob, 10)).items).toHaveLength(1);
 });

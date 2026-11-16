@@ -42,16 +42,14 @@ function fixture({
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "1",
     startedAt: new Date(),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({
-      required: setupRequired,
-      providers: setupRequired ? [] : [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => setupRequired,
     registerRoutes(groups) {
       registerFeatureAdmission(groups.authed, service);
       registerFeatureRoutes(groups, { service, workerToken });
@@ -89,6 +87,11 @@ describe("feature routes", () => {
         values: { ...DISABLED_FEATURES, semanticSearch: true },
         walkthroughComplete: false,
       }),
+      JSON.stringify({
+        revision: 0,
+        values: { ...DISABLED_FEATURES, thumbnails: true, pdfOcr: true },
+        walkthroughComplete: false,
+      }),
     ]) {
       expect(
         (await app.request(ROUTES.system.features, { method: "PUT", headers, body })).status,
@@ -100,13 +103,13 @@ describe("feature routes", () => {
       headers,
       body: JSON.stringify({
         revision: 0,
-        values: { ...DISABLED_FEATURES, pdfOcr: true },
+        values: { ...DISABLED_FEATURES, textSearch: true, pdfOcr: true },
         walkthroughComplete: false,
       }),
     });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({
-      configuration: { revision: 1, values: { pdfOcr: true, searchOcr: false } },
+      configuration: { revision: 1, values: { textSearch: true, pdfOcr: true, searchOcr: false } },
     });
   });
   it("serves internal config during setup only with a valid worker credential", async () => {

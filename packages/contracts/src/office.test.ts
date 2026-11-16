@@ -76,13 +76,11 @@ describe("office contracts", () => {
       }).mode,
     ).toBe("view");
   });
-  it("requires an explicit bound editor allowlist", () => {
-    const providerId = "123e4567-e89b-42d3-a456-426614174000";
+  it("requires an explicit editor list to allow editing", () => {
     const settings = OfficeSettingsUpdateRequest.parse({
       revision: 0,
       enabled: true,
       editingEnabled: true,
-      editingProviderId: providerId,
       editorUsernames: ["alice"],
     });
     expect(
@@ -90,28 +88,30 @@ describe("office contracts", () => {
         configuration: settings,
         product: "onlyoffice",
         status: "starting",
-        activeProviderId: providerId,
-        activeProviderLabel: "Primary",
       }).status,
     ).toBe("starting");
-    expect(OfficeSettings.safeParse({ ...settings, editingProviderId: null }).success).toBe(false);
     expect(OfficeSettings.safeParse({ ...settings, editorUsernames: [] }).success).toBe(false);
+    expect(
+      OfficeSettings.safeParse({ ...settings, editorUsernames: ["alice", "alice"] }).success,
+    ).toBe(false);
+    expect(
+      OfficeSettings.safeParse({ ...settings, editingEnabled: false, editorUsernames: [] }).success,
+    ).toBe(true);
   });
-  it("strips the appUrl of rows stored before the address became system-wide, but rejects it in requests", () => {
+  it("strips keys stored records no longer have, but rejects them in requests", () => {
     const legacy = {
       revision: 3,
       enabled: true,
       appUrl: "https://drive.example",
-      editingEnabled: false,
-      editingProviderId: null,
-      editorUsernames: [],
+      editingEnabled: true,
+      editingProviderId: "123e4567-e89b-42d3-a456-426614174000",
+      editorUsernames: ["alice"],
     };
     expect(OfficeSettings.parse(legacy)).toEqual({
       revision: 3,
       enabled: true,
-      editingEnabled: false,
-      editingProviderId: null,
-      editorUsernames: [],
+      editingEnabled: true,
+      editorUsernames: ["alice"],
     });
     expect(OfficeSettingsUpdateRequest.safeParse(legacy).success).toBe(false);
   });

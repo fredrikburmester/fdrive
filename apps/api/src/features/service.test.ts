@@ -29,17 +29,13 @@ function recorder(): { eventLog: SystemEventLog; recorded: Recorded[] } {
 
 const base = loadConfig({
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 });
 const full: AppConfig = {
   ...base,
-  fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
   fdriveIndexerUrl: "http://indexer",
-  fdriveEmbedRuntimeUrl: "http://embed:8099",
-  fdriveImageEmbedRuntimeUrl: "http://image:8013",
-  fdriveTikaRuntimeUrl: "http://tika:9997",
-  fdriveEmbedUrl: "http://embed",
-  fdriveImageEmbedUrl: "http://image",
+  fdriveMlUrl: "http://ml",
   fdriveOcrUrl: "http://ocr",
   fdriveThumbsDir: "/thumbs",
 };
@@ -97,7 +93,7 @@ function fixture(
 }
 
 describe("feature configuration", () => {
-  it("starts unconfigured installations off and only checks configured storage workers", async () => {
+  it("starts unconfigured installations off and asks no worker anything", async () => {
     const { service, fetchImpl } = fixture();
     expect(await service.configuration()).toMatchObject({
       revision: 0,
@@ -106,10 +102,7 @@ describe("feature configuration", () => {
     });
     expect(await service.enabled("pdfOcr")).toBe(false);
     expect((await service.status()).source).toBe("default");
-    expect(vi.mocked(fetchImpl).mock.calls.map(([url]) => String(url))).toEqual([
-      "http://indexer/health",
-      "http://ocr/health",
-    ]);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
   it("persists progress and rejects racing/stale writes", async () => {
     const { service } = fixture();
@@ -179,7 +172,7 @@ describe("observed feature status", () => {
     const result = await fixture({
       raw: config,
       fetch: async (input) =>
-        String(input).includes(":8099/")
+        String(input).startsWith("http://ml/text/")
           ? Response.json({ status: "failed", error: "worker exceeded bounded startup retries" })
           : Response.json({
               ok: true,
@@ -196,10 +189,6 @@ describe("observed feature status", () => {
     });
     expect(result.statuses.find((s) => s.id === "imageSearch")?.state).toBe("ready");
   });
-  it("blocks local processing without configured roots", async () => {
-    const result = await fixture({ raw: config, config: base }).service.status();
-    expect(result.statuses.every((s) => s.state === "blocked")).toBe(true);
-  });
   it("surfaces missing workers, HTTP errors, schema failure and network failures", async () => {
     for (const opts of [
       {
@@ -207,8 +196,7 @@ describe("observed feature status", () => {
           ...full,
           fdriveIndexerUrl: undefined,
           fdriveOcrUrl: undefined,
-          fdriveEmbedUrl: undefined,
-          fdriveImageEmbedUrl: undefined,
+          fdriveMlUrl: undefined,
         },
       },
       { fetch: async () => new Response("", { status: 503 }) },
@@ -245,7 +233,7 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: false, writable: false } },
+          storage: { readable: false, writable: false },
           features: { revision: 1 },
         }),
     }).service.status();
@@ -255,27 +243,24 @@ describe("observed feature status", () => {
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: true, writable: true } },
+          storage: { readable: true, writable: true },
           features: { revision: 1, status: "ok" },
         }),
     }).service.status();
     expect(ready.statuses.every((s) => s.state === "ready")).toBe(true);
   });
-  it("shows read-only storage diagnostics before any feature is selected", async () => {
+  it("blocks Searchable PDFs alone on a folder the OCR worker cannot write", async () => {
     const result = await fixture({
+      raw: config,
       fetch: async () =>
         Response.json({
           ok: true,
-          storage: { files: { readable: true, writable: false } },
-          features: { revision: 0, values: DISABLED_FEATURES },
+          storage: { readable: true, writable: false },
+          features: { revision: 1, status: "ok" },
         }),
     }).service.status();
-    expect(result.roots[0]?.processing).toEqual({
-      indexReadable: true,
-      pdfReadable: true,
-      pdfWritable: false,
-    });
-    expect(result.statuses.every((s) => s.state === "off")).toBe(true);
+    expect(result.statuses.find((s) => s.id === "pdfOcr")?.state).toBe("blocked");
+    expect(result.statuses.find((s) => s.id === "thumbnails")?.state).toBe("ready");
   });
 });
 
@@ -383,39 +368,34 @@ describe("feature event log", () => {
   });
 });
 
-it("uses published dev worker URLs without inventing controller ports or revisions", async () => {
+it("asks each ml unit for its status document, and takes an always-on unit as acknowledged", async () => {
   const seen: string[] = [];
   const { service } = fixture({
     raw: config,
-    config: {
-      ...full,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveEmbedUrl: "http://127.0.0.1:59081",
-      fdriveImageEmbedUrl: "http://127.0.0.1:59012",
-      fdriveTikaUrl: "http://127.0.0.1:59999",
-    },
     fetch: async (url) => {
       const target = String(url);
       seen.push(target);
-      if (target.includes(":59081")) return new Response("");
-      if (target.includes(":59999")) return new Response("Apache Tika");
-      if (target.includes(":59012")) return Response.json({ status: "ok" });
+      // Development's static units report no revision: nothing to acknowledge.
+      if (target.endsWith("/runtime")) return Response.json({ status: "ready", revision: null });
+      if (target === "http://ml/image/health") return Response.json({ status: "ok" });
       return Response.json({ ok: true, features: { revision: 1, values: enabled } });
     },
   });
   expect((await service.status()).statuses.every((status) => status.state === "ready")).toBe(true);
-  expect(seen).toContain("http://127.0.0.1:59012/health");
-  expect(seen).toContain("http://127.0.0.1:59999/version");
-  expect(seen.some((url) => url.endsWith("/runtime"))).toBe(false);
+  for (const url of [
+    "http://ml/text/runtime",
+    "http://ml/image/runtime",
+    "http://ml/image/health",
+    "http://ml/extract/runtime",
+  ])
+    expect(seen).toContain(url);
 });
 
 it("keeps image search preparing while the model loads behind a ready controller", async () => {
   const { service } = fixture({
     raw: config,
     fetch: async (url) => {
-      if (String(url) === "http://image/health") return Response.json({ status: "loading" });
+      if (String(url) === "http://ml/image/health") return Response.json({ status: "loading" });
       return Response.json({ status: "ready", features: { revision: 1, values: enabled } });
     },
   });
@@ -428,7 +408,7 @@ it("waits for a starting controller without misreporting its absent child as fai
   const { service } = fixture({
     raw: config,
     fetch: async (url) => {
-      if (String(url) === "http://image/health") throw new Error("not started yet");
+      if (String(url) === "http://ml/image/health") throw new Error("not started yet");
       return Response.json({ status: "starting", features: { revision: 1, values: enabled } });
     },
   });

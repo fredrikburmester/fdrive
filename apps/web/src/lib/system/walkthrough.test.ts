@@ -9,13 +9,12 @@ import {
 
 describe("walkthrough steps", () => {
   it("stays within the contract's walkthroughStep bound", () => {
-    expect(WALKTHROUGH_STEPS.length - 1).toBe(9);
+    expect(WALKTHROUGH_STEPS.length - 1).toBeLessThanOrEqual(9);
   });
 
-  it("walks the six features before Trash, the address, Office, and review", () => {
+  it("walks the six features before the address, Office, and review, with no Trash step", () => {
     expect(WALKTHROUGH_STEPS.map((step) => step.kind)).toEqual([
       ...FEATURE_IDS.map(() => "feature"),
-      "trash",
       "publicUrl",
       "office",
       "review",
@@ -27,18 +26,17 @@ describe("walkthrough steps", () => {
 
   it("counts the wizard's own two steps in the total", () => {
     expect(WALKTHROUGH_OFFSET).toBe(2);
-    expect(WALKTHROUGH_TOTAL).toBe(12);
+    expect(WALKTHROUGH_TOTAL).toBe(11);
   });
 
   it("captions a step with its one-based position and label after the wizard", () => {
-    expect(walkthroughLabel(0)).toBe("Step 3 of 12 · Thumbnails");
-    expect(walkthroughLabel(2)).toBe("Step 5 of 12 · Search OCR");
-    expect(walkthroughLabel(6)).toBe("Step 9 of 12 · Trash");
-    expect(walkthroughLabel(7)).toBe("Step 10 of 12 · Server address");
-    expect(walkthroughLabel(9)).toBe("Step 12 of 12 · Review");
+    expect(walkthroughLabel(0)).toBe("Step 3 of 11 · Thumbnails");
+    expect(walkthroughLabel(2)).toBe("Step 5 of 11 · Search OCR");
+    expect(walkthroughLabel(6)).toBe("Step 9 of 11 · Server address");
+    expect(walkthroughLabel(8)).toBe("Step 11 of 11 · Review");
   });
 
   it("falls back to the section name for a step outside the table", () => {
-    expect(walkthroughLabel(10)).toBe("Step 13 of 12 · Features");
+    expect(walkthroughLabel(9)).toBe("Step 12 of 11 · Features");
   });
 });

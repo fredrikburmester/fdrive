@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { baseName, extensionOf, mimeFromExtension } from "@fdrive/core";
-import type { Principal } from "../auth/principal.ts";
-import { ordinaryPath, requireExplicitAccess } from "./access.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
+import { ordinaryPath } from "./access.ts";
 import { pageText } from "./format.ts";
-import type { McpToolDeps, ReadFileTextArgs } from "./handlers.ts";
+import type { McpToolDeps } from "./handlers.ts";
 import { fileUrl, folderUrl } from "./urls.ts";
 
 export const MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -29,17 +29,21 @@ export async function boundedBytes(
   }
 }
 
-export async function readStoredFile(deps: McpToolDeps, principal: Principal, rawPath: string) {
-  requireExplicitAccess(principal);
-  const path = ordinaryPath(deps, principal, rawPath);
-  const stat = await principal.storage.statFile(path);
-  if (stat.size > MAX_FILE_BYTES) throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
-  const result = await principal.storage.download(path, { signal: AbortSignal.timeout(30_000) });
-  if (result.contentLength !== null && result.contentLength > MAX_FILE_BYTES) {
-    await result.body.cancel();
-    throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
+export async function readStoredFile(
+  deps: McpToolDeps,
+  principal: TokenPrincipal,
+  rawPath: string,
+) {
+  const path = ordinaryPath(principal, rawPath);
+  const file = await principal.storage.open(path);
+  let bytes: Buffer;
+  try {
+    if (file.size > MAX_FILE_BYTES)
+      throw new Error(`file exceeds the ${MAX_FILE_BYTES} byte limit`);
+    bytes = Buffer.from(await file.read(0, file.size));
+  } finally {
+    await file.close();
   }
-  const bytes = await boundedBytes(result.body, MAX_FILE_BYTES);
   return {
     path,
     bytes,
@@ -58,9 +62,19 @@ export function decodeText(bytes: Uint8Array): string | null {
   }
 }
 
-export async function readFileTextDirect(
+export interface ReadFileTextArgs {
+  readonly path: string;
+  readonly offset?: number | undefined;
+  readonly max_chars?: number | undefined;
+}
+
+/**
+ * Reads a file through the token's storage and returns a page of its text:
+ * UTF-8 as it is, other documents through the indexer's `/extract-content`.
+ */
+export async function readFileText(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: ReadFileTextArgs,
 ) {
   const file = await readStoredFile(deps, principal, args.path);
@@ -70,7 +84,7 @@ export async function readFileTextDirect(
   let text = document ? null : decodeText(file.bytes);
   let status = "read";
   if (text === null) {
-    if (deps.indexerClient?.extractContent === undefined)
+    if (deps.indexerClient === null)
       throw new Error(
         "Document extraction is unavailable; read_file can return the original bytes.",
       );
@@ -98,7 +112,7 @@ export async function readFileTextDirect(
   };
 }
 
-export async function readFile(deps: McpToolDeps, principal: Principal, path: string) {
+export async function readFile(deps: McpToolDeps, principal: TokenPrincipal, path: string) {
   const file = await readStoredFile(deps, principal, path);
   return {
     path: file.path,
@@ -111,8 +125,8 @@ export async function readFile(deps: McpToolDeps, principal: Principal, path: st
   };
 }
 
-export async function liveFileInfo(deps: McpToolDeps, principal: Principal, rawPath: string) {
-  const path = ordinaryPath(deps, principal, rawPath);
+export async function liveFileInfo(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
+  const path = ordinaryPath(principal, rawPath);
   const stat = await principal.storage.stat(path);
   const publicUrl = await deps.publicUrl();
   return {
@@ -122,8 +136,8 @@ export async function liveFileInfo(deps: McpToolDeps, principal: Principal, rawP
     size_bytes: stat.size,
     identical_copies: [] as string[],
     partial: true,
-    modified: stat.modifiedAt?.toISOString() ?? null,
-    mime: stat.contentType,
+    modified: stat.modifiedAt.toISOString(),
+    mime: mimeFromExtension(stat.ext),
     url: stat.kind === "dir" ? folderUrl(publicUrl, path) : fileUrl(publicUrl, path),
   };
 }

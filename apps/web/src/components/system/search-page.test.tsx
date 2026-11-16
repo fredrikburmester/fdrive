@@ -42,7 +42,6 @@ const CONFIGURED_FIXTURE: SystemSearchResponse = {
     model: "intfloat/multilingual-e5-small",
     maxInputLength: 512,
   },
-  roots: ["files"],
   index: { files: 16, withText: 10, chunks: 10, embedded: 10 },
 };
 
@@ -100,17 +99,9 @@ describe("SearchPage", () => {
     ).toBeTruthy();
     expect(
       screen.getByText(
-        "Re-embed re-extracts and re-embeds every file in every configured root from scratch, not just the embeddings. On a large index this can take a long time and loads the indexer with work.",
+        "Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings. On a large index this can take a long time and loads the indexer with work.",
       ),
     ).toBeTruthy();
-  });
-
-  it("renders the configured roots", async () => {
-    mockConfigured();
-    render(<SearchPage />);
-
-    expect(await screen.findByText("Roots")).toBeTruthy();
-    expect(screen.getByText("files")).toBeTruthy();
   });
 
   it("shows Loading while the query has not resolved yet", () => {
@@ -162,6 +153,6 @@ describe("SearchPage", () => {
 
     render(<SearchPage />);
 
-    expect(await screen.findByText("Not configured: set FDRIVE_EMBED_URL.")).toBeTruthy();
+    expect(await screen.findByText("Not configured: set FDRIVE_ML_URL.")).toBeTruthy();
   });
 });

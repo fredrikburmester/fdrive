@@ -1,15 +1,9 @@
-import { randomUUID } from "node:crypto";
-import { createWriteStream } from "node:fs";
-import { rm } from "node:fs/promises";
-import { join } from "node:path";
-import { type Readable, Transform } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { Readable, Transform } from "node:stream";
 import { createGunzip, createZstdDecompress } from "node:zlib";
 import {
   baseName,
   detectArchiveKind,
-  isStorageError,
-  StorageError,
+  type OpenFile,
   type StorageProvider,
   safeEntryPath,
   stripArchiveExtension,
@@ -31,7 +25,6 @@ export interface ExtractArchiveOptions {
   readonly storage: StorageProvider;
   readonly archivePath: string;
   readonly destination: string;
-  readonly tmpDir: string;
   readonly signal: AbortSignal;
   readonly report: ReportProgress;
   readonly maxBytes: number;
@@ -111,23 +104,6 @@ function capStreamBytes(source: Readable, maxBytes: number): Readable {
   return capped;
 }
 
-/** Preserve existing files for every archive format, even outside the route wrapper. */
-async function uploadNewEntry(
-  storage: StorageProvider,
-  target: string,
-  body: ReadableStream<Uint8Array>,
-  opts: { mkdirParents: true; signal: AbortSignal; contentLength?: number },
-): Promise<void> {
-  try {
-    await storage.stat(target);
-  } catch (error) {
-    if (!isStorageError(error) || error.kind !== "not_found") throw error;
-    await storage.upload(target, body, { ...opts, overwrite: false });
-    return;
-  }
-  throw new StorageError("conflict", `already exists: ${target}`);
-}
-
 /**
  * Caps one upload while sharing the expanded-byte budget across all archive entries.
  * Closing either side closes the other, so a rejected upload or limit error cannot
@@ -155,7 +131,8 @@ async function uploadCappedEntry(
   entryStream.pipe(capped);
 
   try {
-    await uploadNewEntry(storage, target, webStreamFromNodeReadable(capped), opts);
+    // A new file only: storage refuses a name that is taken.
+    await storage.upload(target, webStreamFromNodeReadable(capped), { ...opts, overwrite: false });
   } catch (error) {
     entryStream.destroy();
     capped.destroy();
@@ -171,15 +148,71 @@ function summarizeSkipped(skipped: readonly string[]): string | undefined {
   return `skipped ${skipped.length} unsafe ${noun}: ${skipped.join(", ")}`;
 }
 
-function openZipFile(path: string): Promise<yauzl.ZipFile> {
+/** How much of an entry a zip read takes from the archive at a time. */
+const ZIP_READ_CHUNK = 1024 * 1024;
+
+/**
+ * yauzl's random access over the archive where it lies, through the open
+ * file: the central directory and each entry are read by position, and
+ * `onBytes` hears how many bytes have been read so far.
+ */
+class OpenFileReader extends yauzl.RandomAccessReader {
+  private bytes = 0;
+
+  constructor(
+    private readonly file: OpenFile,
+    private readonly onBytes: (bytes: number) => void,
+  ) {
+    super();
+  }
+
+  private async readAt(position: number, length: number): Promise<Uint8Array> {
+    const bytes = await this.file.read(position, length);
+    if (bytes.length !== length) throw new Error("the archive ended early");
+    this.bytes += length;
+    this.onBytes(this.bytes);
+    return bytes;
+  }
+
+  override _readStreamForRange(start: number, end: number): Readable {
+    const reader = this;
+    return Readable.from(
+      (async function* () {
+        for (let at = start; at < end; at += ZIP_READ_CHUNK) {
+          yield await reader.readAt(at, Math.min(ZIP_READ_CHUNK, end - at));
+        }
+      })(),
+      { objectMode: false },
+    );
+  }
+
+  override read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number,
+    callback: (error: Error | null) => void,
+  ): void {
+    this.readAt(position, length).then(
+      (bytes) => {
+        buffer.set(bytes, offset);
+        callback(null);
+      },
+      (error: Error) => callback(error),
+    );
+  }
+}
+
+function openZipFile(file: OpenFile, onBytes: (bytes: number) => void): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
     // `decodeStrings: false` disables yauzl's own entry-name validation
     // (which unconditionally rejects a ".." segment or an absolute path by
     // erroring the whole zip, not just that entry). fdrive does its own,
     // per-entry validation with `safeEntryPath` below instead, reading the
     // raw name straight from `entry.fileNameRaw`.
-    yauzl.open(
-      path,
+    yauzl.fromRandomAccessReader(
+      new OpenFileReader(file, onBytes),
+      file.size,
       { lazyEntries: true, autoClose: true, decodeStrings: false },
       (err, zipfile) => {
         if (err || !zipfile) {
@@ -283,33 +316,25 @@ async function walkZipEntries(
   return { written, skipped };
 }
 
+/**
+ * Extracts the zip where it lies: yauzl reads its central directory and
+ * each entry by position from the open file, so nothing is copied first.
+ */
 async function extractZip(
+  file: OpenFile,
   storage: StorageProvider,
-  archivePath: string,
   destination: string,
-  tmpDir: string,
   signal: AbortSignal,
   report: ReportProgress,
   maxBytes: number,
   limits: ExtractionLimits,
 ): Promise<EntryOutcome> {
-  const spoolPath = join(tmpDir, `fdrive-extract-${randomUUID()}.zip`);
+  if (file.size > maxBytes) throw new ByteCapExceededError(maxBytes);
+  const zipfile = await openZipFile(file, (bytes) => report({ bytes }));
   try {
-    const download = await storage.download(archivePath, { signal });
-    const nodeStream = nodeReadableFromWeb(download.body);
-    enforceByteCap(nodeStream, maxBytes, (bytes) => report({ bytes }));
-
-    const outStream = createWriteStream(spoolPath);
-    await pipeline(nodeStream, outStream, { signal });
-
-    const zipfile = await openZipFile(spoolPath);
-    try {
-      return await walkZipEntries(zipfile, storage, destination, signal, report, limits);
-    } finally {
-      zipfile.close();
-    }
+    return await walkZipEntries(zipfile, storage, destination, signal, report, limits);
   } finally {
-    await rm(spoolPath, { force: true });
+    zipfile.close();
   }
 }
 
@@ -348,7 +373,10 @@ async function handleTarEntry(
   };
   limits.noteDeclaredFileSize(header.size ?? 0);
   try {
-    await uploadNewEntry(storage, target, webStreamFromNodeReadable(entryStream), uploadOpts);
+    await storage.upload(target, webStreamFromNodeReadable(entryStream), {
+      ...uploadOpts,
+      overwrite: false,
+    });
   } catch (error) {
     entryStream.destroy();
     throw error;
@@ -359,8 +387,8 @@ async function handleTarEntry(
 }
 
 async function extractTar(
+  file: OpenFile,
   storage: StorageProvider,
-  archivePath: string,
   destination: string,
   signal: AbortSignal,
   report: ReportProgress,
@@ -368,8 +396,7 @@ async function extractTar(
   decompress: "none" | "gzip" | "zstd",
   limits: ExtractionLimits,
 ): Promise<EntryOutcome> {
-  const download = await storage.download(archivePath, { signal });
-  const nodeStream = nodeReadableFromWeb(download.body);
+  const nodeStream = nodeReadableFromWeb(file.stream());
   enforceByteCap(nodeStream, maxBytes, (bytes) => report({ bytes }));
 
   const decompressor =
@@ -446,6 +473,7 @@ async function extractTar(
 }
 
 async function extractPlainGzip(
+  file: OpenFile,
   storage: StorageProvider,
   archivePath: string,
   destination: string,
@@ -458,8 +486,7 @@ async function extractPlainGzip(
   const target = safeEntryPath(destination, targetName);
   if (target === null) return { written: 0, skipped: [targetName] };
 
-  const download = await storage.download(archivePath, { signal });
-  const nodeStream = nodeReadableFromWeb(download.body);
+  const nodeStream = nodeReadableFromWeb(file.stream());
   enforceByteCap(nodeStream, maxBytes, (bytes) => report({ bytes }));
 
   const gunzip = createGunzip();
@@ -481,10 +508,9 @@ async function extractPlainGzip(
 }
 
 /**
- * Extracts the archive at `archivePath` into `destination`. `zip` is
- * spooled to a temp file first (random access is required to read its
- * central directory); every other supported kind streams straight from
- * `storage.download`. Every entry path is resolved through `safeEntryPath`;
+ * Extracts the archive at `archivePath` into `destination`, reading it where
+ * it lies: `zip` by position (its central directory is at the end), every
+ * other supported kind as one stream. Every entry path is resolved through `safeEntryPath`;
  * entries that fail it are skipped and listed in the returned `warning`.
  * Symlinks in tar archives are always skipped. Throws when nothing could be
  * extracted (an empty or entirely unsafe archive), when `archivePath`'s
@@ -510,67 +536,36 @@ export async function extractArchive(opts: ExtractArchiveOptions): Promise<Extra
     opts.maxEntries ?? DEFAULT_EXTRACT_MAX_ENTRIES,
   );
 
+  const { storage, archivePath, destination, signal, report, maxBytes } = opts;
+  const file = await storage.open(archivePath);
   let outcome: EntryOutcome;
-  switch (kind) {
-    case "zip":
-      outcome = await extractZip(
-        opts.storage,
-        opts.archivePath,
-        opts.destination,
-        opts.tmpDir,
-        opts.signal,
-        opts.report,
-        opts.maxBytes,
-        limits,
-      );
-      break;
-    case "tar":
-      outcome = await extractTar(
-        opts.storage,
-        opts.archivePath,
-        opts.destination,
-        opts.signal,
-        opts.report,
-        opts.maxBytes,
-        "none",
-        limits,
-      );
-      break;
-    case "tar.gz":
-      outcome = await extractTar(
-        opts.storage,
-        opts.archivePath,
-        opts.destination,
-        opts.signal,
-        opts.report,
-        opts.maxBytes,
-        "gzip",
-        limits,
-      );
-      break;
-    case "tar.zst":
-      outcome = await extractTar(
-        opts.storage,
-        opts.archivePath,
-        opts.destination,
-        opts.signal,
-        opts.report,
-        opts.maxBytes,
-        "zstd",
-        limits,
-      );
-      break;
-    case "gz":
-      outcome = await extractPlainGzip(
-        opts.storage,
-        opts.archivePath,
-        opts.destination,
-        opts.signal,
-        opts.report,
-        opts.maxBytes,
-        limits,
-      );
-      break;
+  try {
+    outcome =
+      kind === "zip"
+        ? await extractZip(file, storage, destination, signal, report, maxBytes, limits)
+        : kind === "gz"
+          ? await extractPlainGzip(
+              file,
+              storage,
+              archivePath,
+              destination,
+              signal,
+              report,
+              maxBytes,
+              limits,
+            )
+          : await extractTar(
+              file,
+              storage,
+              destination,
+              signal,
+              report,
+              maxBytes,
+              kind === "tar" ? "none" : kind === "tar.gz" ? "gzip" : "zstd",
+              limits,
+            );
+  } finally {
+    await file.close();
   }
 
   if (outcome.written === 0) {

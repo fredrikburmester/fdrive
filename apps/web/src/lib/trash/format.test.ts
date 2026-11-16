@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  dayCountLabel,
   deleteDialogCopy,
   emptiedToastMessage,
   emptyTrashConfirmDescription,
@@ -9,9 +10,7 @@ import {
   purgedToastMessage,
   restoreConflictMessage,
   restoredToastMessage,
-  retentionDaysLabel,
   retentionNote,
-  trashAvailabilityFor,
 } from "./format";
 
 describe("originalFolderLabel", () => {
@@ -24,98 +23,55 @@ describe("originalFolderLabel", () => {
   });
 });
 
-describe("retentionDaysLabel", () => {
-  it("formats a whole number of days without a decimal", () => {
-    expect(retentionDaysLabel(48)).toBe("2 days");
+describe("deleteDialogCopy", () => {
+  it("moves to Trash, quoting the single entry's name and when Trash deletes it", () => {
+    expect(deleteDialogCopy([{ name: "a.txt" }], 30)).toEqual({
+      title: "Move to Trash?",
+      description:
+        '"a.txt" will be moved to Trash. Items in Trash are deleted permanently after 30 days.',
+      confirmLabel: "Move to Trash",
+      pendingLabel: "Moving to Trash…",
+    });
   });
 
-  it("uses the singular for exactly one day", () => {
-    expect(retentionDaysLabel(24)).toBe("1 day");
+  it("summarizes multiple items by count, and says one day in the singular", () => {
+    expect(deleteDialogCopy([{ name: "a.txt" }, { name: "b.txt" }], 1).description).toBe(
+      "2 items will be moved to Trash. Items in Trash are deleted permanently after 1 day.",
+    );
   });
 
-  it("rounds to at most one decimal place", () => {
-    expect(retentionDaysLabel(36)).toBe("1.5 days");
+  it("leaves out when Trash deletes items until the setting has loaded", () => {
+    expect(deleteDialogCopy([{ name: "a.txt" }], undefined).description).toBe(
+      '"a.txt" will be moved to Trash.',
+    );
   });
 
-  it("rounds a value that would otherwise need two decimals", () => {
-    expect(retentionDaysLabel(20)).toBe("0.8 days");
-  });
-
-  it("uses the plural below one day", () => {
-    expect(retentionDaysLabel(12)).toBe("0.5 days");
+  it("names the owner whose Trash takes what is in a folder shared with the login", () => {
+    expect(deleteDialogCopy([{ name: "a.txt", owner: "alice" }], undefined).description).toBe(
+      '"a.txt" will be moved to alice\'s Trash.',
+    );
+    expect(
+      deleteDialogCopy(
+        [
+          { name: "a.txt", owner: "alice" },
+          { name: "b.txt", owner: "alice" },
+        ],
+        undefined,
+      ).description,
+    ).toBe("2 items will be moved to alice's Trash.");
+    expect(
+      deleteDialogCopy([{ name: "a.txt", owner: "alice" }, { name: "mine.txt" }], 30).description,
+    ).toBe(
+      "2 items will be moved to Trash. Items in folders shared with you go to their owner's Trash. Items in Trash are deleted permanently after 30 days.",
+    );
   });
 });
 
 describe("retentionNote", () => {
-  it("is null when retention is not configured", () => {
-    expect(retentionNote(null)).toBeNull();
-  });
-
-  it("states the configured retention in days", () => {
-    expect(retentionNote(72)).toBe("Items in Trash are removed automatically after 3 days.");
-  });
-});
-
-describe("deleteDialogCopy", () => {
-  it("uses the permanent-delete copy when trash is null", () => {
-    expect(deleteDialogCopy(["a.txt"], null)).toEqual({
-      title: "Delete item?",
-      description: '"a.txt" will be permanently deleted. This cannot be undone.',
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("uses the permanent-delete copy when trash is unavailable", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: false, retentionHours: null })).toEqual({
-      title: "Delete item?",
-      description: '"a.txt" will be permanently deleted. This cannot be undone.',
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("pluralizes the permanent-delete copy for multiple items", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], null)).toEqual({
-      title: "Delete items?",
-      description: "2 items will be permanently deleted. This cannot be undone.",
-      confirmLabel: "Delete",
-      pendingLabel: "Deleting…",
-    });
-  });
-
-  it("uses the move-to-trash copy, quoting the single entry's name, when trash is available", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: true, retentionHours: null })).toEqual({
-      title: "Move to Trash?",
-      description: '"a.txt" will be moved to Trash.',
-      confirmLabel: "Move to Trash",
-      pendingLabel: "Moving to Trash…",
-    });
-  });
-
-  it("summarizes multiple items by count for the move-to-trash copy", () => {
-    expect(deleteDialogCopy(["a.txt", "b.txt"], { available: true, retentionHours: null })).toEqual(
-      {
-        title: "Move to Trash?",
-        description: "2 items will be moved to Trash.",
-        confirmLabel: "Move to Trash",
-        pendingLabel: "Moving to Trash…",
-      },
-    );
-  });
-
-  it("appends the retention note when configured", () => {
-    expect(deleteDialogCopy(["a.txt"], { available: true, retentionHours: 24 })).toEqual({
-      title: "Move to Trash?",
-      description:
-        '"a.txt" will be moved to Trash. Items in Trash are removed automatically after 1 day.',
-      confirmLabel: "Move to Trash",
-      pendingLabel: "Moving to Trash…",
-    });
-  });
-
-  it("treats an undefined trash argument as unavailable", () => {
-    expect(deleteDialogCopy(["a.txt"], undefined).confirmLabel).toBe("Delete");
+  it("says when Trash deletes what it holds, once known", () => {
+    expect(retentionNote(7)).toBe("Items in Trash are deleted permanently after 7 days.");
+    expect(retentionNote(undefined)).toBeNull();
+    expect(dayCountLabel(1)).toBe("1 day");
   });
 });
 
@@ -181,20 +137,5 @@ describe("restoreConflictMessage", () => {
     expect(restoreConflictMessage("a.txt")).toBe(
       'Could not restore "a.txt": a file already exists at that location.',
     );
-  });
-});
-
-describe("trashAvailabilityFor", () => {
-  it("follows the login's trash capability and keeps only the retention note from the status", () => {
-    expect(trashAvailabilityFor({ trash: true }, { retentionHours: 48 })).toEqual({
-      available: true,
-      retentionHours: 48,
-    });
-    expect(trashAvailabilityFor({ trash: true }, undefined)).toEqual({
-      available: true,
-      retentionHours: null,
-    });
-    // A stale cached status cannot promise a trash the login no longer has.
-    expect(trashAvailabilityFor({ trash: false }, { retentionHours: 48 })).toBeNull();
   });
 });

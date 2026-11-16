@@ -1,9 +1,10 @@
 "use client";
 
+import { cn } from "cn";
 import type { ReactNode } from "react";
 import { SearchButton } from "@/components/search/search-button";
 import { Separator } from "@/components/ui/separator";
-import { SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar";
 import { useMe } from "@/lib/api/auth-queries";
 
 /**
@@ -25,12 +26,18 @@ export interface PageHeaderProps {
 /**
  * Sticky top bar shared by every page inside the shell: the sidebar
  * trigger, a slot for breadcrumbs, and a slot for right-aligned actions.
+ * With the sidebar open on a wide screen, the sidebar's own button closes
+ * it, so the trigger here steps aside.
  */
 export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
+  const { open } = useSidebar();
   return (
     <header className="sticky top-0 z-10 flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md">
-      <SidebarTrigger />
-      <Separator orientation="vertical" className="h-4" />
+      <SidebarTrigger className={cn(open && "md:hidden")} />
+      <Separator
+        orientation="vertical"
+        className={cn("h-4 data-vertical:self-center", open && "md:hidden")}
+      />
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{breadcrumbs}</div>
       <div className="flex shrink-0 items-center gap-2">
         <SearchButton />

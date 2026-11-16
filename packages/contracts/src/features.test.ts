@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FeatureConfiguration, FeaturesUpdateRequest } from "./features.ts";
+import { FeatureConfiguration, FeaturesUpdateRequest, indexerEnabled } from "./features.ts";
 
 const values = {
   thumbnails: false,
@@ -9,11 +9,21 @@ const values = {
   imageSearch: false,
   pdfOcr: false,
 };
+describe("indexerEnabled", () => {
+  it("is on with thumbnails, full-text search or image search", () => {
+    expect(indexerEnabled(values)).toBe(false);
+    for (const feature of ["thumbnails", "textSearch", "imageSearch"]) {
+      expect(indexerEnabled({ ...values, [feature]: true })).toBe(true);
+    }
+    expect(indexerEnabled({ ...values, semanticSearch: true, pdfOcr: true })).toBe(false);
+  });
+});
+
 describe("feature contracts", () => {
-  it("requires indexing for search OCR and semantics, but keeps PDF conversion independent", () => {
+  it("requires full-text search for search OCR, semantics and PDF conversion", () => {
     const input = { revision: 0, values, walkthroughComplete: false };
     expect(FeaturesUpdateRequest.safeParse(input).success).toBe(true);
-    for (const feature of ["searchOcr", "semanticSearch"]) {
+    for (const feature of ["searchOcr", "semanticSearch", "pdfOcr"]) {
       expect(
         FeaturesUpdateRequest.safeParse({ ...input, values: { ...values, [feature]: true } })
           .success,
@@ -25,9 +35,6 @@ describe("feature contracts", () => {
         }).success,
       ).toBe(true);
     }
-    expect(
-      FeaturesUpdateRequest.safeParse({ ...input, values: { ...values, pdfOcr: true } }).success,
-    ).toBe(true);
     expect(
       FeaturesUpdateRequest.safeParse({ ...input, values: { ...values, imageSearch: true } })
         .success,

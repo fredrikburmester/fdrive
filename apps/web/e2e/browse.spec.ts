@@ -1,5 +1,8 @@
+import { mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
+import { homePath, journalOutsideChange } from "./support/local-folder.js";
 import { breadcrumb, listing } from "./support/regions.js";
+import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { createViewFolder } from "./support/view-folder.js";
 
@@ -19,14 +22,6 @@ async function createFolder(page: Page, name: string): Promise<void> {
   await dialog.getByLabel("Folder name").fill(name);
   await dialog.getByRole("button", { name: "Create" }).click();
   await expect(dialog).toBeHidden();
-}
-
-async function deleteEntry(page: Page, name: string): Promise<void> {
-  await listing(page).getByText(name, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  const confirmDialog = page.getByRole("alertdialog");
-  await confirmDialog.getByRole("button", { name: "Delete" }).click();
-  await expect(confirmDialog).toBeHidden();
 }
 
 test("root listing shows docs and photo.jpg", async ({ page }) => {
@@ -169,7 +164,9 @@ test("a very long folder name never widens the page past the viewport", async ({
   await page.goto("/files");
 
   await createFolder(page, name);
-  await listing(page).getByText(name, { exact: true }).dblclick();
+  // By URL: a new folder is selected, not scrolled to, and the shared root's
+  // virtualized listing may not render its row.
+  await page.goto(`/files/${name}`);
   await expect(page).toHaveURL(new RegExp(`/files/${name}$`));
 
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({
@@ -178,6 +175,61 @@ test("a very long folder name never widens the page past the viewport", async ({
   }));
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth);
 
-  await page.getByRole("link", { name: "Home" }).click();
-  await deleteEntry(page, name);
+  await removeSandbox(page, name);
+});
+
+test("a symbolic link left by a writer outside fdrive shows as a quiet row nothing can open", async ({
+  page,
+}) => {
+  const folder = uniqueName("links");
+  await mkdir(homePath("alice", `/${folder}`), { recursive: true });
+  await writeFile(homePath("alice", `/${folder}/kept.txt`), "kept");
+  await symlink(homePath("alice", "/.trash"), homePath("alice", `/${folder}/bin`));
+  try {
+    await page.goto(`/files/${folder}`);
+    const link = listing(page).locator(`[data-path="/${folder}/bin"]`);
+    await expect(link).toHaveAttribute("aria-disabled", "true");
+    await expect(link).toHaveAttribute("title", /symbolic link/i);
+    await link.dblclick();
+    await expect(page).toHaveURL(new RegExp(`/files/${folder}$`));
+    await link.click({ button: "right" });
+    await expect(page.getByRole("menuitem")).toHaveCount(0);
+    // Select all takes every entry but the link.
+    await page.getByRole("checkbox", { name: "Select all", exact: true }).click();
+    await expect(listing(page).locator('[data-selected="true"]')).toHaveCount(1);
+    await expect(listing(page).locator(`[data-path="/${folder}/kept.txt"]`)).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+  } finally {
+    // Removes the link itself, never what it points at.
+    await rm(homePath("alice", `/${folder}`), { recursive: true, force: true });
+  }
+});
+
+test("an open folder shows a change from another tab, and one made on the disk once the watcher journals it", async ({
+  page,
+}) => {
+  const folder = uniqueName("live");
+  await mkdir(homePath("alice", `/${folder}`), { recursive: true });
+  await writeFile(homePath("alice", `/${folder}/kept.txt`), "kept");
+  try {
+    const streaming = page.waitForResponse((response) => response.url().endsWith("/api/v1/events"));
+    await page.goto(`/files/${folder}`);
+    await expect(listing(page).getByText("kept.txt", { exact: true })).toBeVisible();
+    await streaming;
+    // Another tab of the same login creates a folder through fdrive.
+    const response = await page.request.post("/api/v1/fs/mkdir", {
+      headers: { "x-requested-with": "fdrive" },
+      data: { path: `/${folder}/from-another-tab` },
+    });
+    expect(response.ok()).toBe(true);
+    await expect(listing(page).getByText("from-another-tab", { exact: true })).toBeVisible();
+    // A writer outside fdrive adds a file; the indexer's watcher journals it.
+    await writeFile(homePath("alice", `/${folder}/from-the-disk.txt`), "outside");
+    await journalOutsideChange("alice", `/${folder}/from-the-disk.txt`);
+    await expect(listing(page).getByText("from-the-disk.txt", { exact: true })).toBeVisible();
+  } finally {
+    await rm(homePath("alice", `/${folder}`), { recursive: true, force: true });
+  }
 });

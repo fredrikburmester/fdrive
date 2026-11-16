@@ -26,7 +26,7 @@ its folder, `.env` and data.
 
 > [!IMPORTANT]
 > Back up `.env` and keep it out of logs and reports. The master key encrypts stored
-> credentials, and a lost or replaced key can't be recovered.
+> secrets such as backup keys, and a lost or replaced key can't be recovered.
 
 **Portainer, Dockge, Unraid's Compose Manager or a NAS app:** create a stack from
 `compose.yaml` and set `FDRIVE_MASTER_KEY` (`openssl rand -base64 32`) and
@@ -53,7 +53,7 @@ in `.env` before the first start:
 FDRIVE_FILES_DIR=/srv/files
 ```
 
-- The api, backup worker and OCR worker mount it read-write and write as `FDRIVE_RUN_AS_UID`;
+- The api and OCR worker mount it read-write and write as `FDRIVE_RUN_AS_UID`;
   the indexer mounts it read-only and reads as the same user. All of them see it at `/data`.
 - Existing files must belong to that user. Check with `ls -ln /srv/files` and set
   `FDRIVE_RUN_AS_UID` to the owner's ID rather than changing ownership. A new, empty folder is
@@ -97,12 +97,13 @@ The walkthrough:
 3. **Features**: turn each of the six on or skip it. Search OCR doesn't change files.
    Searchable PDF conversion rewrites PDFs and keeps the originals as its retention settings
    say.
-4. **Trash**: deleted items wait in each user's Trash before they are removed. See
-   [Trash](../docs/TRASH.md).
-5. **Server address** and **Office**: the address everyone opens fdrive at, and viewing and
+4. **Server address** and **Office**: the address everyone opens fdrive at, and viewing and
    editing documents in the browser; editing needs a list of usernames. The bundled editor
    starts on its own. See [Office setup](../docs/OFFICE.md).
-6. **Review**: until you finish, fdrive stays on `/setup`, and a reload keeps your choices.
+5. **Review**: until you finish, fdrive stays on `/setup`, and a reload keeps your choices.
+
+Trash needs no step: deleted items wait in each user's Trash for 30 days, which an
+administrator can change under **System > General**. See [Trash](../docs/TRASH.md).
 
 Add everyone else under **System > Users**. Everything stays editable in
 **System > Features**. Features start off and download models only when needed, and
@@ -138,20 +139,14 @@ and after 20 minutes fails and names the ones that aren't.
 | a release, such as `0.3.1` | That release |
 | `main` | The main branch's latest build, less tested. Use main's [`compose.yaml`](https://raw.githubusercontent.com/fredrikburmester/fdrive/main/deploy/compose.yaml) with it |
 
+A server older than `0.7.0-rc.11` runs that release once (`FDRIVE_VERSION=0.7.0-rc.11`) before
+any newer one: later releases start the database's migration history afresh and refuse an older
+database, leaving it unchanged.
+
 You can't go back to an older release once a newer one has migrated the database. Keep `.env`,
 overlays, data folders, the database and your files, and don't delete volumes or redo setup to
 fix an error. After changing `.env`, run `docker compose up -d`; `docker restart` doesn't
 apply it.
-
-**Installed from a git checkout?** Releases from 0.3.0 have no `update.sh`. Update from the
-checkout's `deploy` folder like any other installation, and move extra Compose files from
-`FDRIVE_COMPOSE_FILES` to `COMPOSE_FILE` in `.env`, the list Compose itself reads. The
-checkout's `compose.yaml` runs the newest release, so to try a pre-release from a checkout,
-set `FDRIVE_VERSION` to it in `.env` as well.
-
-**Used WebDAV or S3 storage?** The files folder is now fdrive's only storage. The update
-disables WebDAV and S3 storage and their logins disappear, so copy anything you need from them
-into the files folder first. Backups to an S3 bucket keep working.
 
 ## Troubleshooting
 
@@ -187,8 +182,7 @@ For more, see `docker compose logs --tail=100 api`, **System** in fdrive and the
 ## Installation backups
 
 The stack includes a backup worker with encrypted storage. In **System → Backups**, set the
-recovery key, schedules and optional S3/B2 or folder destinations. Upload exported external
-configuration ZIPs there to include their saved versions. Keep the recovery key and
+recovery key, schedules and optional S3/B2 destinations. Keep the recovery key and
 destination credentials outside fdrive. User files aren't included, so back up the files
 folder with the host's own tools. See [backups and recovery](../docs/BACKUPS.md), including
 recovery into a new, empty database.

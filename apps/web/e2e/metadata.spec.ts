@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing, sidebar } from "./support/regions.js";
+import { openSandbox, removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -52,31 +53,32 @@ test("tagging a file from the context menu shows a dot, and the tag page lists i
 }) => {
   const fileName = `${uniqueName("tag-me")}.txt`;
   const tagName = uniqueName("proj");
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "tagging");
   await uploadTextFile(page, fileName, "tag me please");
 
   await tagFileWithNewTag(page, fileName, tagName);
 
-  const row = listing(page).locator(`[data-path="/${fileName}"]`);
+  const row = listing(page).locator(`[data-path="/${sandbox}/${fileName}"]`);
   await expect(row.locator(`[aria-label*="${tagName}"]`)).toBeVisible();
 
   await sidebar(page).getByRole("link", { name: tagName }).click();
   await expect(page).toHaveURL(/\/tags\//);
   await expect(listing(page).getByText(fileName, { exact: true })).toBeVisible();
 
-  // Cleanup: delete the file so later runs of this spec against the same
-  // seeded root never see a duplicate.
-  await page.goto("/files");
+  // Cleanup: delete the file, then its folder.
+  await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
+  await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
+  await removeSandbox(page, sandbox);
 });
 
 test("favoriting a file from the context menu shows it in the sidebar, and removing it clears it", async ({
   page,
 }) => {
   const fileName = `${uniqueName("fav-me")}.txt`;
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "favorites");
   await uploadTextFile(page, fileName, "favorite me please");
 
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
@@ -89,8 +91,10 @@ test("favoriting a file from the context menu shows it in the sidebar, and remov
   await expect(sidebar(page).getByRole("link", { name: fileName })).toBeHidden();
 
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
+  await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
+  await removeSandbox(page, sandbox);
 });
 
 test("a tag survives renaming its enclosing folder", async ({ page }) => {
@@ -99,15 +103,15 @@ test("a tag survives renaming its enclosing folder", async ({ page }) => {
   const renamedFolder = uniqueName("renamed-folder");
   const tagName = uniqueName("survives");
 
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "tag-rename");
   await createFolder(page, folderName);
   await listing(page).getByText(folderName, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${folderName}$`));
+  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}/${folderName}$`));
   await uploadTextFile(page, fileName, "rename tracking test");
 
   await tagFileWithNewTag(page, fileName, tagName);
 
-  await page.goto("/files");
+  await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(folderName, { exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const renameDialog = page.getByRole("dialog");
@@ -124,20 +128,23 @@ test("a tag survives renaming its enclosing folder", async ({ page }) => {
     timeout: 15_000,
   });
   await expect(listing(page).getByText("no longer exists")).toHaveCount(0);
+  await removeSandbox(page, sandbox);
 });
 
 test("opening a preview adds the file to Recents", async ({ page }) => {
   const fileName = `${uniqueName("recent-me")}.txt`;
-  await page.goto("/files");
+  const sandbox = await openSandbox(page, "recents");
   await uploadTextFile(page, fileName, "open me for recents");
 
   await listing(page).getByText(fileName, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/view/${fileName}$`));
+  await expect(page).toHaveURL(new RegExp(`/view/${sandbox}/${fileName}$`));
 
   await expect(sidebar(page).getByRole("link", { name: fileName })).toBeVisible();
 
-  await page.goto("/files");
+  await page.goto(`/files/${sandbox}`);
   await listing(page).getByText(fileName, { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Delete" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Delete" }).click();
+  await page.getByRole("menuitem", { name: "Move to Trash" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Move to Trash" }).click();
+  await expect(listing(page).getByText(fileName, { exact: true })).toHaveCount(0);
+  await removeSandbox(page, sandbox);
 });

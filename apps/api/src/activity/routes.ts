@@ -7,25 +7,21 @@ import {
   type PersonalActivityResponse,
   ROUTES,
 } from "@fdrive/contracts";
+import { isStorageError } from "@fdrive/core";
 import type {
   ActivityEventRecord,
   ActivityListOptions,
   ActivityReadsRepo,
   ActivityRepo,
-  IdentityRepo,
 } from "@fdrive/db";
 import { streamSSE } from "hono/streaming";
-import { accountContext } from "../accounts/routes.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import type { IdentityStorageFactory } from "../auth/storage-factory.js";
+import { accountContext } from "../auth/account-context.ts";
 import { ApiHttpError } from "../errors.js";
 import type { FsContext } from "../fs/routes.js";
 import { normalizeOrThrow, parseBody } from "../fs/routes.js";
-import { createReadAuthorizer } from "../scoping/read-authorizer.js";
 import type { ActivityAdmission } from "./admission.js";
 import { createActivityCursors } from "./cursor.js";
-import { createActivityLimiter } from "./limiter.js";
-import type { ActivityObservations } from "./observations.js";
 
 const API_PREFIX = "/api/v1";
 
@@ -38,15 +34,7 @@ export interface PersonalActivityRoutesDeps {
   readonly admitActivity: ActivityAdmission;
   readonly reads: ActivityReadsRepo;
   readonly repo: ActivityRepo;
-  readonly identities: IdentityRepo;
-  readonly storageFactory: IdentityStorageFactory;
-  readonly observations: ActivityObservations;
   readonly cursorSecret: string;
-  /**
-   * True when an indexer watcher is running. Without one, observations come
-   * only from refresh comparison, and the UI must keep saying so.
-   */
-  readonly watcherEnabled: boolean;
 }
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
@@ -155,9 +143,6 @@ export function registerPersonalActivityRoutes(
 ) {
   const { authed } = groups;
   const cursors = createActivityCursors(deps.cursorSecret);
-  // An explicit recheck reaches the provider, so it gets a tighter budget
-  // than a read of already recorded history.
-  const recheck = createActivityLimiter(12);
   const files = routePath(ROUTES.activity.files);
   const events = routePath(ROUTES.activity.events);
 
@@ -173,7 +158,6 @@ export function registerPersonalActivityRoutes(
     const options: ActivityListOptions = {
       limit: filters.limit,
       ...scope,
-      ...(filters.identityId ? { identityId: filters.identityId } : {}),
       ...(filters.action ? { action: filters.action } : {}),
       ...(filters.source ? { source: filters.source } : {}),
       ...(filters.outcome ? { outcome: filters.outcome } : {}),
@@ -206,10 +190,7 @@ export function registerPersonalActivityRoutes(
     const last = rows.at(-1);
     // Open read windows belong at the top of the first page only. A later page
     // or a batch view would show them a second time, out of order.
-    const reads =
-      cursor || scope.batchId
-        ? []
-        : await deps.reads.provisional(principal.accountId, filters.identityId);
+    const reads = cursor || scope.batchId ? [] : await deps.reads.provisional(principal.accountId);
     const body: PersonalActivityResponse = {
       items: rows.map((row) =>
         serializeActivity(
@@ -242,27 +223,15 @@ export function registerPersonalActivityRoutes(
       ...(scope.batchId
         ? { batchSummary: await deps.repo.batchSummary(principal.accountId, scope.batchId) }
         : {}),
-      coverage: {
-        mutations: true,
-        reads: true,
-        // Nothing detects changes made outside fdrive yet, so the UI must keep
-        // saying so. Provider watchers and refresh reconciliation are slice 3.
-        observations: deps.watcherEnabled ? "watcher_and_refresh" : "refresh",
-        observationGap: true,
-      },
     };
     return c.json(body);
   }
 
   authed.get(routePath(ROUTES.activity.feed), (c) => feed(c));
-  authed.get(routePath(ROUTES.activity.locations), async (c) =>
-    c.json({ items: await deps.repo.locations(accountContext(c).principal.accountId) }),
-  );
   authed.get(routePath(ROUTES.activity.resolveFile), async (c) => {
     const { principal } = accountContext(c);
-    const identityId = uuid(c.req.query("identityId"));
     const path = normalizeOrThrow(c.req.query("path") ?? "");
-    const id = await deps.repo.resolveFile(principal.accountId, identityId, path);
+    const id = await deps.repo.resolveFile(principal.accountId, principal.identityId, path);
     if (!id) throw new ApiHttpError("not_found", "No recorded history for this file yet");
     return c.json({ id });
   });
@@ -347,25 +316,6 @@ export function registerPersonalActivityRoutes(
       ),
     });
   });
-  authed.post(`${files}/:fileId/recheck`, async (c) => {
-    const { principal } = accountContext(c);
-    recheck(principal.accountId);
-    const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
-    if (!result) throw new ApiHttpError("not_found", "File journey not found");
-    // A recheck is bounded to what the caller may read right now, so an
-    // unlinked login is refused instead of probed.
-    const identity = await deps.identities.get(result.file.identityId);
-    if (identity?.accountId !== principal.accountId)
-      throw new ApiHttpError("forbidden", "Login is no longer linked");
-    const storage = await deps.storageFactory(identity.id);
-    return c.json(
-      await deps.observations.check(
-        { ...principal, identityId: identity.id, storage },
-        result.file.path,
-      ),
-    );
-  });
-
   authed.get(`${files}/:fileId`, async (c) => {
     const { principal } = accountContext(c);
     const result = await deps.repo.file(principal.accountId, uuid(c.req.param("fileId")));
@@ -373,22 +323,17 @@ export function registerPersonalActivityRoutes(
     const { file, storage, lastSubject, lastEvent } = result;
     let currentPath: string | null = null;
     let availability: ActivityFileResponse["availability"] = "unavailable";
-    // History survives an unlinked login, but the current location does not:
-    // only a still-linked identity may be probed for where the file is now.
-    const identity = await deps.identities.get(file.identityId);
-    if (identity?.accountId === principal.accountId) {
+    // History outlives a login, but the current location does not: only the
+    // caller's own login is probed for where the file is now.
+    if (file.identityId === principal.identityId) {
       availability = file.state;
       if (file.state === "live") {
         try {
-          const provider = await deps.storageFactory(file.identityId);
-          const read = await createReadAuthorizer({ storage: provider }).authorize({
-            path: file.path,
-            kind: file.kind,
-          });
-          if (read.allowed) currentPath = file.path;
-          else availability = read.reason === "missing" ? "unknown" : "unavailable";
-        } catch {
-          availability = "unavailable";
+          await principal.storage.stat(file.path);
+          currentPath = file.path;
+        } catch (error) {
+          availability =
+            isStorageError(error) && error.kind === "not_found" ? "unknown" : "unavailable";
         }
       }
     }

@@ -25,12 +25,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { accountItemHref, identityLabel, navigateAccountItem } from "@/lib/account/identities";
-import { useIdentityActions } from "@/lib/account/use-identities";
 import { activityFile, activityRequest } from "@/lib/activity/api";
 import { activityLabels, activityPath, collapseActivity } from "@/lib/activity/history";
-import { useActivityFile, useActivityHistory, useActivityLocations } from "@/lib/activity/queries";
+import { useActivityFile, useActivityHistory } from "@/lib/activity/queries";
 import { useMe } from "@/lib/api/auth-queries";
+import { pathToHref, viewHref } from "@/lib/files/path-url";
+import { revealHref } from "@/lib/search/reveal";
 import { EventMembers } from "./event-members";
 import { JourneyDetails } from "./journey-details";
 
@@ -62,28 +62,24 @@ function HistoryFilter({
 }
 function ActivityRow({ event }: { event: PersonalActivityEvent }) {
   const { data: me } = useMe();
-  const identities = useIdentityActions();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const path = activityPath(event);
   const Icon =
     event.class === "observation" ? HelpCircle : event.after?.kind === "dir" ? FolderOpen : File;
   async function open(kind: "file" | "reveal") {
-    if (!event.fileId || !me) return;
+    if (!event.fileId) return;
     setBusy(true);
     try {
       const current = await activityFile(event.fileId);
-      if (!current.currentPath)
-        throw new Error("This file is unavailable. Its recorded journey is still here.");
-      await navigateAccountItem(
-        me,
-        current.identityId,
-        accountItemHref(
-          kind === "file" && current.kind === "dir" ? "dir" : kind,
-          current.currentPath,
-        ),
-        identities.switch,
-        (href) => router.push(href as Route),
+      const path = current.currentPath;
+      if (!path) throw new Error("This file is unavailable. Its recorded journey is still here.");
+      router.push(
+        (kind === "reveal"
+          ? revealHref(path)
+          : current.kind === "dir"
+            ? pathToHref(path)
+            : viewHref(path)) as Route,
       );
     } catch (cause) {
       toast.error(cause instanceof Error ? cause.message : "Could not open this file");
@@ -91,7 +87,8 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
       setBusy(false);
     }
   }
-  const available = me?.identities.some((identity) => identity.id === event.identityId) ?? false;
+  // History outlives the login that recorded it; only the signed-in login's files can open.
+  const available = event.identityId === me?.identity.id;
   return (
     <li className="flex min-w-0 gap-3 border-b border-border py-4 last:border-0">
       <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
@@ -118,7 +115,6 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
         )}
         <p className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <time dateTime={event.sortAt}>{new Date(event.sortAt).toLocaleString()}</time>
-          <span>{identityLabel(me?.identities ?? [], event.identityId)}</span>
           <span>{event.source}</span>
         </p>
         {event.class === "observation" && (
@@ -141,7 +137,7 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
               variant="ghost"
               size="sm"
               className="min-h-11"
-              disabled={busy || !available || identities.pending}
+              disabled={busy || !available}
               onClick={() => void open("file")}
             >
               Open
@@ -150,7 +146,7 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
               variant="ghost"
               size="sm"
               className="min-h-11"
-              disabled={busy || !available || identities.pending}
+              disabled={busy || !available}
               onClick={() => void open("reveal")}
             >
               Show in folder
@@ -243,8 +239,6 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
   );
 }
 export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: string }) {
-  const { data: me } = useMe();
-  const locations = useActivityLocations();
   const [filters, setFilters] = useState<Partial<PersonalActivityFilters>>({});
   const [search, setSearch] = useState("");
   const history = useActivityHistory(
@@ -275,7 +269,7 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
   const events = collapseActivity(
     history.data?.pages.flatMap((page) => [...page.provisionalReads, ...page.items]) ?? [],
   );
-  function filter(key: "identityId" | "action" | "source" | "outcome", value: string) {
+  function filter(key: "action" | "source" | "outcome", value: string) {
     setFilters((previous) => ({ ...previous, [key]: value === "all" ? undefined : value }));
   }
   return (
@@ -290,9 +284,7 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
           <h1 className="text-2xl font-semibold tracking-tight">
             {fileId ? "File journey" : "My activity"}
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Your actions across your connected storage.
-          </p>
+          <p className="mt-1 text-sm text-muted-foreground">Your actions on your files.</p>
         </div>
         {fileId && <JourneySummary fileId={fileId} />}
         {fileId && <JourneyDetails fileId={fileId} />}
@@ -325,28 +317,7 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
         </form>
         <details className="rounded-xl border px-3">
           <summary className="flex min-h-11 cursor-pointer items-center text-sm">Filters</summary>
-          <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-4">
-            <HistoryFilter
-              label="Storage location"
-              value={filters.identityId ?? "all"}
-              onChange={(value) => filter("identityId", value)}
-              options={[
-                { value: "all", label: "All locations" },
-                ...(me?.identities ?? []).map((identity) => ({
-                  value: identity.id,
-                  label: identityLabel(me?.identities ?? [], identity.id),
-                })),
-                ...(locations.data ?? [])
-                  .filter(
-                    (location) =>
-                      !me?.identities.some((identity) => identity.id === location.identityId),
-                  )
-                  .map((location) => ({
-                    value: location.identityId,
-                    label: `${location.label} (disconnected)`,
-                  })),
-              ]}
-            />
+          <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-3">
             <HistoryFilter
               label="Action"
               value={filters.action ?? "all"}
@@ -498,12 +469,7 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
           </p>
         )}
         <p className="text-xs text-muted-foreground">
-          {first?.coverage.observations === "watcher_and_refresh"
-            ? "Changes made outside fdrive appear when the storage watcher or a refresh detects them."
-            : first?.coverage.observations === "refresh"
-              ? "This storage has no watcher, so changes made outside fdrive appear only when a refresh detects them."
-              : "Changes made outside fdrive are not detected here."}{" "}
-          Watcher gaps, unavailable storage and cached native opens can leave gaps in the journey.
+          Changes made outside fdrive appear once the indexer notices them.
         </p>
       </main>
     </>
@@ -511,21 +477,6 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
 }
 function JourneySummary({ fileId }: { fileId: string }) {
   const summary = useActivityFile(fileId);
-  const [checking, setChecking] = useState(false);
-  async function recheck() {
-    setChecking(true);
-    try {
-      const result = (await activityRequest(`/files/${fileId}/recheck`, { method: "POST" })) as {
-        checked: boolean;
-      };
-      if (!result.checked) toast.error("Could not check this location right now");
-      await summary.refetch();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not recheck file");
-    } finally {
-      setChecking(false);
-    }
-  }
   if (summary.isPending) return <p role="status">Finding the current location…</p>;
   if (summary.isError) return <p role="alert">{summary.error.message}</p>;
   const file = summary.data;
@@ -542,14 +493,6 @@ function JourneySummary({ fileId }: { fileId: string }) {
         {file.label && `${file.label} · `}Revision records describe changes; earlier file contents
         are not stored.
       </p>
-      <Button
-        variant="ghost"
-        className="mt-2 min-h-11"
-        disabled={checking}
-        onClick={() => void recheck()}
-      >
-        {checking ? "Checking…" : "Recheck location"}
-      </Button>
     </div>
   );
 }

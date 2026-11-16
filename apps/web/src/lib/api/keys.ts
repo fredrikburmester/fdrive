@@ -10,8 +10,8 @@ export const queryKeys = {
       ["personal-activity", accountId, "feed", scope, filters] as const,
     file: (accountId: string, fileId: string) =>
       ["personal-activity", accountId, "file", fileId] as const,
-    resolve: (accountId: string, identityId: string, path: string) =>
-      ["personal-activity", accountId, "resolve", identityId, path] as const,
+    resolve: (accountId: string, path: string) =>
+      ["personal-activity", accountId, "resolve", path] as const,
   },
   auth: {
     me: () => ["auth", "me"] as const,
@@ -21,28 +21,29 @@ export const queryKeys = {
     stat: (path: string) => ["fs", "stat", path] as const,
     folderSize: (path: string) => ["fs", "folder-size", path] as const,
   },
+  storage: {
+    usage: () => ["storage", "usage"] as const,
+  },
+  photos: {
+    list: () => ["photos", "list"] as const,
+    details: (path: string) => ["photos", "details", path] as const,
+  },
   folderViews: {
     all: () => ["folder-views"] as const,
-    path: (identityId: string, path: string) => ["folder-views", identityId, path] as const,
+    path: (path: string) => ["folder-views", path] as const,
   },
   setup: {
     status: () => ["setup", "status"] as const,
   },
-  providers: {
-    /** The enabled providers and their credential forms (public). */
-    list: () => ["providers"] as const,
-  },
   admin: {
-    providers: () => ["admin", "providers"] as const,
     users: () => ["admin", "users"] as const,
   },
   system: {
     activity: () => ["system", "activity"] as const,
     publicUrl: () => ["system", "public-url"] as const,
+    storage: () => ["system", "storage"] as const,
     office: () => ["system", "office"] as const,
     ai: () => ["system", "ai"] as const,
-    /** Keyed by the storage row the settings belong to. */
-    trash: (providerId: string) => ["system", "trash", providerId] as const,
     features: () => ["system", "features"] as const,
     indexer: () => ["system", "indexer"] as const,
     search: () => ["system", "search"] as const,
@@ -55,7 +56,6 @@ export const queryKeys = {
   },
   account: {
     tokens: () => ["account", "tokens"] as const,
-    favorites: (accountId: string) => ["account", accountId, "favorites"] as const,
   },
   tags: {
     list: () => ["tags", "list"] as const,
@@ -63,6 +63,9 @@ export const queryKeys = {
   },
   favorites: {
     list: () => ["favorites", "list"] as const,
+  },
+  savedSearches: {
+    list: () => ["saved-searches", "list"] as const,
   },
   recents: {
     list: () => ["recents", "list"] as const,
@@ -83,7 +86,8 @@ export const queryKeys = {
     people: () => ["grants", "people"] as const,
   },
   trash: {
-    status: () => ["trash", "status"] as const,
     list: () => ["trash", "list"] as const,
+    /** How long Trash keeps an item, the same for every login. */
+    settings: () => ["trash", "settings"] as const,
   },
 } as const;

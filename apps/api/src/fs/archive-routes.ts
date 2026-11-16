@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { rm } from "node:fs/promises";
 import {
   ArchiveEntriesResponse,
   CompressRequest,
@@ -26,22 +24,21 @@ import {
   stripArchiveExtension,
   uniqueCopyName,
 } from "@fdrive/core";
-import { activityRequestContext, recordFsAction } from "../activity/fs-context.js";
+import { activityHeaders, activityRequestContext } from "../activity/fs-context.js";
 import { activityStat } from "../activity/service.js";
-import { activityStorage } from "../activity/storage.js";
 import type { AppHono, AuthedHono } from "../app.js";
-import { compressToTemp } from "../archive/compress.js";
+import { compress } from "../archive/compress.js";
 import { extractArchive } from "../archive/extract.js";
-import { protectArchiveWrites } from "../archive/new-file-storage.ts";
 import {
   peekArchive,
   UnreadableArchiveError,
   UnsupportedPeekFormatError,
 } from "../archive/peek.js";
-import { isZstdSupported, webStreamFromNodeReadable } from "../archive/stream-utils.js";
+import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
 import { DEFAULT_ARCHIVE_PEEK_MAX_BYTES } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { fileActor } from "../files/operations.js";
 import { JobQueueFullError } from "../jobs/runner.js";
 import type { JobRunContext } from "../jobs/types.js";
 import {
@@ -49,10 +46,8 @@ import {
   type FsRoutesDeps,
   normalizeOrThrow,
   parseBody,
-  publishFsEvent,
   runStorageCall,
   serializeEntry,
-  statEntry,
   toApiHttpError,
 } from "./routes.js";
 
@@ -139,23 +134,13 @@ export function registerArchiveRoutes(
     const newName = uniqueCopyName(baseName(path), existing);
     const target = joinPath(parent, newName);
 
-    await recordFsAction(
-      deps.activity,
-      c,
-      {
-        action: "file.copy",
-        requested: { path, targetPath: target, variant: "duplicate" },
-        before: {
-          path,
-          kind: siblings.find((entry) => entry.path === path)?.kind === "dir" ? "dir" : "file",
-        },
-      },
-      () => runStorageCall(() => principal.storage.copy(path, target)),
-      () => ({ path: target }),
+    const done = await runStorageCall(() =>
+      deps.files.copy(fileActor(principal, activityRequestContext(c)), path, target, {
+        variant: "duplicate",
+      }),
     );
-    const entry = await statEntry(principal.storage, target);
-    publishFsEvent(deps, principal, "copy", [path], [target]);
-    const responseBody = EntryResponse.parse(serializeEntry(entry));
+    activityHeaders(c, done.history);
+    const responseBody = EntryResponse.parse(serializeEntry(done.entry));
     return c.json(responseBody);
   });
 
@@ -215,32 +200,21 @@ async function handleCompress(c: FsContext, deps: FsRoutesDeps): Promise<Respons
   }
   const name = body.name ?? defaultArchiveName(paths);
   const targetPath = joinPath(destination, `${name}${archiveExtensionFor(body.format)}`);
+  // Answers a taken name before queueing a job; the job's own write is what
+  // refuses one taken meanwhile.
   if (await pathExists(principal.storage, targetPath)) {
     throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
   }
 
   const job = await submitJob(deps, c, "compress", paths, targetPath, async (ctx, storage) => {
-    const { file, size } = await compressToTemp({
+    await compress({
       storage,
       paths,
       format: body.format,
-      tmpDir: deps.tmpDir,
+      target: targetPath,
       signal: ctx.signal,
       report: ctx.report,
     });
-    try {
-      if (await pathExists(principal.storage, targetPath)) {
-        throw new ApiHttpError("conflict", `already exists: ${targetPath}`);
-      }
-      await protectArchiveWrites(storage, principal.identityId).upload(
-        targetPath,
-        webStreamFromNodeReadable(createReadStream(file)),
-        { contentLength: size, signal: ctx.signal, overwrite: false },
-      );
-    } finally {
-      await rm(file, { force: true });
-    }
-    publishFsEvent(deps, principal, "create", [targetPath]);
     return { path: targetPath };
   });
 
@@ -279,15 +253,13 @@ async function handleExtract(c: FsContext, deps: FsRoutesDeps): Promise<Response
     destination,
     async (ctx, storage) => {
       const result = await extractArchive({
-        storage: protectArchiveWrites(storage, principal.identityId),
+        storage,
         archivePath,
         destination,
-        tmpDir: deps.tmpDir,
         signal: ctx.signal,
         report: ctx.report,
         maxBytes: deps.jobMaxBytes,
       });
-      publishFsEvent(deps, principal, "create", [destination]);
       return result;
     },
   );
@@ -349,9 +321,9 @@ async function handleArchiveEntries(c: FsContext, deps: ArchiveRoutesDeps): Prom
 }
 
 /**
- * Queues one archive job and journals its intent before any work starts. The
- * job's own storage is decorated, so every file the worker actually writes
- * becomes a child of the archive operation instead of an unattributed write.
+ * Queues one archive job and journals its intent before any work starts.
+ * Every file the worker actually writes goes through the file operations, a
+ * child of the archive operation instead of an unattributed write.
  */
 async function submitJob(
   deps: FsRoutesDeps,
@@ -449,16 +421,20 @@ async function submitJob(
       kind,
       ...(principal.verifyAuthority !== undefined ? { authorize: principal.verifyAuthority } : {}),
       run: async (ctx) => {
+        // Every file the job writes is an upload of its own, a child of the
+        // archive operation in personal activity.
+        const actor = fileActor(principal, { source: context.source });
+        const storage: Principal["storage"] = {
+          ...principal.storage,
+          upload: async (path, body, options) =>
+            (await deps.files.upload(actor, path, body, { ...options, action: "file.create" }))
+              .entry,
+        };
         const activity = deps.activity;
-        if (!operation || !activity) return run(ctx, principal.storage);
+        if (!operation || !activity) return run(ctx, storage);
         if (!(await activity.repo.claim(principal.accountId, operation.id)))
           throw new ApiHttpError("conflict", "This job was already submitted");
-        return activity.withParent(principal, operation.id, () =>
-          run(
-            ctx,
-            activityStorage(principal, activity, () => ({ source: context.source })),
-          ),
-        );
+        return activity.withParent(principal, operation.id, () => run(ctx, storage));
       },
     });
   } catch (error) {

@@ -169,7 +169,6 @@ export async function appendActivityOutcome(
       previousRevisionId: operation.revisionId ?? registry.source?.revisionId ?? null,
       size: result.after?.size ?? null,
       sha256: result.after?.sha256 ?? null,
-      providerVersion: result.after?.version ?? null,
     });
   }
   if (operation.action === "file.copy" && registry?.source && registry.file) {
@@ -185,14 +184,17 @@ export async function appendActivityOutcome(
     });
   }
   if (operation.action === "file.trash" && registry?.file) {
+    const trashLeaf = result.after?.trashLeaf;
+    // Every producer of a trash says where in Trash the item went.
+    if (trashLeaf === undefined) throw new TypeError("a trash's outcome names its Trash leaf");
     await db.insert(activityTrashBindings).values({
       ownerAccountId: operation.ownerAccountId,
       eventId: event.id,
       fileId: registry.file.id,
       identityId: operation.identityId,
       originalPath: operation.requested.path ?? registry.file.path,
-      trashLeaf: result.after?.trashLeaf ?? null,
-      state: result.after?.trashLeaf ? "bound" : "unresolved",
+      trashLeaf,
+      state: "bound",
     });
   }
   for (const copy of registry?.copies ?? []) {
@@ -247,12 +249,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   const e = activityEvents;
   return and(
     eq(e.ownerAccountId, accountId),
-    options.identityId
-      ? or(
-          eq(e.identityId, options.identityId),
-          sql`exists (select 1 from ${activityEventSubjects} s where s.owner_account_id = ${accountId} and s.event_id = ${e.id} and s.identity_id = ${options.identityId})`,
-        )
-      : undefined,
+    options.identityId ? eq(e.identityId, options.identityId) : undefined,
     options.action ? eq(e.action, options.action) : undefined,
     options.source ? eq(e.source, options.source) : undefined,
     options.outcome ? eq(e.outcome, options.outcome) : undefined,
@@ -277,7 +274,7 @@ export function activityConditions(accountId: string, options: ActivityListOptio
   );
 }
 
-export function createActivityRepo(db: Db, clock: () => Date = () => new Date(), pathLockDb?: Db) {
+export function createActivityRepo(db: Db, clock: () => Date = () => new Date()) {
   async function finishActivity(
     accountId: string,
     id: string,
@@ -377,7 +374,7 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
     async clientEvent(
       accountId: string,
       context: string,
-      input: ClientActivityRequest,
+      input: ClientActivityRequest & { readonly identityId: string },
       kind: "file" | "dir",
     ) {
       return db.transaction(async (tx) => {
@@ -402,18 +399,6 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
           },
           clock(),
         );
-      });
-    },
-    async withPathLock<T>(identityId: string, path: string, work: () => Promise<T>): Promise<T> {
-      // Hold locks on a separate pool: work commits its intent and outcome using
-      // the main pool, including before provider I/O. Sharing that pool deadlocks
-      // when concurrent lock holders exhaust its connections.
-      if (!pathLockDb) throw new Error("Activity path locks require a dedicated database pool");
-      return pathLockDb.transaction(async (tx) => {
-        await tx.execute(
-          sql`select pg_advisory_xact_lock(hashtextextended(${JSON.stringify(["activity-path", identityId, path])},0))`,
-        );
-        return work();
       });
     },
     async begin(input: ActivityOperationInput) {
@@ -745,18 +730,6 @@ export function createActivityRepo(db: Db, clock: () => Date = () => new Date(),
           ),
         );
       return rows[0]?.count ?? 0;
-    },
-    async locations(accountId: string) {
-      return db
-        .selectDistinct({
-          identityId: activityStorageIdentities.identityId,
-          label: activityStorageIdentities.label,
-        })
-        .from(activityStorageIdentities)
-        .where(
-          sql`exists (select 1 from ${activityEventSubjects} where ${activityEventSubjects.identityId} = ${activityStorageIdentities.identityId} and ${activityEventSubjects.ownerAccountId} = ${accountId}) or exists (select 1 from ${activityEvents} where ${activityEvents.identityId} = ${activityStorageIdentities.identityId} and ${activityEvents.ownerAccountId} = ${accountId}) or exists (select 1 from ${activityReadWindows} where ${activityReadWindows.identityId} = ${activityStorageIdentities.identityId} and ${activityReadWindows.ownerAccountId} = ${accountId})`,
-        )
-        .limit(1000);
     },
     async batchSummary(accountId: string, batchId: string) {
       const result = await db.execute(sql`with latest as (

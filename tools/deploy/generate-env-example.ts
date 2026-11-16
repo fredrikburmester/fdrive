@@ -26,7 +26,6 @@ const SUBSYSTEMS: readonly Subsystem[] = [
   "thumbnails",
   "ocr",
   "office",
-  "trash",
   "shares",
 ];
 
@@ -39,7 +38,6 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
   thumbnails: "Thumbnails",
   ocr: "OCR",
   office: "Office editing",
-  trash: "Trash",
   shares: "Shares",
 };
 
@@ -48,8 +46,8 @@ const SUBSYSTEM_TITLES: Record<Subsystem, string> = {
  * sets explicitly, outside the generated passthrough block: secrets
  * (`DATABASE_URL`, `FDRIVE_MASTER_KEY`), a value fixed by the compose
  * topology (`PORT`, `FDRIVE_STORAGE_ROOT`, `FDRIVE_THUMBS_DIR`,
- * `FDRIVE_OCR_URL`, `FDRIVE_INDEXER_URL`, `FDRIVE_EMBED_URL`), the fixed
- * `FDRIVE_INDEX_ROOTS`, and the optional secret `FDRIVE_SETUP_TOKEN`.
+ * `FDRIVE_OCR_URL`, `FDRIVE_INDEXER_URL`, `FDRIVE_ML_URL`), and the
+ * optional secret `FDRIVE_SETUP_TOKEN`.
  * Exported so the
  * diff test and the generator share one list.
  */
@@ -57,12 +55,6 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_BACKUP_STATE_DIR",
   "FDRIVE_BACKUP_WORKER",
   "FDRIVE_BACKUP_SOURCES",
-  "FDRIVE_DESKTOP_STATE_DIR",
-  "FDRIVE_EMBED_RUNTIME_URL",
-  "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
-  "FDRIVE_TIKA_RUNTIME_URL",
-  "FDRIVE_TIKA_URL",
-
   "NODE_ENV",
   "FDRIVE_WORKER_TOKEN",
   "PORT",
@@ -72,9 +64,7 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_THUMBS_DIR",
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
-  "FDRIVE_EMBED_URL",
-  "FDRIVE_IMAGE_EMBED_URL",
-  "FDRIVE_INDEX_ROOTS",
+  "FDRIVE_ML_URL",
   "FDRIVE_SETUP_TOKEN",
   "FDRIVE_OFFICE_PRODUCT",
   "FDRIVE_OFFICE_URL",
@@ -86,10 +76,9 @@ export const COMPOSE_PASSTHROUGH_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
  * all, so `deploy/.env.example` (which documents "every environment
  * variable used by the files" in `deploy/`) must not list them either:
  * `PORT` and `DATABASE_URL` are fixed or computed inline, the five sidecar
- * URLs are fixed compose-internal addresses, and `FDRIVE_STORAGE_ROOT` and
- * `FDRIVE_INDEX_ROOTS` name the container path the files folder is mounted
- * at (operators choose the host folder with `FDRIVE_FILES_DIR` instead, see
- * `DEPLOY_EXTRA_KEYS`).
+ * URLs are fixed compose-internal addresses, and `FDRIVE_STORAGE_ROOT` names
+ * the container path the files folder is mounted at (operators choose the
+ * host folder with `FDRIVE_FILES_DIR` instead, see `DEPLOY_EXTRA_KEYS`).
  * `FDRIVE_MASTER_KEY` is deliberately absent from this set: compose reads
  * it directly from `.env` even though it is not part of the generated
  * passthrough block (it has no safe default).
@@ -98,7 +87,6 @@ export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_BACKUP_STATE_DIR",
   "FDRIVE_BACKUP_WORKER",
   "FDRIVE_BACKUP_SOURCES",
-  "FDRIVE_DESKTOP_STATE_DIR",
   "NODE_ENV",
   "FDRIVE_WORKER_TOKEN",
   "PORT",
@@ -107,9 +95,7 @@ export const ENV_EXAMPLE_EXCLUDED_KEYS: ReadonlySet<string> = new Set([
   "FDRIVE_THUMBS_DIR",
   "FDRIVE_OCR_URL",
   "FDRIVE_INDEXER_URL",
-  "FDRIVE_EMBED_URL",
-  "FDRIVE_IMAGE_EMBED_URL",
-  "FDRIVE_INDEX_ROOTS",
+  "FDRIVE_ML_URL",
 ]);
 
 /** Fresh installs need only secrets; the owner's account and features are

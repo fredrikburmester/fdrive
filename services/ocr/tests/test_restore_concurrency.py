@@ -3,16 +3,16 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from pathlib import Path
 
 import psycopg
 import pytest
+from conftest import index_pdfs
 
 from fdrive_ocr import db, restore, runner
-from fdrive_ocr.runner import RootTarget
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.settings import default_settings
 
 ORIGINAL = b"OK\nthe first original scan\n"
@@ -26,16 +26,22 @@ def kept_original(db_conn: psycopg.Connection, tmp_path: Path) -> KeptOriginal:
     source = root / "scan.pdf"
     source.write_bytes(ORIGINAL)
     os.utime(source, ns=(1_750_000_000_000_000_000,) * 2)
-    target = RootTarget("review", db.upsert_root(db_conn, "review"), str(root))
+    target = RootTarget(FILES_ROOT_NAME, FILES_ROOT_ID, str(root))
     state = str(tmp_path / "state")
-    runner.run_pass(db_conn, [target], default_settings(), state, 30, 1, lambda _: None)
+    run_pass(db_conn, target, state)
     return target, state, restore.scan_originals(state)[0].id, source
+
+
+def run_pass(conn: psycopg.Connection, target: RootTarget, state: str) -> runner.RunTotals:
+    """A pass after the indexer has read the folder."""
+    index_pdfs(conn, target.root_id, target.abs_path)
+    return runner.run_pass(conn, target, default_settings(), state, 30, 1, lambda _: None)
 
 
 def put_back(conn: psycopg.Connection, original: KeptOriginal, allow: bool = False) -> restore.RestoreOutcome:
     target, state, original_id, _source = original
     return restore.restore_original(
-        conn, state, [target], restore.OriginalsIndex(), original_id, allow, allow, lambda _: None,
+        conn, state, target, restore.OriginalsIndex(), original_id, allow, allow, lambda _: None,
     )
 
 
@@ -85,9 +91,9 @@ def test_older_original_requires_consent_for_a_later_ocred_revision(
     target, state, original_id, source = kept_original
     source.write_bytes(b"OK\na second revision saved by the user\n")
     os.utime(source, ns=(1_750_000_001_000_000_000,) * 2)
-    runner.run_pass(db_conn, [target], default_settings(), state, 30, 1, lambda _: None)
+    run_pass(db_conn, target, state)
     before = source.read_bytes()
-    listed, _ = restore.list_originals(db_conn, state, [target], restore.OriginalsIndex())
+    listed, _ = restore.list_originals(db_conn, state, target, restore.OriginalsIndex())
     assert next(item for item in listed if item.id == original_id).state == "changed"
     assert {item.state for item in listed} == {"ocred", "changed"}
     outcome = put_back(db_conn, kept_original)
@@ -97,18 +103,26 @@ def test_older_original_requires_consent_for_a_later_ocred_revision(
     assert source.read_bytes() == ORIGINAL
 
 
-def test_pass_refreshes_done_keys_after_a_restore(
+def test_a_pass_does_not_undo_a_restore_made_after_it_listed_its_candidates(
     db_conn: psycopg.Connection, kept_original: KeptOriginal, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    target, state, _original_id, source = kept_original
+    target, state, original_id, source = kept_original
+    # A copy put back by hand, which the index has read: a candidate.
+    kept = Path(restore.originals_dir(state), original_id)
+    source.write_bytes(kept.read_bytes())
+    os.utime(source, ns=(kept.stat().st_mtime_ns,) * 2)
+    index_pdfs(db_conn, target.root_id, target.abs_path)
+    listed = db.pdf_candidates
 
-    def restore_after_snapshot(_root: str) -> Iterator[str]:
+    def restore_after_listing(*args: object) -> list[db.IndexedPdf]:
+        candidates = listed(*args)
+        assert [pdf.path for pdf in candidates] == ["scan.pdf"]
         assert put_back(db_conn, kept_original).ok
-        yield str(source)
+        return candidates
 
-    monkeypatch.setattr(runner, "iter_candidate_pdfs", restore_after_snapshot)
-    totals = runner.run_pass(db_conn, [target], default_settings(), state, 30, 1, lambda _: None)
-    assert totals.ocred == 0
+    monkeypatch.setattr(runner.db, "pdf_candidates", restore_after_listing)
+    totals = runner.run_pass(db_conn, target, default_settings(), state, 30, 1, lambda _: None)
+    assert (totals.seen, totals.ocred) == (1, 0)
     assert source.read_bytes() == ORIGINAL
 
 
@@ -128,7 +142,7 @@ def test_restore_during_ocr_keeps_bytes_and_receipt(
         return exit_code, "", False
 
     monkeypatch.setattr(runner, "run_ocrmypdf", restore_during_ocr)
-    totals = runner.run_pass(db_conn, [target], default_settings(), state, 30, 1, lambda _: None)
+    totals = run_pass(db_conn, target, state)
     assert totals.ocred == 0
     assert source.read_bytes() == ORIGINAL
     row = db_conn.execute(

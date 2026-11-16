@@ -18,15 +18,21 @@ type PreviewState =
   | { type: "blob"; url: string }
   | { type: "error"; message: string };
 
+/**
+ * One opened preview of a shared file. `url` is null while the share counts the opening, and
+ * `error` says why it could not be opened (a spent link, say).
+ */
 export function PublicPreview({
   url,
+  error = null,
   name,
   kind,
   thumbUrl,
   size,
   onClose,
 }: {
-  url: string;
+  url: string | null;
+  error?: string | null;
   name: string;
   kind: Exclude<PublicPreviewKind, "none">;
   thumbUrl?: string | undefined;
@@ -35,7 +41,7 @@ export function PublicPreview({
 }) {
   const [state, setState] = useState<PreviewState>({ type: "loading" });
   useEffect(() => {
-    if (kind === "image" || kind === "audio" || kind === "video") return;
+    if (url === null || kind === "image" || kind === "audio" || kind === "video") return;
     const controller = new AbortController();
     let objectUrl: string | undefined;
     setState({ type: "loading" });
@@ -76,10 +82,14 @@ export function PublicPreview({
           Close preview
         </Button>
       </div>
-      {state.type === "error" ? (
+      {error !== null || state.type === "error" ? (
         <div className="p-5">
-          <FieldError>{state.message}</FieldError>
+          <FieldError>{error ?? (state.type === "error" ? state.message : null)}</FieldError>
         </div>
+      ) : url === null ? (
+        <p role="status" className="p-5 text-sm text-muted-foreground">
+          Opening preview…
+        </p>
       ) : (
         <div className="h-[min(65vh,44rem)]">
           {kind === "image" ? (

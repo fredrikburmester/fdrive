@@ -9,18 +9,20 @@ const ME: AdminUser = {
   disabled: false,
   isAdmin: true,
   isYou: true,
-  adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: "2026-11-10T09:00:00.000Z",
+  storageUsed: 1536,
+  storageLimit: null,
 };
 const GRACE: AdminUser = {
   username: "grace",
   disabled: false,
   isAdmin: false,
   isYou: false,
-  adminByDeployment: false,
   createdAt: "2026-02-03T00:00:00.000Z",
   lastLoginAt: null,
+  storageUsed: null,
+  storageLimit: 2 * 1024 ** 3,
 };
 
 type Mutation = {
@@ -38,7 +40,7 @@ const mutation = (): Mutation => ({
 
 const mocks = vi.hoisted(() => ({
   list: {
-    data: undefined as { available: boolean; users: AdminUser[] } | undefined,
+    data: undefined as { users: AdminUser[] } | undefined,
     isLoading: false,
     isError: false,
     error: null as unknown,
@@ -76,8 +78,8 @@ vi.mock("@/lib/api/system-queries", () => ({
 
 const { UsersPage } = await import("./users-page");
 
-function renderPage(users: AdminUser[], available = true) {
-  mocks.list.data = { available, users };
+function renderPage(users: AdminUser[]) {
+  mocks.list.data = { users };
   return render(<UsersPage />);
 }
 
@@ -130,6 +132,18 @@ describe("the list", () => {
     expect(within(grace).getByText("2026-02-03")).toBeTruthy();
   });
 
+  it("shows what each user's folder holds, against their limit when they have one", () => {
+    renderPage([ME, GRACE, { ...GRACE, username: "linus", storageUsed: 1024 ** 3 }]);
+
+    expect((screen.getByText("ada").closest("tr") as HTMLElement).textContent).toContain("1.5 KB");
+    expect((screen.getByText("grace").closest("tr") as HTMLElement).textContent).toContain(
+      "Not indexed of 2.0 GB",
+    );
+    expect((screen.getByText("linus").closest("tr") as HTMLElement).textContent).toContain(
+      "1.0 GB of 2.0 GB",
+    );
+  });
+
   it("offers no actions on the administrator's own row and says why", () => {
     renderPage([ME, GRACE]);
 
@@ -145,25 +159,13 @@ describe("the list", () => {
     expect(screen.queryByText(/You can't disable/)).toBeNull();
   });
 
-  it("explains a deployment without a files folder instead of an empty list", () => {
-    renderPage([], false);
-
-    expect(screen.getByText("No files folder")).toBeTruthy();
-    expect(screen.getByText(/Set FDRIVE_STORAGE_ROOT and restart fdrive\./)).toBeTruthy();
-    expect(screen.queryByText(/System > Storage/)).toBeNull();
-    expect(screen.queryByRole("table")).toBeNull();
-    expect((screen.getByRole("button", { name: "Add user" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
-  });
-
-  it("treats a 403 as a refusal, not a deployment without users", () => {
+  it("treats a 403 as a refusal, not an empty list", () => {
     mocks.list.isError = true;
     mocks.list.error = new ApiClientError("forbidden", "admin only", 403);
     render(<UsersPage />);
 
     expect(screen.getByText("Administrators only")).toBeTruthy();
-    expect(screen.queryByText("No files folder")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -287,6 +289,57 @@ describe("row actions", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("sets a storage limit in GB, and clears it", async () => {
+    settle(mocks.update);
+    renderPage([ME, GRACE]);
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    let dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText("Storage limit for grace")).toBeTruthy();
+    const limit = within(dialog).getByLabelText("Limit in GB") as HTMLInputElement;
+    expect(limit.value).toBe("2");
+    fireEvent.change(limit, { target: { value: "2.5" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(mocks.update.mutate).toHaveBeenLastCalledWith(
+      { username: "grace", patch: { storageLimit: 2.5 * 1024 ** 3 } },
+      expect.anything(),
+    );
+    expect(mocks.success).toHaveBeenLastCalledWith("Set the storage limit of grace.");
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Limit in GB"), { target: { value: " " } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(mocks.update.mutate).toHaveBeenLastCalledWith(
+      { username: "grace", patch: { storageLimit: null } },
+      expect.anything(),
+    );
+    expect(mocks.success).toHaveBeenLastCalledWith("grace has no storage limit.");
+  });
+
+  it("keeps a limit of zero or less from being sent, and shows a refusal", async () => {
+    mocks.update.isError = true;
+    mocks.update.error = new ApiClientError("not_found", "no such user", 404);
+    renderPage([ME, { ...GRACE, storageLimit: null }]);
+
+    await openRowMenu("grace");
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Storage limit" }));
+    const dialog = screen.getByRole("dialog");
+    const limit = within(dialog).getByLabelText("Limit in GB") as HTMLInputElement;
+    expect(limit.value).toBe("");
+    fireEvent.change(limit, { target: { value: "0" } });
+    fireEvent.submit(limit.closest("form") as HTMLElement);
+
+    expect(mocks.update.mutate).not.toHaveBeenCalled();
+    expect(within(dialog).getByText("Enter a size above zero.")).toBeTruthy();
+    expect(within(dialog).getByText("That item could not be found.")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("disables and enables a user", async () => {
     settle(mocks.update);
     const view = renderPage([ME, GRACE]);
@@ -299,7 +352,7 @@ describe("row actions", () => {
     );
     expect(mocks.success).toHaveBeenCalledWith("Disabled grace and signed them out.");
 
-    mocks.list.data = { available: true, users: [ME, { ...GRACE, disabled: true }] };
+    mocks.list.data = { users: [ME, { ...GRACE, disabled: true }] };
     view.rerender(<UsersPage />);
     await openRowMenu("grace");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Enable" }));
@@ -322,7 +375,7 @@ describe("row actions", () => {
     );
     expect(mocks.success).toHaveBeenCalledWith("grace is now an administrator.");
 
-    mocks.list.data = { available: true, users: [ME, { ...GRACE, isAdmin: true }] };
+    mocks.list.data = { users: [ME, { ...GRACE, isAdmin: true }] };
     view.rerender(<UsersPage />);
     await openRowMenu("grace");
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remove administrator" }));
@@ -331,16 +384,6 @@ describe("row actions", () => {
       expect.anything(),
     );
     expect(mocks.success).toHaveBeenLastCalledWith("grace is no longer an administrator.");
-  });
-
-  it("leaves the administrator a deployment names as one", async () => {
-    renderPage([ME, { ...GRACE, isAdmin: true, adminByDeployment: true }]);
-    expect(
-      screen.getByTitle("An administrator through FDRIVE_ADMIN_USERS in the deployment."),
-    ).toBeTruthy();
-    await openRowMenu("grace");
-    const item = await screen.findByRole("menuitem", { name: "Remove administrator" });
-    expect(item.getAttribute("aria-disabled") ?? item.getAttribute("data-disabled")).not.toBeNull();
   });
 
   it("reports a refused change", async () => {

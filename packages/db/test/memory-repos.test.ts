@@ -9,21 +9,21 @@ describe("createMemoryRepos ids option", () => {
     let counter = 0;
     const repos = createMemoryRepos({ ids: () => `id-${++counter}` });
 
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://x" });
     const account = await repos.accounts.create({ displayName: null });
+    const identity = await repos.identities.create({ accountId: account.id, username: "x" });
 
-    expect(provider.id).toBe("id-1");
-    expect(account.id).toBe("id-2");
+    expect(account.id).toBe("id-1");
+    expect(identity.id).toBe("id-2");
   });
 });
 
 describe("memory session timestamps", () => {
-  it("retains explicit timestamps when identity fixtures recreate a session", async () => {
+  it("retains explicit timestamps a sign-in fixture gives a session", async () => {
     const repos = createMemoryRepos();
     const input = {
       idHash: "copied",
       accountId: "account",
-      activeIdentityId: "identity",
+      identityId: "identity",
       createdAt: new Date("2026-01-01T00:00:00Z"),
       lastSeenAt: new Date("2026-01-02T00:00:00Z"),
       expiresAt: new Date("2026-01-03T00:00:00Z"),

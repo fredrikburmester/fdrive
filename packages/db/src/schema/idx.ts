@@ -2,15 +2,20 @@ import { sql } from "drizzle-orm";
 import {
   bigint,
   bigserial,
+  boolean,
+  check,
   customType,
+  doublePrecision,
   index,
   integer,
   pgSchema,
+  primaryKey,
   smallint,
   smallserial,
   text,
   timestamp,
   unique,
+  uuid,
 } from "drizzle-orm/pg-core";
 import { vector } from "../vector.js";
 
@@ -51,7 +56,32 @@ export const files = idxSchema.table(
     firstSeen: timestamp("first_seen", { withTimezone: true }).defaultNow(),
     lastSeen: timestamp("last_seen", { withTimezone: true }).defaultNow(),
     indexedAt: timestamp("indexed_at", { withTimezone: true }),
-    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    /**
+     * The inode and change time (nanoseconds) of the file whose bytes
+     * `sha256` describes: one the indexer read itself, starting at least a
+     * second after the file last changed and seeing no change while it ran,
+     * or one fdrive's API published those hashed bytes as, carried along
+     * when fdrive renames the file unchanged. Any later write, rename or
+     * replacement changes one of the two, and no client can set either, so
+     * while a fresh stat still shows both (with `size` and `mtime_ns`) the
+     * digest describes the bytes on disk. Null when neither stands behind the
+     * current digest. `inode` holds the unsigned inode number's 64 bits as a
+     * signed bigint, like `idx.changes`. See docs/INDEXER.md#stamps.
+     */
+    inode: bigint("inode", { mode: "bigint" }),
+    ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
+    /**
+     * A photo's details from its EXIF, written by the indexer for image
+     * files and null where the file has none. `taken_at` is the camera's
+     * wall-clock time, without a time zone; `width` and `height` are as the
+     * photo is shown, after its orientation.
+     */
+    takenAt: timestamp("taken_at", { mode: "string" }),
+    camera: text("camera"),
+    width: integer("width"),
+    height: integer("height"),
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
   },
   (table) => [
     unique("files_root_id_path_unique").on(table.rootId, table.path),
@@ -128,54 +158,26 @@ export const scans = idxSchema.table(
   (table) => [index("scans_root_id_started_at_idx").on(table.rootId, table.startedAt.desc())],
 );
 
-export const moves = idxSchema.table(
-  "moves",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
-    rootId: smallint("root_id")
-      .notNull()
-      .references(() => roots.id),
-    src: text("src"),
-    dst: text("dst"),
-    actor: text("actor"),
-  },
-  // `recentMoves` restricts every scope clause with `root_id = ?`, so the
-  // scope filter has no access path without this index.
-  (table) => [index("moves_root_id_idx").on(table.rootId)],
-);
-
-export const events = idxSchema.table(
-  "events",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    at: timestamp("at", { withTimezone: true }).defaultNow(),
-    rootId: smallint("root_id")
-      .notNull()
-      .references(() => roots.id),
-    kind: text("kind").notNull(),
-    path: text("path").notNull(),
-    targetPath: text("target_path"),
-  },
-  (table) => [index("events_at_idx").on(table.at)],
-);
-
 /**
- * Changes fdrive's API made to an indexed root, for the indexer to apply
- * right away instead of waiting for its file watcher or next scan. A row
- * without `target_path` says "look at `path` again" (a file, a folder, or
- * nothing any more); one with it says `path` moved there. `sha256` is an
- * upload's digest, and `size`, `mtime_ns`, `inode` and `ctime_ns` describe
- * the file it was published as, so the indexer need not read it again to
- * hash it while the file still matches all four. A client chooses an
- * upload's modification time but never its inode or change time, so a
- * different file cannot pass for it. `inode` holds the unsigned inode
- * number's 64 bits as a signed bigint. Rows are
- * hints the indexer deletes once applied; a scan covers anything lost.
- * The API sends `NOTIFY idx_work` with the root's name after adding rows.
+ * The change journal: one row per change to an indexed root, append-only,
+ * its `id` the position consumers read from. A row without `target_path`
+ * says "look at `path` again" (a file, a folder, or nothing any more); one
+ * with it says `path` moved there. `source` says who wrote it: the API and
+ * OCR for changes they made, the indexer's watcher and scan for changes made
+ * outside fdrive that it applied. An API upload's row carries `sha256`, and
+ * `size`, `mtime_ns`, `inode` and `ctime_ns` of the file exactly as it was
+ * published, so the indexer need not read it again while the file still
+ * matches all four. A file move's row carries those four for the file
+ * exactly as the rename left it, and `previous_ctime_ns`, without a digest.
+ * A client chooses an upload's modification time but never its inode or
+ * change time, so a different file cannot pass for it.
+ * `inode` holds the unsigned inode number's 64 bits as a signed bigint.
+ * Writers take the journal's advisory lock before inserting, so positions
+ * commit in order, and send `NOTIFY idx_changes` with the root's name. See
+ * docs/INDEXER.md#the-change-journal.
  */
-export const work = idxSchema.table(
-  "work",
+export const changes = idxSchema.table(
+  "changes",
   {
     id: bigserial("id", { mode: "number" }).primaryKey(),
     rootId: smallint("root_id")
@@ -183,23 +185,64 @@ export const work = idxSchema.table(
       .references(() => roots.id, { onDelete: "cascade" }),
     path: text("path").notNull(),
     targetPath: text("target_path"),
+    source: text("source").notNull(),
     sha256: text("sha256"),
     size: bigint("size", { mode: "number" }),
     mtimeNs: bigint("mtime_ns", { mode: "bigint" }),
     inode: bigint("inode", { mode: "bigint" }),
     ctimeNs: bigint("ctime_ns", { mode: "bigint" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /**
+     * A file move's: the moved file's change time just before the rename,
+     * when `size`, `mtime_ns`, `inode` and `ctime_ns` describe it right
+     * after. The indexer carries the row's stamp across only when it was
+     * this.
+     */
+    previousCtimeNs: bigint("previous_ctime_ns", { mode: "bigint" }),
   },
-  // The indexer reads a root's rows oldest first; writers prune by age.
+  // Consumers read a root's rows from a position; the API prunes by age.
   (table) => [
-    index("work_root_id_id_idx").on(table.rootId, table.id),
-    index("work_created_at_idx").on(table.createdAt),
+    index("changes_root_id_id_idx").on(table.rootId, table.id),
+    index("changes_created_at_idx").on(table.createdAt),
+    check("changes_source", sql`${table.source} in ('api', 'watcher', 'scan', 'ocr')`),
   ],
 );
 
-export const schemaVersion = idxSchema.table("schema_version", {
-  version: integer("version").primaryKey(),
-});
+/**
+ * How far each consumer of the change journal has read, per root: the
+ * position of the last row it handled. The key leads with `root_id`, which
+ * covers the foreign key.
+ */
+export const changeCursors = idxSchema.table(
+  "change_cursors",
+  {
+    rootId: smallint("root_id")
+      .notNull()
+      .references(() => roots.id, { onDelete: "cascade" }),
+    consumer: text("consumer").notNull(),
+    position: bigint("position", { mode: "number" }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [primaryKey({ columns: [table.rootId, table.consumer] })],
+);
+
+/**
+ * One row naming the change journal: a random `epoch`, created the first
+ * time a reader asks for it. Like the journal it is never backed up, so a
+ * restore, after which positions start again at 1, gets a new one. A reader
+ * that hands positions to clients outside the database (the Mac app's change
+ * feed) qualifies them with it, so a position from before a restore is never
+ * taken for a later one.
+ */
+export const changeEpoch = idxSchema.table(
+  "change_epoch",
+  {
+    single: boolean("single").primaryKey().default(true),
+    epoch: uuid("epoch").notNull().defaultRandom(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [check("change_epoch_single", sql`${table.single}`)],
+);
 
 /** Current unresolved failures plus bounded resolved history, written by processing workers. */
 export const processingFailures = idxSchema.table(
@@ -247,11 +290,20 @@ export const ocrLog = idxSchema.table(
     status: text("status").notNull(),
     detail: text("detail"),
     at: timestamp("at", { withTimezone: true }).defaultNow(),
+    /**
+     * The content OCR decided on, as `idx.files.sha256`: a PDF whose digest
+     * has a row here is done wherever it lies, so a move or a restore from
+     * Trash is not processed again. For a rewrite it is the digest of OCR's
+     * output, so a copy of the scan elsewhere still gets its own text layer.
+     * Null on rows written before OCR keyed its work by content.
+     */
+    sha256: text("sha256"),
   },
   // The system event feed reads only failures, newest first
   // (`status in ('failed','timeout') [and at < ?] order by at desc nulls last`).
   // `status` leads because it is the equality side; `at` follows in the
   // order the feed asks for so the index serves the range and the sort.
+  // OCR looks up a digest for every PDF it considers.
   (table) => [
     unique("ocr_log_root_id_path_size_mtime_ns_unique").on(
       table.rootId,
@@ -260,6 +312,7 @@ export const ocrLog = idxSchema.table(
       table.mtimeNs,
     ),
     index("ocr_log_status_at_idx").on(table.status, table.at.desc().nullsLast()),
+    index("ocr_log_sha256_idx").on(table.sha256),
   ],
 );
 

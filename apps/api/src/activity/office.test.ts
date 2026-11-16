@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import { expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.js";
 import type { OfficeActor, OfficeDeps } from "../office/types.js";
-import { officeActivityPrincipal, recordOfficeAction } from "./office.js";
+import { officeActivityPrincipal, officeFileActor } from "./office.js";
 import type { PersonalActivityService } from "./service.js";
 
-it("attributes Office saves to the authorized session, maps paths before recording and retains Save As lineage", async () => {
+it("attributes Office saves to the authorized session and records Save As as a copy of the document", async () => {
   const accountId = randomUUID(),
     identityId = randomUUID();
   const storage = createMemoryStorage();
@@ -17,9 +18,8 @@ it("attributes Office saves to the authorized session, maps paths before recordi
   } as unknown as OfficeActor;
   const identities = { get: vi.fn(async () => ({ accountId }) as { accountId: string } | null) },
     sessions = { getByIdHash: vi.fn(async () => ({ accountId }) as { accountId: string } | null) };
-  const run = vi.fn<PersonalActivityService["run"]>(async (_principal, _input, work, facts) => {
+  const run = vi.fn<PersonalActivityService["run"]>(async (_principal, _input, work) => {
     const value = await work();
-    if (facts) expect(await facts(value)).toMatchObject({ path: "/b", kind: "file" });
     return { value, eventId: randomUUID(), historyPending: false };
   });
   const deps = {
@@ -33,21 +33,20 @@ it("attributes Office saves to the authorized session, maps paths before recordi
   expect(await principal.verifyAuthority?.()).toBe(false);
   sessions.getByIdHash.mockResolvedValueOnce(null);
   expect(await principal.verifyAuthority?.()).toBe(false);
-  expect(
-    await recordOfficeAction(
-      deps,
-      actor,
-      "file.copy",
-      "/a",
-      "/b",
-      "office-file-id",
-      async () => 7,
-      { size: 1 },
-    ),
-  ).toBe(7);
+  const files = testFileOperations({
+    activity: { run } as unknown as PersonalActivityService,
+  });
+  await files.upload(officeFileActor(deps, actor, "office-file-id"), "/b", new Uint8Array([7]), {
+    action: "file.copy",
+    from: "/a",
+  });
+  expect(await new Response((await storage.open("/b")).stream()).arrayBuffer()).toEqual(
+    new Uint8Array([7]).buffer,
+  );
   expect(run).toHaveBeenCalledWith(
     expect.objectContaining({ accountId, identityId }),
     expect.objectContaining({
+      action: "file.copy",
       source: "office",
       requested: { path: "/a", targetPath: "/b", variant: "save_as" },
       before: expect.objectContaining({ path: "/a" }),
@@ -56,17 +55,20 @@ it("attributes Office saves to the authorized session, maps paths before recordi
     expect.any(Function),
     expect.any(Function),
   );
-  await recordOfficeAction(deps, actor, "file.create", "/missing", "/b", undefined, async () => 1);
-  expect(run.mock.calls.at(-1)?.[1]).not.toHaveProperty("before");
-  expect(
-    await recordOfficeAction(
-      { ...deps, activity: undefined } as unknown as OfficeDeps,
-      actor,
-      "file.save",
-      "/a",
-      "/b",
-      undefined,
-      async () => 5,
-    ),
-  ).toBe(5);
+  // The target's facts are the file the upload published.
+  expect(await run.mock.calls.at(-1)?.[3]?.(await storage.stat("/b"))).toMatchObject({
+    path: "/b",
+    kind: "file",
+    size: 1,
+  });
+  // A save records the document itself, with what was there before.
+  await files.upload(officeFileActor(deps, actor, "office-file-id"), "/a", new Uint8Array([2]), {
+    action: "file.save",
+    overwrite: true,
+  });
+  expect(run.mock.calls.at(-1)?.[1]).toMatchObject({
+    action: "file.save",
+    requested: { path: "/a", kind: "file" },
+    before: { path: "/a", kind: "file" },
+  });
 });

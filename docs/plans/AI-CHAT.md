@@ -102,7 +102,7 @@ Action tools, all approval-gated:
 | `write_text_file` | A referenced file (for replace) or a new path next to one. Text only, at most 1 MiB. Replace requires the SHA-256 from the `read_file` that produced the draft. Non-text originals (PDF, Office) can only get a new `.md` or `.txt` sibling. | Create with no overwrite, or replace after re-checking the SHA (lift `editFileUnlocked` out of the MCP token gate). The card shows a diff for replace and the full draft for a new file. |
 
 Every tool runs with the principal's own storage and, for index-backed data, the verified
-index scopes and live read authorizer Organize already uses. Accented paths go through
+index scopes Organize already uses. Accented paths go through
 `stored-paths.ts`. A reference that no longer exists (moved, trashed) is reported as such by
 the tools and shown struck through in the panel. File names and contents stay data; the system
 prompt says so and a planted instruction can at most produce a card the person sees before
@@ -206,8 +206,7 @@ deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
 `POST /ai/chats/:id/messages` (text, references, location) → 202; `GET /ai/chats/:id/events`
 (SSE); `POST /ai/chats/:id/cancel`; `POST /ai/chats/:id/actions/:actionId` (`apply` with
 edits, or `decline`). `ChatState` is `idle | running | awaiting_approval | failed | closed`.
-Everything is per identity; a chat is `not_found` for any other identity, and switching the
-active login shows that login's chats.
+Everything is per identity; a chat is `not_found` for any other identity.
 
 ## Steps
 

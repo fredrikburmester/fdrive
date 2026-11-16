@@ -1,4 +1,5 @@
 import { isAbsolute, relative, sep } from "node:path";
+import type { ContentStamp } from "@fdrive/core";
 
 /**
  * What an upload published: its bytes' digest and the file it became. A
@@ -16,13 +17,29 @@ export interface DiskContent {
 }
 
 /**
+ * A file renamed in place: exactly as the rename left it, and its change
+ * time just before (the same inode, size and modification time). A rename
+ * moves the change time on and keeps the bytes, so a digest that described
+ * the file at `previousCtimeNs` describes it at `ctimeNs`.
+ */
+export interface MovedStamp extends ContentStamp {
+  readonly previousCtimeNs: bigint;
+}
+
+/**
  * A change storage made on disk, by absolute path. `changed`: something at
  * `path` is new, different or gone (a file, a folder, or nothing any more);
- * `content` is set for an upload. `moved`: `path` was renamed to `target`.
+ * `content` is set for an upload. `moved`: `path` was renamed to `target`;
+ * `stamp` is set for a file renamed in place.
  */
 export type DiskChange =
   | { readonly kind: "changed"; readonly path: string; readonly content?: DiskContent }
-  | { readonly kind: "moved"; readonly path: string; readonly target: string };
+  | {
+      readonly kind: "moved";
+      readonly path: string;
+      readonly target: string;
+      readonly stamp?: MovedStamp;
+    };
 
 /** Hears each change once it is done. It must not throw; if it does, the change still stands. */
 export type DiskChangeListener = (change: DiskChange) => void;
@@ -38,13 +55,18 @@ export function notify(listener: DiskChangeListener | undefined, change: DiskCha
 }
 
 /**
- * A change under an index root, by the root-relative path the indexer stores
+ * A change in the files folder, by the path relative to it the indexer stores
  * (`alice/docs/a.pdf`: `/` separators, no leading slash). Otherwise the same
  * as `DiskChange`.
  */
 export type IndexChange =
   | { readonly kind: "changed"; readonly path: string; readonly content?: DiskContent }
-  | { readonly kind: "moved"; readonly path: string; readonly target: string };
+  | {
+      readonly kind: "moved";
+      readonly path: string;
+      readonly target: string;
+      readonly stamp?: MovedStamp;
+    };
 
 /** `path` relative to `root` (both absolute and real), or `null` when it is not below it. */
 export function relativeTo(root: string, path: string): string | null {
@@ -67,7 +89,10 @@ export function underRoot(root: string, change: DiskChange): IndexChange | null 
       : { kind: "changed", path, content: change.content };
   }
   const target = relativeTo(root, change.target);
-  if (path !== null && target !== null) return { kind: "moved", path, target };
+  if (path !== null && target !== null)
+    return change.stamp === undefined
+      ? { kind: "moved", path, target }
+      : { kind: "moved", path, target, stamp: change.stamp };
   if (path !== null) return { kind: "changed", path };
   if (target !== null) return { kind: "changed", path: target };
   return null;

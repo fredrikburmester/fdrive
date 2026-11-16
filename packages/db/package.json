@@ -25,9 +25,6 @@
       "default": "./dist/testing/memory-repos.js"
     }
   },
-  "bin": {
-    "fdrive-migrate": "./dist/bin/migrate.js"
-  },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
@@ -43,6 +40,7 @@
   },
   "devDependencies": {
     "@fdrive/config": "workspace:*",
+    "@fdrive/testkit": "workspace:*",
     "@testcontainers/postgresql": "^12.1.0",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "^5.0.0",

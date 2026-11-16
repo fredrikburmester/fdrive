@@ -19,56 +19,18 @@ export function isValidPath(path: string): boolean {
     .every((segment) => isValidEntryName(segment));
 }
 
-const TrashPath = z.string().refine((value) => value !== "/" && isValidPath(value), {
-  message: "path must be a normalized absolute directory other than the root",
+/** The `app.settings` key of how long Trash keeps an item; unset means `DEFAULT_TRASH_RETENTION_DAYS`. */
+export const TRASH_RETENTION_SETTINGS_KEY = "trash.retentionDays";
+
+/** How many days Trash keeps an item until an administrator changes it. */
+export const DEFAULT_TRASH_RETENTION_DAYS = 30;
+
+/** Trash is always on; this is its one installation setting. */
+export const TrashSettings = z.strictObject({
+  /** Days an item stays in Trash before fdrive deletes it permanently. */
+  retentionDays: z.number().int().min(1).max(3650),
 });
-
-/**
- * Whether the active provider module has Trash: fdrive moves deleted files
- * into the recycle folder (`move`), or there is none (`none`). Mirrors
- * core's `TrashStrategy`; it is the module's, never stored.
- */
-export const TrashStrategy = z.enum(["move", "none"]);
-export type TrashStrategy = z.infer<typeof TrashStrategy>;
-
-const TrashSettingsFields = z.object({
-  providerId: z.uuid(),
-  revision: z.number().int().nonnegative(),
-  enabled: z.boolean(),
-  path: TrashPath,
-  retentionHours: z.number().int().positive().nullable(),
-});
-
-/** The provider-bound Trash configuration as stored, without the module's strategy. */
-export const TrashConfiguration = TrashSettingsFields.strict();
-export type TrashConfiguration = z.infer<typeof TrashConfiguration>;
-
-/** Provider-bound Trash configuration plus the active provider's strategy. */
-export const TrashSettings = TrashSettingsFields.extend({ strategy: TrashStrategy })
-  .strict()
-  .refine((value) => !value.enabled || value.strategy !== "none", {
-    message: "this storage provider has no Trash",
-    path: ["enabled"],
-  });
 export type TrashSettings = z.infer<typeof TrashSettings>;
-
-export const TrashSettingsUpdateRequest = TrashSettings;
-export type TrashSettingsUpdateRequest = z.infer<typeof TrashSettingsUpdateRequest>;
-
-/** `GET /api/v1/system/trash` names the storage server whose Trash it reads. */
-export const SystemTrashQuery = z.object({ providerId: z.uuid() });
-export type SystemTrashQuery = z.infer<typeof SystemTrashQuery>;
-
-/** Whether the active identity's storage provider exposes a trash, and its configuration. */
-export const TrashStatusResponse = z.object({
-  available: z.boolean(),
-  /** The provider's trash path, when available. */
-  path: z.string().nullable(),
-  /** Informational only: fdrive never enforces retention itself. */
-  retentionHours: z.number().int().positive().nullable(),
-});
-
-export type TrashStatusResponse = z.infer<typeof TrashStatusResponse>;
 
 /** One deleted item still recoverable from the trash. */
 export const TrashEntry = z.object({

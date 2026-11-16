@@ -7,6 +7,9 @@ export type FilesActionType =
   | "quickLook"
   | "delete"
   | "selectAll"
+  | "copy"
+  | "cut"
+  | "undo"
   | "clear"
   | "rename"
   | "download"
@@ -51,6 +54,9 @@ export type Platform = "mac" | "other";
  * matching Finder; elsewhere plain Delete/Backspace deletes, matching
  * Explorer and most file managers (Ctrl+Delete/Backspace also works).
  *
+ * Copy and cut fill fdrive's own clipboard; pasting is the `paste` event, not a key, so it
+ * can carry files from the system clipboard.
+ *
  * `treeMode` is true only in the tree view, where Left/Right additionally
  * collapse/expand the focused folder row; elsewhere those keys are unmapped.
  */
@@ -89,6 +95,15 @@ export function keyToAction(
   }
   if (primary && !event.altKey && letter === "a") {
     return { type: "selectAll" };
+  }
+  if (primary && !event.altKey && !event.shiftKey && letter === "c") {
+    return { type: "copy" };
+  }
+  if (primary && !event.altKey && !event.shiftKey && letter === "x") {
+    return { type: "cut" };
+  }
+  if (primary && !event.altKey && !event.shiftKey && letter === "z") {
+    return { type: "undo" };
   }
   if (event.key === "Escape") {
     return { type: "clear" };

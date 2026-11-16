@@ -4,16 +4,17 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, NewFile};
 use fdrive_indexer::features::FeatureValues;
 use fdrive_indexer::indexer::{FileStat, RootContext};
 use fdrive_indexer::thumbs::{SIZES, storage_path};
 use postgres::Client;
+use postgres::fallible_iterator::FallibleIterator;
 
 use super::fake_ml::FakeMl;
 
@@ -22,8 +23,13 @@ pub struct Env {
     pub url: String,
     pub root: PathBuf,
     pub thumbs: PathBuf,
+    /// Listening on `idx_events` since the database was made, with how many it heard so far.
+    events: Mutex<(Client, usize)>,
     _dir: tempfile::TempDir,
 }
+
+/// Sent after the indexer's notifications to mark that every earlier one has arrived.
+const HEARD_ALL: &str = "heard-all";
 
 /// `thumbnails, textSearch, searchOcr, semanticSearch, imageSearch`; `pdfOcr` off.
 pub fn fv(thumbnails: bool, text: bool, ocr: bool, semantic: bool, image: bool) -> FeatureValues {
@@ -67,6 +73,39 @@ pub fn jpeg(width: u32, height: u32, seed: u8) -> Vec<u8> {
         .write_to(&mut out, image::ImageFormat::Jpeg)
         .unwrap();
     out.into_inner()
+}
+
+/// A small JPEG whose EXIF names the camera and when and where it was taken.
+pub fn jpeg_with_exif() -> Vec<u8> {
+    use exif::{Field, In, Rational, Tag, Value};
+    let ascii = |text: &str| Value::Ascii(vec![text.as_bytes().to_vec()]);
+    let whole = |n: u32| Rational { num: n, denom: 1 };
+    let mut writer = exif::experimental::Writer::new();
+    let fields = [
+        (Tag::Make, ascii("Apple")),
+        (Tag::Model, ascii("iPhone 15 Pro")),
+        (Tag::DateTimeOriginal, ascii("2024:05:01 14:03:09")),
+        (Tag::PixelXDimension, Value::Long(vec![4032])),
+        (Tag::PixelYDimension, Value::Long(vec![3024])),
+        (Tag::GPSLatitudeRef, ascii("N")),
+        (Tag::GPSLatitude, Value::Rational(vec![whole(59), whole(30), whole(0)])),
+        (Tag::GPSLongitudeRef, ascii("E")),
+        (Tag::GPSLongitude, Value::Rational(vec![whole(18), whole(0), whole(0)])),
+    ]
+    .map(|(tag, value)| Field {
+        tag,
+        ifd_num: In::PRIMARY,
+        value,
+    });
+    for field in &fields {
+        writer.push_field(field);
+    }
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    writer.write(&mut tiff, false).unwrap();
+    let tiff = tiff.into_inner();
+    let plain = jpeg(8, 8, 3);
+    let length = u16::try_from(8 + tiff.len()).unwrap().to_be_bytes();
+    [&plain[..2], &[0xFF, 0xE1], &length, b"Exif\0\0", &tiff, &plain[2..]].concat()
 }
 
 /// A minimal PDF whose pages show the given text; an empty string gives a page without
@@ -142,13 +181,17 @@ pub fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> boo
     predicate()
 }
 
-/// A context for `cfg`'s first root, adjusted by `tweak` before it is shared.
+/// The files root's context for `cfg`, adjusted by `tweak` before it is shared.
 pub fn context_with(cfg: Config, values: FeatureValues, tweak: impl FnOnce(&mut RootContext)) -> Arc<RootContext> {
     let cfg = Arc::new(cfg);
-    let (name, path) = cfg.roots[0].clone();
-    super::mark_files_folder(&cfg.database_url, &path);
-    let root_id = db::upsert_root(&mut super::connect(&cfg.database_url), &name).unwrap();
-    let mut ctx = RootContext::new(&name, root_id, path, Arc::clone(&cfg), super::features(values));
+    super::mark_files_folder(&cfg.database_url, &cfg.root);
+    let mut ctx = RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
+        Arc::clone(&cfg),
+        super::features(values),
+    );
     tweak(&mut ctx);
     Arc::new(ctx)
 }
@@ -165,11 +208,15 @@ impl Env {
         let root = dir.path().join("root");
         let thumbs = dir.path().join("thumbs");
         std::fs::create_dir_all(&root).unwrap();
+        let url = super::database();
+        let mut listener = super::connect(&url);
+        listener.batch_execute("LISTEN idx_events").unwrap();
         Self {
             ml: FakeMl::start(),
-            url: super::database(),
+            url,
             root,
             thumbs,
+            events: Mutex::new((listener, 0)),
             _dir: dir,
         }
     }
@@ -236,6 +283,21 @@ impl Env {
         db::file_row(&mut self.client(), ctx.root_id, rel).unwrap().unwrap()
     }
 
+    pub fn has_row(&self, ctx: &RootContext, rel: &str) -> bool {
+        db::file_row(&mut self.client(), ctx.root_id, rel).unwrap().is_some()
+    }
+
+    /// The `id` and `sha256` of the root's row at `rel`, if it has one.
+    pub fn row_id(&self, ctx: &RootContext, rel: &str) -> Option<(i64, Option<String>)> {
+        self.client()
+            .query_opt(
+                r#"SELECT id::bigint, sha256 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2"#,
+                &[&ctx.root_id, &rel],
+            )
+            .unwrap()
+            .map(|r| (r.get(0), r.get(1)))
+    }
+
     pub fn statuses(&self, ctx: &RootContext) -> HashMap<String, String> {
         db::scan_manifest(&mut self.client(), ctx.root_id)
             .unwrap()
@@ -291,13 +353,26 @@ impl Env {
         db::count(&mut self.client(), table).unwrap()
     }
 
-    pub fn events(&self) -> Vec<String> {
+    /// Every event the indexer has sent on `idx_events` so far, oldest first. Notifications
+    /// arrive in commit order, so once a marker sent now arrives, every earlier one has.
+    /// How many times the indexer has said it took in a change (`NOTIFY idx_events` with the
+    /// root's name) since the database was made.
+    pub fn signals(&self) -> usize {
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        let (listener, heard) = &mut *events;
         self.client()
-            .query(r#"SELECT kind FROM "idx"."events" ORDER BY id"#, &[])
-            .unwrap()
-            .iter()
-            .map(|r| r.get(0))
-            .collect()
+            .execute("SELECT pg_notify('idx_events', $1)", &[&HEARD_ALL])
+            .unwrap();
+        let mut notifications = listener.notifications();
+        let mut arriving = notifications.timeout_iter(Duration::from_secs(10));
+        loop {
+            let notification = arriving.next().unwrap().expect("the marker arrives");
+            if notification.payload() == HEARD_ALL {
+                return *heard;
+            }
+            assert!(!notification.payload().contains('{'), "the signal names only the root");
+            *heard += 1;
+        }
     }
 
     pub fn thumb_path(&self, sha: &str, size: u32) -> PathBuf {

@@ -1,44 +1,46 @@
-//! Start-up and the per-root loop: refresh settings and features, keep the watcher in step
-//! with them, and scan on the interval, on a wake, or after a watcher overflow.
+//! Start-up and the root loop: refresh settings and features, keep the watcher in step
+//! with them, and scan on the interval, on a wake, after a watcher overflow, or when the
+//! change journal's reader asks for one. A restart does not walk the root: the journal holds
+//! fdrive's changes from the indexer's position, and the interval stays counted from the last
+//! finished scan.
 
-use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use crate::config::Config;
+use crate::config::{Config, ROOT_ID, ROOT_NAME};
 use crate::db::{self, Db};
 use crate::failures::FileResult;
 use crate::indexer::{
-    FileStat, RootContext, scan_once, watch_folder, watch_index, watch_mark_deleted, watch_rename, work_features,
+    FileStat, RootContext, scan_once, watch_delete, watch_folder, watch_index, watch_rename, work_features,
 };
+use crate::journal::{Source, with_source};
 use crate::log::log;
 use crate::paths::ext_of;
 use crate::server::Wake;
 use crate::settings;
 use crate::watcher::{WatchHandler, Watcher};
 
-pub const EXPECTED_SCHEMA_VERSION: i64 = 2;
-
-pub fn build_context(cfg: &Arc<Config>, name: &str, path: &Path) -> Result<Arc<RootContext>> {
+pub fn build_context(cfg: &Arc<Config>) -> Result<Arc<RootContext>> {
     let db = Db::new(&cfg.database_url);
-    let (root_id, raw) = db.with(|c| Ok((db::upsert_root(c, name)?, db::read_settings(c)?)))?;
+    let raw = db.with(db::read_settings)?;
     // A restart is not a feature transition: start from the persisted selection.
     let mut ctx = RootContext::new(
-        name,
-        root_id,
-        path.to_path_buf(),
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
         Arc::clone(cfg),
         crate::features::resolve(&raw),
     );
     ctx.refresh_features = Some(cfg.settings_refresh);
     if !ctx.values().search_ocr {
-        let moved = db.with(|c| db::mark_pdfs_skipped_by_ocr(c, root_id))?;
+        let moved = db.with(|c| db::mark_pdfs_skipped_by_ocr(c, ROOT_ID))?;
         if moved > 0 {
             log(&format!(
-                "[{name}] {moved} PDFs without a text layer will be read once OCR is enabled"
+                "[{ROOT_NAME}] {moved} PDFs without a text layer will be read once OCR is enabled"
             ));
         }
     }
@@ -56,33 +58,38 @@ pub fn refresh_settings(ctx: &RootContext) -> Result<bool> {
     Ok(!changed.is_empty() || features_changed)
 }
 
-/// The watcher's callbacks into the indexer, reporting live activity per feature.
+/// The watcher's callbacks into the indexer, reporting live activity per feature. The changes
+/// they apply were made outside fdrive, so they are journaled as the watcher's.
 pub struct Handler(pub Arc<RootContext>);
 
 impl WatchHandler for Handler {
     fn index_file(&self, abs: &Path, rel: &str, metadata: &std::fs::Metadata) -> FileResult {
-        watch_index(&self.0, abs, rel, FileStat::of(metadata))
+        with_source(Some(Source::Watcher), || {
+            watch_index(&self.0, abs, rel, FileStat::of(metadata))
+        })
     }
 
-    fn mark_deleted(&self, rel: &str, is_dir: bool) -> usize {
+    fn delete(&self, rel: &str, is_dir: bool) -> usize {
         if !self.0.files_folder_verified() {
             return 0;
         }
-        watch_mark_deleted(&self.0, rel, is_dir)
+        with_source(Some(Source::Watcher), || watch_delete(&self.0, rel, is_dir))
     }
 
     fn rename(&self, old_rel: &str, new_rel: &str, is_dir: bool) -> usize {
         if !self.0.files_folder_verified() {
             return 0;
         }
-        watch_rename(&self.0, old_rel, new_rel, is_dir)
+        with_source(Some(Source::Watcher), || {
+            watch_rename(&self.0, old_rel, new_rel, is_dir)
+        })
     }
 
     fn folder_changed(&self, rel: &str) {
         if !self.0.files_folder_verified() {
             return;
         }
-        watch_folder(&self.0, rel);
+        with_source(Some(Source::Watcher), || watch_folder(&self.0, rel));
     }
 
     fn on_queue(&self, abs: &Path) -> Box<dyn FnOnce(&FileResult) + Send> {
@@ -147,26 +154,46 @@ pub fn start_watcher(ctx: &Arc<RootContext>) -> Option<Watcher> {
     }
 }
 
-/// One root's loop state: the watcher it keeps in step with the features, and when the
+/// The root loop's state: the watcher it keeps in step with the features, and when the
 /// next scan is due.
 pub struct RootLoop {
     watcher: Option<Watcher>,
     next_scan: Instant,
 }
 
-impl Default for RootLoop {
-    fn default() -> Self {
-        Self {
-            watcher: None,
-            next_scan: Instant::now(),
-        }
-    }
-}
-
 impl RootLoop {
-    /// Refresh settings, keep the watcher in step with the features, and scan when due.
-    /// Returns how long to wait before the next step.
-    pub fn step(&mut self, ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>) -> Duration {
+    /// The loop, its first scan due an interval after the last one that finished.
+    /// The scan is due at once when the change journal cannot cover the time since: no
+    /// scan finished, the index has no file rows, or the indexer has no position in the
+    /// journal yet. Runs before the journal's reader starts, since the reader takes a
+    /// position on its first look. A gap the reader finds later (rows pruned before it read
+    /// them) asks for a scan itself.
+    pub fn new(ctx: &RootContext) -> Result<Self> {
+        let interval = Duration::from_secs(ctx.settings().scan_interval_seconds);
+        let since = ctx
+            .db
+            .with(|c| db::last_scan_age(c, ctx.root_id, crate::work::CONSUMER))?;
+        let wait = since.map_or(Duration::ZERO, |since| interval.saturating_sub(since));
+        log(&match since {
+            Some(_) => format!(
+                "[{}] the change journal covers the time since the last scan; next scan in {}s",
+                ctx.name,
+                wait.as_secs()
+            ),
+            None => format!(
+                "[{}] scanning at start: no finished scan, indexed file or journal position to resume from",
+                ctx.name
+            ),
+        });
+        Ok(Self {
+            watcher: None,
+            next_scan: Instant::now() + wait,
+        })
+    }
+
+    /// Refresh settings, keep the watcher in step with the features, and scan when due;
+    /// `watching` reports whether a watcher runs. Returns how long to wait before the next step.
+    pub fn step(&mut self, ctx: &Arc<RootContext>, watching: &AtomicBool) -> Duration {
         let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<()> {
             if refresh_settings(ctx)? {
                 self.next_scan = Instant::now();
@@ -180,12 +207,12 @@ impl RootLoop {
             } else if !enabled && let Some(stopped) = self.watcher.take() {
                 stopped.stop();
             }
-            watchers
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(ctx.name.clone(), self.watcher.is_some());
+            watching.store(self.watcher.is_some(), Ordering::SeqCst);
             let overflowed = self.watcher.as_ref().is_some_and(Watcher::take_overflow);
-            if verified && (Instant::now() >= self.next_scan || overflowed) {
+            // The journal's reader asks for a scan when rows it never read were pruned; the
+            // request waits for the folder's marker like any scan.
+            let requested = verified && ctx.take_scan_request();
+            if verified && (Instant::now() >= self.next_scan || overflowed || requested) {
                 scan_once(ctx);
                 self.next_scan = Instant::now() + Duration::from_secs(ctx.settings().scan_interval_seconds);
             }
@@ -215,11 +242,10 @@ impl RootLoop {
     }
 }
 
-/// One root's loop; never returns.
-pub fn run_root(ctx: &Arc<RootContext>, watchers: &Mutex<HashMap<String, bool>>, wake: &Wake) {
-    let mut root = RootLoop::default();
+/// The root loop, from `root` (`RootLoop::new`); never returns.
+pub fn run_root(mut root: RootLoop, ctx: &Arc<RootContext>, watching: &AtomicBool, wake: &Wake) {
     loop {
-        let timeout = root.step(ctx, watchers);
+        let timeout = root.step(ctx, watching);
         if wake.wait(timeout) {
             root.wake();
         }

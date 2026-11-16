@@ -1,0 +1,203 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
+  createDb,
+  createIndexQueries,
+  createRepos,
+  INDEX_ROOT_ID,
+  migrate,
+  schema,
+} from "@fdrive/db";
+import { createFilesFolder, type LocalUsers } from "@fdrive/local";
+import { startPostgres } from "@fdrive/testkit";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createIdentityStorageFactory } from "../../src/auth/storage-factory.ts";
+import {
+  fileInfoInScope,
+  type McpToolDeps,
+  runFindDuplicates,
+  runFindFiles,
+  runFolderOverview,
+  runIndexStats,
+  runListDirectory,
+  runSearch,
+  runSimilarFiles,
+} from "../../src/mcp/handlers.ts";
+import { resolveScopeContext } from "../../src/mcp/scope-context.ts";
+import { createScopeResolver } from "../../src/scoping/resolver.ts";
+import { createSearchService } from "../../src/search/service.ts";
+import type { TokenPrincipal } from "../../src/tokens/principal.ts";
+
+const SAME = "a".repeat(64);
+/** Live files, oldest first; fdrive's own copies of them are newer, so they would sort first. */
+const LIVE = ["report-a.txt", "report-b.txt", "report-c.txt"];
+/** fdrive's own places in alice's files, each holding a copy of report-a. */
+const RESERVED = [
+  ".trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/report-x.txt",
+  ".fdrive-desktop/staging/report-y.txt",
+];
+
+/** How far each file's content lies from report-a's; fdrive's own copies lie on it. */
+const DISTANCE: Readonly<Record<string, number>> = {
+  "alice/report-b.txt": 30,
+  "alice/report-c.txt": 90,
+};
+
+function vector(offset: number): number[] {
+  return Array.from({ length: 384 }, (_, i) => (i + offset) / 384);
+}
+
+/**
+ * The index keeps fdrive's Trash (so moves into and out of it stay renames)
+ * and may still hold rows under the Mac app's folder; every MCP tool leaves
+ * them out in SQL before its limit, so pages are full and totals count only
+ * what the tool can return. Rows are inserted by hand.
+ */
+describe("fdrive's own folders in the index, through the MCP tools", () => {
+  let postgres: Awaited<ReturnType<typeof startPostgres>>;
+  let database: ReturnType<typeof createDb>;
+  let root: string;
+  let deps: McpToolDeps;
+  let alice: TokenPrincipal;
+
+  async function put(path: string): Promise<void> {
+    const target = join(root, "alice", path);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, "the same report");
+  }
+
+  beforeAll(async () => {
+    postgres = await startPostgres();
+    database = createDb(postgres.connectionString);
+    await migrate(database.db);
+    root = await mkdtemp(join(tmpdir(), "fdrive-reserved-"));
+    for (const path of [...LIVE, ...RESERVED]) await put(path);
+
+    const { db } = database;
+    const repos = createRepos(db);
+    const clock = () => new Date();
+    const users: LocalUsers = {
+      status: async () => "active",
+      shared: async () => [],
+    };
+    const folder = createFilesFolder({ root, users });
+    const account = await repos.accounts.create({ displayName: "alice" });
+    const identity = await repos.identities.create({
+      accountId: account.id,
+      username: "alice",
+    });
+    const storage = await createIdentityStorageFactory({
+      identities: repos.identities,
+      folder,
+    })(identity.id);
+
+    const indexRoot = { id: INDEX_ROOT_ID };
+    const rows = await db
+      .insert(schema.files)
+      .values(
+        [...LIVE, ...RESERVED].map((path, index) => ({
+          rootId: indexRoot.id,
+          path: `alice/${path}`,
+          name: path.slice(path.lastIndexOf("/") + 1),
+          ext: ".txt",
+          size: 15,
+          sha256: path === "report-c.txt" ? "c".repeat(64) : SAME,
+          mtimeNs: BigInt(1_700_000_000_000 + index * 1000) * 1_000_000n,
+          textStatus: "done" as const,
+        })),
+      )
+      .returning();
+    // report-a's nearest neighbours by content are its own copies; report-b comes after them.
+    await db.insert(schema.chunks).values(
+      rows.map((row) => ({
+        fileId: row.id,
+        idx: 0,
+        text: "the same report",
+        embedding: vector(DISTANCE[row.path] ?? 0),
+      })),
+    );
+    const indexQueries = createIndexQueries(db);
+    deps = {
+      indexQueries,
+      searchService: createSearchService({
+        indexQueries,
+        embedClient: null,
+        thumbsEnabled: false,
+        clock,
+      }),
+      scopeResolver: createScopeResolver({ received: async () => [] }),
+      indexed: async () => true,
+      publicUrl: async () => null,
+      indexerClient: null,
+      clock,
+    };
+    alice = {
+      accountId: account.id,
+      identityId: identity.id,
+      username: "alice",
+      storage,
+      isAdmin: false,
+      tokenAccess: { mode: "read", paths: ["/"] },
+    };
+  }, 180_000);
+
+  afterAll(async () => {
+    await database?.close();
+    await postgres?.stop();
+    if (root !== undefined) await rm(root, { recursive: true, force: true });
+  }, 180_000);
+
+  it("find_files fills each page and counts only the user's files", async () => {
+    const first = await runFindFiles(deps, alice, { limit: 2 });
+    expect(first.results.map((file) => file.path)).toEqual(["/report-c.txt", "/report-b.txt"]);
+    expect(first).toMatchObject({ next_offset: 2, total_matches: 2 });
+    const next = await runFindFiles(deps, alice, { limit: 2, offset: 2 });
+    expect(next.results.map((file) => file.path)).toEqual(["/report-a.txt"]);
+    expect(next).not.toHaveProperty("next_offset");
+    expect(next).not.toHaveProperty("partial");
+    // A prefix inside fdrive's own folders finds nothing.
+    expect((await runFindFiles(deps, alice, { path_prefix: "/.trash" })).results).toEqual([]);
+  });
+
+  it("find_duplicates, file_info and similar_files never name a copy in fdrive's own folders", async () => {
+    const duplicates = await runFindDuplicates(deps, alice, { min_size_mb: 0, limit: 1 });
+    expect(duplicates.groups).toEqual([
+      expect.objectContaining({ copies: 2, paths: ["/report-a.txt", "/report-b.txt"] }),
+    ]);
+    expect(duplicates).not.toHaveProperty("partial");
+
+    // The AI's index-backed file_info.
+    const scopes = await deps.scopeResolver.scopesFor(alice.username);
+    const ctx = resolveScopeContext(scopes);
+    if (ctx === null) throw new Error("expected alice's scope context");
+    const info = await fileInfoInScope(deps, ctx, { path: "/report-a.txt" });
+    expect(info.identical_copies).toEqual(["/report-b.txt"]);
+    expect(info).not.toHaveProperty("partial");
+
+    const similar = await runSimilarFiles(deps, alice, { path: "/report-a.txt", limit: 1 });
+    expect(similar.results.map((file) => file.path)).toEqual(["/report-b.txt"]);
+    expect(similar).not.toHaveProperty("partial");
+  });
+
+  it("folder_overview, index_stats and search count only the user's files", async () => {
+    const overview = await runFolderOverview(deps, alice, {});
+    expect(overview).toMatchObject({ total_files: 3, truncated: false });
+    expect(overview.folders.map((folder) => folder.path)).toEqual(["/"]);
+
+    const stats = await runIndexStats(deps, alice);
+    expect(stats.files_tracked).toBe(3);
+    expect(stats).not.toHaveProperty("partial");
+
+    const search = await runSearch(deps, alice, { query: "report", limit: 3 });
+    expect(search.results.map((file) => file.path).sort()).toEqual(LIVE.map((name) => `/${name}`));
+  });
+
+  it("list_directory hides fdrive's own folders and refuses to open one", async () => {
+    const top = await runListDirectory(deps, alice, {});
+    expect(top.entries.map((entry) => entry.name)).toEqual(LIVE);
+    for (const path of ["/.trash", "/.fdrive-desktop/staging"]) {
+      await expect(runListDirectory(deps, alice, { path })).rejects.toThrow("fdrive's own folders");
+    }
+  });
+});

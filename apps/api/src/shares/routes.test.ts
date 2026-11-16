@@ -3,15 +3,26 @@ import {
   ManagedShare,
   PublicShare,
   ShareEntriesResponse,
+  SharePreviewResponse,
   SharesResponse,
+  ShareUploadResponse,
 } from "@fdrive/contracts";
-import { type ProviderModule, StorageError } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
+import {
+  expectRangeAnswer,
+  RANGE_FILE,
+  rangeCases,
+  rangeHeaders,
+} from "../../test/fixtures/range-cases.ts";
+import { recordingGate } from "../../test/recording-gate.ts";
 import type { ScopeResolver } from "../scoping/resolver.ts";
 import type { ThumbFileReader } from "../thumbs/serve.ts";
 import { capByteStream, contentLengthExceeds } from "./routes.ts";
 import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
+
+const DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 const base = "/api/v1/shares";
 const pub = (id: string) => `/api/v1/public/shares/${id}`;
@@ -89,10 +100,10 @@ describe("share management", () => {
     expect(h.read("/a.docx")).toBe("alice data");
   });
 
-  it("refuses the Trash and backup folders, missing paths, colliding names and a file to upload into", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+  it("refuses fdrive's own folders, missing paths, colliding names and a file to upload into", async () => {
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/incoming/old.txt", "the Mac's staging");
     h.write("/one/report.txt", "one");
     h.write("/two/Report.txt", "two");
     const cookie = await h.login();
@@ -101,7 +112,7 @@ describe("share management", () => {
     for (const paths of [
       ["/.trash"],
       ["/.trash/old.txt"],
-      ["/.fdrive-backups/b"],
+      ["/.fdrive-desktop/mac/incoming/old.txt"],
       ["/a.docx", "/.trash"],
     ])
       expect((await attempt({ paths })).status, paths.join()).toBe(403);
@@ -214,38 +225,6 @@ describe("share management", () => {
     );
   });
 
-  it("answers for storage that no longer shares, or cannot be reached, without a share", async () => {
-    let strategy: ProviderModule["shares"] = "owned";
-    const h = sharesHarness({
-      local: (module) => ({
-        ...module,
-        get shares() {
-          return strategy;
-        },
-      }),
-    });
-    const cookie = await h.login();
-    const { id } = await h.create(cookie);
-    strategy = "none";
-    for (const response of [
-      await h.request(base, { cookie }),
-      await h.request(`${base}/${id}`, { cookie }),
-      await h.request(pub(id)),
-      await h.request(`${pub(id)}/download`),
-    ]) {
-      expect(response.status).toBe(400);
-      expect(await error(response)).toMatchObject({
-        kind: "unsupported",
-        details: { capability: "shares" },
-      });
-    }
-    strategy = "owned";
-    vi.spyOn(h.providers, "forIdentity").mockRejectedValue(new Error("private detail"));
-    const unreachable = await h.request(pub(id));
-    expect(unreachable.status).toBe(502);
-    expect(await unreachable.text()).not.toContain("private detail");
-  });
-
   it("records share create, update and revoke per account without copying any secret", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
@@ -278,6 +257,30 @@ describe("share management", () => {
     expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
     expect(h.activity.operations.at(-1)?.action).toBe("share.revoke");
     expect(h.activity.outcomes.at(-1)).toMatchObject({ outcome: "success" });
+  });
+
+  it("commits each share change with its history inside the backups' write gate", async () => {
+    const steps: string[] = [];
+    const h = sharesHarness({
+      routes: {
+        gate: recordingGate(steps, () => `gate let go, ${h.activity.outcomes.length} recorded`),
+      },
+    });
+    const cookie = await h.login();
+    const share = await h.create(cookie);
+    const path = `${base}/${share.id}`;
+    expect(
+      (await h.request(path, { method: "PATCH", cookie, body: { name: "Renamed" } })).status,
+    ).toBe(200);
+    expect((await h.request(path, { method: "DELETE", cookie })).status).toBe(200);
+    expect(steps).toEqual([
+      "gate held",
+      "gate let go, 1 recorded",
+      "gate held",
+      "gate let go, 2 recorded",
+      "gate held",
+      "gate let go, 3 recorded",
+    ]);
   });
 
   it("records a refused share as a failure and says nothing private", async () => {
@@ -447,40 +450,6 @@ describe("public shares", () => {
     expect(cleared.headers.get("set-cookie")).toContain("Max-Age=0");
   });
 
-  it("keeps a link carried over from SFTPGo locked to every password until its owner sets one", async () => {
-    const h = sharesHarness();
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { password: "secret" });
-    const row = await h.shares.get(id);
-    if (row === null) throw new Error("missing row");
-    // What the migration wrote for a protected SFTPGo link, whose password SFTPGo kept.
-    await h.shares.updateOwned(row.identityId, id, {
-      ...row,
-      passwordHash: "locked$sftpgo",
-      at: h.clock(),
-    });
-    for (const password of ["secret", "", "locked$sftpgo", "sftpgo"])
-      expect(
-        (await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password } })).status,
-        password,
-      ).toBe(401);
-    expect(await metadata(h, id)).toMatchObject({ hasPassword: true, name: "" });
-    expect((await h.request(`${pub(id)}/download`)).status).toBe(401);
-    expect(
-      ManagedShare.parse(await (await h.request(`${base}/${id}`, { cookie })).json()).hasPassword,
-    ).toBe(true);
-    // A rename keeps the lock; a new password lifts it.
-    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { name: "Renamed" } });
-    expect(await h.shares.passwordHash(id)).toBe("locked$sftpgo");
-    await h.request(`${base}/${id}`, { cookie, method: "PATCH", body: { password: "fresh" } });
-    const envelope = cookieFrom(
-      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "fresh" } }),
-    );
-    expect(await (await h.request(`${pub(id)}/download`, { cookie: envelope })).text()).toBe(
-      "alice data",
-    );
-  });
-
   it("serves a single file with HEAD, ranges, a 416, and the download limit", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
@@ -496,6 +465,9 @@ describe("public shares", () => {
     const head = await h.request(`${path}/download`, { method: "HEAD" });
     expect(head.status).toBe(200);
     expect(head.headers.get("content-length")).toBe("10");
+    // Typed by its name, as every download is: storage keeps no content types.
+    expect(head.headers.get("content-type")).toBe(DOCX);
+    expect(head.headers.get("last-modified")).not.toBeNull();
     expect(head.headers.get("accept-ranges")).toBe("bytes");
     expect(head.headers.get("content-disposition")).toContain("a.docx");
     expect(await head.text()).toBe("");
@@ -503,6 +475,8 @@ describe("public shares", () => {
 
     const full = await h.request(`${path}/download`);
     expect(full.status).toBe(200);
+    expect(full.headers.get("content-type")).toBe(DOCX);
+    expect(full.headers.get("last-modified")).toBe(head.headers.get("last-modified"));
     expect(await full.text()).toBe("alice data");
     expect((await metadata(h, id)).usedDownloads).toBe(1);
 
@@ -533,11 +507,188 @@ describe("public shares", () => {
     expect((await metadata(h, id)).unavailableReason).toBe("limit");
   });
 
+  it("answers every Range and If-Range as every file route does, and counts only bytes sent", async () => {
+    const h = sharesHarness();
+    h.write("/r.txt", RANGE_FILE);
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/r.txt"], maxDownloads: 100 });
+    const row = await h.shares.get(id);
+    if (row === null) throw new Error("missing row");
+    const storage = await h.storageFactory(row.identityId);
+    const cases = rangeCases((await storage.statFile("/r.txt")).modifiedAt);
+    for (const item of cases) {
+      await expectRangeAnswer(
+        await h.request(`${pub(id)}/download`, { headers: rangeHeaders(item) }),
+        item,
+      );
+    }
+    // Every answered request counts once; a 416 never does.
+    const served = cases.filter((item) => item.status !== 416).length;
+    expect((await metadata(h, id)).usedDownloads).toBe(served);
+  });
+
+  it("counts a limited link's preview once, up front, however many Range reads it takes", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    h.write("/clips/other.mp4", "other");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"], maxDownloads: 1 });
+    const opened = await h.request(`${pub(id)}/preview?path=/clip.mp4`, { method: "POST" });
+    expect(opened.status).toBe(200);
+    const visitor = cookieFrom(opened);
+    expect(visitor).toMatch(/^fdrive-share-visitor=/);
+    expect(opened.headers.get("set-cookie")).toContain("HttpOnly");
+    const { token } = SharePreviewResponse.parse(await opened.json());
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+    const url = `${pub(id)}/download?path=/clip.mp4&preview=${token}`;
+    for (const range of ["bytes=0-", "bytes=0-3", "bytes=4-", "bytes=-2"]) {
+      const read = await h.request(url, { cookie: visitor, headers: { range } });
+      expect(read.status, range).toBe(206);
+      await read.arrayBuffer();
+    }
+    expect(await (await h.request(url, { cookie: visitor })).text()).toBe("0123456789");
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+    // The link is spent now: a plain download and another preview are refused.
+    const spent = await h.request(`${pub(id)}/download?path=/clip.mp4`, { cookie: visitor });
+    expect(spent.status).toBe(403);
+    expect((await error(spent)).details).toEqual({ reason: "limit" });
+    const again = await h.request(`${pub(id)}/preview?path=/other.mp4`, {
+      method: "POST",
+      cookie: visitor,
+    });
+    expect(again.status).toBe(403);
+    expect((await error(again)).details).toEqual({ reason: "limit" });
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+  });
+
+  it("refuses a preview token from another visitor, for another file, or once it expired", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    h.write("/clips/other.mp4", "other");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"] });
+    const open = async (path: string, cookie?: string) => {
+      const response = await h.request(`${pub(id)}/preview?path=${path}`, {
+        method: "POST",
+        ...(cookie === undefined ? {} : { cookie }),
+      });
+      expect(response.status).toBe(200);
+      const { token } = SharePreviewResponse.parse(await response.json());
+      return { token, visitor: cookie ?? cookieFrom(response) };
+    };
+    const mine = await open("/clip.mp4");
+    // A second preview in the same browser keeps its visitor.
+    const kept = await h.request(`${pub(id)}/preview?path=/other.mp4`, {
+      method: "POST",
+      cookie: mine.visitor,
+    });
+    expect(kept.headers.get("set-cookie")).toBeNull();
+    const theirs = await open("/clip.mp4");
+    expect(theirs.visitor).not.toBe(mine.visitor);
+    const read = (path: string, token: string, cookie?: string) =>
+      h.request(`${pub(id)}/download?path=${path}&preview=${token}`, {
+        ...(cookie === undefined ? {} : { cookie }),
+      });
+    expect((await read("/clip.mp4", mine.token, mine.visitor)).status).toBe(200);
+    const flipped = `${mine.token.slice(0, -1)}${mine.token.endsWith("A") ? "B" : "A"}`;
+    for (const [label, response] of [
+      ["no visitor", await read("/clip.mp4", mine.token)],
+      ["another visitor", await read("/clip.mp4", mine.token, theirs.visitor)],
+      ["another file", await read("/other.mp4", mine.token, mine.visitor)],
+      ["a forged token", await read("/clip.mp4", flipped, mine.visitor)],
+    ] as const) {
+      expect(response.status, label).toBe(403);
+      expect((await error(response)).message, label).toContain("preview has ended");
+    }
+    h.now.value = new Date(h.clock().getTime() + 301_000);
+    expect((await read("/clip.mp4", mine.token, mine.visitor)).status).toBe(403);
+    // Three opens counted; no refused read was.
+    expect((await metadata(h, id)).usedDownloads).toBe(3);
+  });
+
+  it("opens previews only for the audio and video a viewer streams", async () => {
+    const h = sharesHarness();
+    for (const name of ["notes.txt", "photo.jpg", "paper.pdf", "song.mp3"])
+      h.write(`/media/${name}`, "bytes");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/media"], maxDownloads: 5 });
+    for (const name of ["notes.txt", "photo.jpg", "paper.pdf"]) {
+      const refused = await h.request(`${pub(id)}/preview?path=/${name}`, { method: "POST" });
+      expect(refused.status, name).toBe(400);
+      expect(refused.headers.get("set-cookie"), name).toBeNull();
+    }
+    expect((await metadata(h, id)).usedDownloads).toBe(0);
+    expect((await h.request(`${pub(id)}/preview?path=/song.mp3`, { method: "POST" })).status).toBe(
+      200,
+    );
+    expect((await metadata(h, id)).usedDownloads).toBe(1);
+  });
+
+  it("counts every full download that carries no preview token, even after a preview", async () => {
+    const h = sharesHarness();
+    h.write("/clips/clip.mp4", "0123456789");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/clips"] });
+    const opened = await h.request(`${pub(id)}/preview?path=/clip.mp4`, { method: "POST" });
+    const visitor = cookieFrom(opened);
+    for (let count = 2; count <= 4; count++) {
+      const full = await h.request(`${pub(id)}/download?path=/clip.mp4`, { cookie: visitor });
+      expect(await full.text()).toBe("0123456789");
+      expect((await metadata(h, id)).usedDownloads).toBe(count);
+    }
+    const head = await h.request(`${pub(id)}/download?path=/clip.mp4`, { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect((await metadata(h, id)).usedDownloads).toBe(4);
+  });
+
+  it("reads a protected link's row, hash included, once per request", async () => {
+    const h = sharesHarness();
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { password: "secret" });
+    // The limiter classifies a link once a minute; after that only the request reads it.
+    expect((await h.request(pub(id))).status).toBe(200);
+    const get = vi.spyOn(h.shares, "get");
+    const verify = vi.spyOn(h.passwords, "verify");
+    const envelope = cookieFrom(
+      await h.request(`${pub(id)}/credentials`, { method: "POST", body: { password: "secret" } }),
+    );
+    expect(get).toHaveBeenCalledTimes(1);
+    for (const suffix of ["", "/download"]) {
+      get.mockClear();
+      const response = await h.request(`${pub(id)}${suffix}`, { cookie: envelope });
+      expect(response.status, suffix).toBe(200);
+      await response.arrayBuffer();
+      expect(get, suffix).toHaveBeenCalledTimes(1);
+    }
+    // The password was checked when the cookie was issued, never again.
+    expect(verify).toHaveBeenCalledTimes(1);
+  });
+
+  it("never replaces a file on upload: a clash lands on the next free numbered name", async () => {
+    const h = sharesHarness();
+    h.write("/inbox/photo.jpg", "original");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/inbox"], scope: "write" });
+    for (const [raw, name] of [
+      ["second", "photo (2).jpg"],
+      ["third", "photo (3).jpg"],
+    ] as const) {
+      const response = await h.request(`${pub(id)}/upload?path=/photo.jpg`, { method: "PUT", raw });
+      expect(response.status).toBe(200);
+      expect(ShareUploadResponse.parse(await response.json())).toEqual({ name });
+      expect(h.read(`/inbox/${name}`)).toBe(raw);
+    }
+    expect(h.read("/inbox/photo.jpg")).toBe("original");
+    const fresh = await h.request(`${pub(id)}/upload?path=/new.txt`, { method: "PUT", raw: "x" });
+    expect(await fresh.json()).toEqual({ name: "new.txt" });
+    expect((await metadata(h, id)).usedDownloads).toBe(3);
+  });
+
   it("lists a directory share without the hidden folders and serves its children", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/folder/a.txt", "content");
     h.write("/.trash/old.txt", "gone");
-    h.write("/.fdrive-backups/b", "backup");
+    h.write("/.fdrive-desktop/mac/incoming/old.txt", "the Mac's staging");
     const cookie = await h.login();
     const { id } = await h.create(cookie, { paths: ["/"] });
     const path = pub(id);
@@ -549,9 +700,19 @@ describe("public shares", () => {
     ]);
     expect(await names(await h.request(`${path}/entries?path=/folder`))).toEqual(["a.txt"]);
     expect(await (await h.request(`${path}/download?path=/folder/a.txt`)).text()).toBe("content");
-    for (const hidden of ["/.trash/old.txt", "/.fdrive-backups/b", "/nope"])
+    for (const hidden of ["/.trash/old.txt", "/.fdrive-desktop/mac/incoming/old.txt", "/nope"])
       expect((await h.request(`${path}/download?path=${hidden}`)).status, hidden).toBe(404);
     expect((await h.request(`${path}/entries?path=/.trash`)).status).toBe(404);
+    // A link that followed its item into the Trash is not found until it comes back out.
+    const trashed = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(trashed.id);
+    if (row === null) throw new Error("missing row");
+    h.write("/.trash/folder/a.txt", "content");
+    await h.shares.movePrefix(row.identityId, "/folder", "/.trash/folder", true);
+    for (const suffix of ["", "/entries", "/download?path=/a.txt"])
+      expect((await h.request(`${pub(trashed.id)}${suffix}`)).status, suffix).toBe(404);
+    await h.shares.movePrefix(row.identityId, "/.trash/folder", "/folder", true);
+    expect((await metadata(h, trashed.id)).layout).toBe("directory");
     // A file share has no listing, and an archive share no single file.
     const file = await h.create(cookie);
     expect((await h.request(`${pub(file.id)}/entries`)).status).toBe(400);
@@ -596,6 +757,8 @@ describe("public shares", () => {
       ).status,
     ).toBe(200);
     expect(h.read("/inbox/new.txt")).toBe("upload");
+    // Stored through the file operations, as every change to files is.
+    expect(h.fileCalls).toEqual(["upload /inbox/new.txt"]);
     expect((await metadata(h, id, envelope)).usedDownloads).toBe(1);
     expect(
       (await h.request(`${path}/upload?path=/other.txt`, { method: "PUT", raw: "x" })).status,
@@ -635,7 +798,7 @@ describe("public shares", () => {
     expect((await error(refused)).details).toEqual({ reason: "expired" });
   });
 
-  it("rejects traversal, malformed ranges, CSRF, credentials and rate abuse without data access", async () => {
+  it("rejects traversal, CSRF, credentials and rate abuse without data access", async () => {
     const h = sharesHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
@@ -645,15 +808,6 @@ describe("public shares", () => {
         400,
       );
     expect((await h.request(`${path}/download?path=/a&path=/b`)).status).toBe(400);
-    for (const range of [
-      "bytes=4-2,6-7",
-      "bytes=-0",
-      "bytes=4-2",
-      "bytes=9007199254740993-",
-      "bytes=0-9007199254740993",
-      "nonsense",
-    ])
-      expect((await h.request(`${path}/download`, { headers: { range } })).status, range).toBe(400);
     expect((await h.request(`${path}/upload?path=/folder/a`, { method: "PUT" })).status).toBe(400);
     expect((await h.request("/api/v1/public/shares/bad")).status).toBe(400);
     expect((await h.request(`${path}/credentials`, { method: "POST", raw: "oops" })).status).toBe(
@@ -709,7 +863,7 @@ describe("public shares", () => {
     const h = sharesHarness({
       local: patchStorage((storage) => ({
         ...storage,
-        download: async () => {
+        open: async () => {
           throw new StorageError("forbidden", "AccessDenied: the owner's key was refused");
         },
       })),
@@ -894,18 +1048,17 @@ function makeIndexedFile(overrides: Partial<IndexedFile> = {}): IndexedFile {
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...overrides,
   };
 }
 
-const ALICE_HOME_SCOPES = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+const ALICE_HOME_SCOPES = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 /** A shares app whose public thumb route has an index and a thumbnail cache. */
 function thumbsHarness(
   overrides: {
-    indexQueries?: Partial<Pick<IndexQueries, "rootIdsByName" | "fileByPath" | "thumbnail">>;
-    resolver?: Pick<ScopeResolver, "verifiedIndexScopes">;
+    indexQueries?: Partial<Pick<IndexQueries, "fileByPath" | "thumbnail">>;
+    resolver?: Pick<ScopeResolver, "scopesFor">;
     /** `null` disables the route (the default is `"/thumbs"`). */
     thumbsDir?: string | null;
     fileReader?: Partial<ThumbFileReader>;
@@ -916,13 +1069,12 @@ function thumbsHarness(
   return sharesHarness({
     routes: {
       indexQueries: {
-        rootIdsByName: async () => ({ files: 1 }),
         fileByPath: async () => makeIndexedFile(),
         thumbnail: async () => ({ storagePath: "ab/abc123.256.webp" }),
         ...overrides.indexQueries,
       },
       resolver: overrides.resolver ?? {
-        verifiedIndexScopes: async () => ({ available: true, scopes: ALICE_HOME_SCOPES }),
+        scopesFor: async () => ALICE_HOME_SCOPES,
       },
       thumbsDir,
       fileReader: {
@@ -998,6 +1150,25 @@ describe("GET /public/shares/:id/thumb", () => {
     expect((await h.request(thumb("00000000-0000-4000-8000-000000000000"))).status).toBe(404);
   });
 
+  it("404s inside the folders no link reaches, where a link follows its item to", async () => {
+    const fileByPath = vi.fn(async () => makeIndexedFile());
+    const h = thumbsHarness({ indexQueries: { fileByPath } });
+    h.mkdir("/folder");
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { paths: ["/"] });
+    for (const path of ["/Shared with me/team/x.jpg", "/.fdrive-desktop/x.jpg"])
+      expect(
+        (await h.request(thumb(id, `path=${encodeURIComponent(path)}&size=256`))).status,
+        path,
+      ).toBe(404);
+    const folder = await h.create(cookie, { paths: ["/folder"] });
+    const row = await h.shares.get(folder.id);
+    if (row === null) throw new Error("missing row");
+    await h.shares.movePrefix(row.identityId, "/folder", "/Shared with me/team/folder", true);
+    expect((await h.request(thumb(folder.id, "path=%2Fx.jpg&size=256"))).status).toBe(404);
+    expect(fileByPath).not.toHaveBeenCalled();
+  });
+
   it("404s when thumbnails are off or not configured", async () => {
     for (const h of [
       thumbsHarness({ thumbsDir: null }),
@@ -1058,7 +1229,6 @@ describe("GET /public/shares/:id/thumb", () => {
       { indexQueries: { fileByPath: async () => null } },
       { indexQueries: { fileByPath: async () => makeIndexedFile({ sha256: null }) } },
       { indexQueries: { thumbnail: async () => null } },
-      { indexQueries: { rootIdsByName: async () => ({}) } },
       {
         fileReader: {
           stat: async () => {
@@ -1066,8 +1236,7 @@ describe("GET /public/shares/:id/thumb", () => {
           },
         },
       },
-      { resolver: { verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }) } },
-      { resolver: { verifiedIndexScopes: async () => ({ available: true, scopes: [] }) } },
+      { resolver: { scopesFor: async () => [] } },
     ];
     for (const [index, overrides] of cases.entries()) {
       const h = thumbsHarness(overrides);
@@ -1080,9 +1249,9 @@ describe("GET /public/shares/:id/thumb", () => {
     const h = thumbsHarness();
     const cookie = await h.login();
     const { id } = await h.create(cookie);
-    const load = h.service.publicThumbTarget.bind(h.service);
-    const target = vi.spyOn(h.service, "publicThumbTarget");
-    target.mockRejectedValueOnce(new Error("storage down"));
+    const load = h.service.load.bind(h.service);
+    const target = vi.spyOn(h.service, "load");
+    target.mockRejectedValueOnce(new Error("database down"));
     expect((await h.request(thumb(id))).status).toBe(404);
     // The owner disappears between loading the share and resolving its index.
     let gone = false;

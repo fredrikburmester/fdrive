@@ -1,10 +1,5 @@
 import type { z } from "zod";
 import { AboutResponse } from "./about.ts";
-import {
-  AccountFavoritesResponse,
-  type LinkIdentityRequest,
-  type UnlinkIdentityRequest,
-} from "./accounts.ts";
 import { SystemActivityResponse } from "./activity.ts";
 import {
   AiConnectionTestResponse,
@@ -22,6 +17,7 @@ import {
 } from "./ai.ts";
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { DESKTOP_API, DesktopPairInfo } from "./desktop.ts";
+import type { DesktopAccessMode } from "./desktop-writes.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
 import {
@@ -47,6 +43,7 @@ import {
 import { HealthResponse } from "./health.ts";
 import { JobAccepted, JobStatus, JobsResponse } from "./jobs.ts";
 import {
+  type CreateSavedSearchRequest,
   type CreateTagRequest,
   type FavoriteRequest,
   FavoritesResponse,
@@ -54,6 +51,8 @@ import {
   RecentsResponse,
   type RecentTouchRequest,
   type RemoveFolderViewRequest,
+  SavedSearch,
+  SavedSearchesResponse,
   type SetFileTagsRequest,
   type SetFolderViewRequest,
   Tag,
@@ -70,6 +69,7 @@ import {
   OfficeStatusResponse,
   SystemOfficeResponse,
 } from "./office.ts";
+import { PhotoDetailsResponse, PhotosResponse } from "./photos.ts";
 import {
   type ProcessingFailuresQuery,
   ProcessingFailuresResponse,
@@ -77,24 +77,15 @@ import {
   type RetryProcessingFailuresRequest,
   RetryProcessingFailuresResponse,
 } from "./processing-failures.ts";
-import {
-  AdminProvider,
-  AdminProvidersResponse,
-  type AdminProviderUpdateRequest,
-  ProvidersResponse,
-} from "./providers.ts";
 import { PublicUrlSettings, type PublicUrlUpdateRequest } from "./public-url.ts";
 import {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
-  IDENTITY_QUERY_PARAM,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -102,6 +93,7 @@ import {
   organizeRunRoute,
   publicShareRoute,
   ROUTES,
+  savedSearchRoute,
   shareRoute,
   systemLogsRoute,
   tagFilesRoute,
@@ -114,9 +106,12 @@ import {
   ManagedShare,
   PublicShare,
   ShareEntriesResponse,
+  SharePreviewResponse,
   SharesResponse,
+  ShareUploadResponse,
   type UpdateShareRequest,
 } from "./shares.ts";
+import { StorageUsageResponse, SystemStorage, type SystemStorageUpdateRequest } from "./storage.ts";
 import {
   IndexerActionResponse,
   type IndexerClearRequest,
@@ -152,8 +147,6 @@ import {
   type TrashRestoreRequest,
   TrashRestoreResponse,
   TrashSettings,
-  type TrashSettingsUpdateRequest,
-  TrashStatusResponse,
 } from "./trash.ts";
 import {
   AdminUser,
@@ -197,8 +190,6 @@ export interface ApiClientOptions {
   baseUrl?: string;
   /** Defaults to `globalThis.fetch`. Override in tests with a stub. */
   fetch?: typeof globalThis.fetch;
-  /** Sent as the `x-identity-id` header on every request, when set. */
-  identityId?: string;
 }
 
 export interface ApiClientUploadOptions {
@@ -228,16 +219,17 @@ export interface ApiClientImageSearchOptions {
 
 export interface ApiClient {
   desktopPairing(id: string): Promise<z.infer<typeof DesktopPairInfo>>;
-  approveDesktopPairing(
-    id: string,
-    identityIds: string[],
-    access?: Record<string, "read" | "full">,
-  ): Promise<OkResponse>;
+  /** Connects the Mac to the signed-in login, read-only or with Finder writes. */
+  approveDesktopPairing(id: string, access: DesktopAccessMode): Promise<OkResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
   systemPublicUrl(): Promise<PublicUrlSettings>;
   systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings>;
+  /** Admin only: the files folder's name and health. */
+  systemStorage(): Promise<SystemStorage>;
+  /** Admin only: renames the storage. */
+  systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage>;
   systemOffice(): Promise<SystemOfficeResponse>;
   systemUpdateOffice(input: OfficeSettingsUpdateRequest): Promise<SystemOfficeResponse>;
   systemAi(): Promise<SystemAiResponse>;
@@ -260,9 +252,8 @@ export interface ApiClient {
   cancelChat(id: string): Promise<Chat>;
   /** Applies or declines one pending action card. */
   actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat>;
-  /** The Trash settings of one storage server; every server keeps its own. */
-  systemTrash(providerId: string): Promise<TrashSettings>;
-  systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
+  /** Sets how long Trash keeps an item, for the whole installation. */
+  systemUpdateTrash(input: TrashSettings): Promise<TrashSettings>;
   listShares(): Promise<SharesResponse>;
   createShare(input: CreateShareRequest): Promise<ManagedShare>;
   getShare(id: string): Promise<ManagedShare>;
@@ -274,7 +265,10 @@ export interface ApiClient {
   shareEntries(id: string, path?: string): Promise<ShareEntriesResponse>;
   /** Lists an archive's entries through a public share, without extracting it. */
   shareArchiveEntries(id: string, path?: string): Promise<ArchiveEntriesResponse>;
-  shareDownloadUrl(id: string, path?: string): string;
+  /** A file's download URL; with a `preview` token it serves that file without counting again. */
+  shareDownloadUrl(id: string, path?: string, preview?: string): string;
+  /** Opens a preview of one file, counted as one download (see `SharePreviewResponse`). */
+  sharePreview(id: string, path: string): Promise<SharePreviewResponse>;
   shareArchiveUrl(id: string): string;
   /** A public gallery tile's thumbnail: never counts as a download, unlike `shareDownloadUrl`. */
   shareThumbUrl(id: string, path: string, size: ThumbSize): string;
@@ -283,7 +277,7 @@ export interface ApiClient {
     path: string,
     body: UploadBody,
     signal?: AbortSignal,
-  ): Promise<OkResponse>;
+  ): Promise<ShareUploadResponse>;
   officeStatus(): Promise<OfficeStatusResponse>;
   officeOpen(req: OfficeOpenRequest): Promise<OfficeOpenResponse>;
   officeCreateDocument(req: OfficeCreateDocumentRequest): Promise<OfficeCreateDocumentResponse>;
@@ -292,10 +286,6 @@ export interface ApiClient {
   /** The active local login changes its own password; other sessions of the account end. */
   changePassword(req: ChangePasswordRequest): Promise<OkResponse>;
   me(): Promise<MeResponse>;
-  linkIdentity(input: LinkIdentityRequest): Promise<MeResponse>;
-  unlinkIdentity(id: string, input: UnlinkIdentityRequest): Promise<MeResponse>;
-  switchIdentity(id: string): Promise<MeResponse>;
-  accountFavorites(): Promise<AccountFavoritesResponse>;
   list(path: string): Promise<ListResponse>;
   stat(path: string, signal?: AbortSignal): Promise<FsEntry>;
   mkdir(path: string): Promise<FsEntry>;
@@ -307,6 +297,10 @@ export interface ApiClient {
   remove(items: DeleteRequest["items"]): Promise<OkResponse>;
   zip(paths: string[], name?: string): Promise<Response>;
   downloadUrl(path: string, opts?: { inline?: boolean }): string;
+  /** The video at `path` as H.264/AAC fragmented MP4, transcoded as it plays. */
+  transcodeUrl(path: string): string;
+  /** The `.srt` or `.vtt` file at `path` as WebVTT, for a `<track>`. */
+  subtitlesUrl(path: string): string;
   upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry>;
   duplicate(path: string): Promise<FsEntry>;
   compress(req: CompressRequest): Promise<JobAccepted>;
@@ -315,6 +309,8 @@ export interface ApiClient {
   archiveEntries(path: string): Promise<ArchiveEntriesResponse>;
   /** A directory's total size, computed from the index only. */
   folderSize(path: string): Promise<FolderSizeResponse>;
+  /** The signed-in login's own folder: bytes used, its limit, kinds, largest files and duplicates, from the index. */
+  storageUsage(): Promise<StorageUsageResponse>;
   jobs(): Promise<JobStatus[]>;
   job(id: string): Promise<JobStatus>;
   cancelJob(id: string): Promise<JobStatus>;
@@ -323,12 +319,12 @@ export interface ApiClient {
   searchStatus(): Promise<SearchStatusResponse>;
   searchImages(query: string, opts?: ApiClientImageSearchOptions): Promise<ImageSearchResponse>;
   thumbUrl(path: string, size: ThumbSize): string;
+  /** One page of every image the caller can read, newest first; `cursor` continues a page. */
+  photos(cursor?: string): Promise<PhotosResponse>;
+  /** One image's EXIF details. */
+  photoDetails(path: string): Promise<PhotoDetailsResponse>;
   setupStatus(): Promise<SetupStatusResponse>;
   setupComplete(setupToken: string, req: SetupCompleteRequest): Promise<MeResponse>;
-  /** Public: the enabled providers with their credential forms, for the login page. */
-  providers(): Promise<ProvidersResponse>;
-  adminProviders(): Promise<AdminProvidersResponse>;
-  adminUpdateProvider(id: string, patch: AdminProviderUpdateRequest): Promise<AdminProvider>;
   adminUsers(): Promise<AdminUsersResponse>;
   adminCreateUser(req: AdminUserCreateRequest): Promise<AdminUser>;
   adminUpdateUser(username: string, patch: AdminUserUpdateRequest): Promise<AdminUser>;
@@ -398,13 +394,16 @@ export interface ApiClient {
   listFavorites(): Promise<FavoritesResponse>;
   addFavorite(req: FavoriteRequest): Promise<OkResponse>;
   removeFavorite(req: FavoriteRequest): Promise<OkResponse>;
+  listSavedSearches(): Promise<SavedSearchesResponse>;
+  createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch>;
+  deleteSavedSearch(id: string): Promise<OkResponse>;
   getFolderView(path: string): Promise<FolderViewResponse>;
   setFolderView(req: SetFolderViewRequest): Promise<OkResponse>;
   removeFolderView(req: RemoveFolderViewRequest): Promise<OkResponse>;
   resetFolderViews(): Promise<OkResponse>;
   listRecents(): Promise<RecentsResponse>;
   touchRecent(req: RecentTouchRequest): Promise<OkResponse>;
-  trashStatus(): Promise<TrashStatusResponse>;
+  trashSettings(): Promise<TrashSettings>;
   trashList(): Promise<TrashListResponse>;
   trashRestore(req: TrashRestoreRequest): Promise<TrashRestoreResponse>;
   trashPurge(req: TrashPurgeRequest): Promise<OkResponse>;
@@ -414,7 +413,6 @@ export interface ApiClient {
 interface ClientContext {
   readonly baseUrl: string;
   readonly fetchImpl: typeof globalThis.fetch;
-  readonly identityId: string | undefined;
 }
 
 /** HTTP methods that mutate state and therefore need the CSRF marker header. */
@@ -475,9 +473,6 @@ async function rawRequest(ctx: ClientContext, opts: RequestOptions): Promise<Res
   const url = buildRequestUrl(ctx.baseUrl, opts.path, opts.query);
   const headers = new Headers(opts.extraHeaders);
 
-  if (ctx.identityId !== undefined) {
-    headers.set(IDENTITY_HEADER, ctx.identityId);
-  }
   if (STATE_CHANGING_METHODS.has(opts.method)) {
     headers.set("x-requested-with", "fdrive");
   }
@@ -572,7 +567,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   const ctx: ClientContext = {
     baseUrl: options.baseUrl ?? "",
     fetchImpl: options.fetch ?? globalThis.fetch,
-    identityId: options.identityId,
   };
 
   const method =
@@ -589,9 +583,9 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     desktopPairing(id) {
       return get(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}`, DesktopPairInfo);
     },
-    approveDesktopPairing(id, identityIds, access) {
+    approveDesktopPairing(id, access) {
       return post(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}/approve`, OkResponse, {
-        jsonBody: { identityIds, ...(access ? { access } : {}) },
+        jsonBody: { access },
       });
     },
     listShares() {
@@ -626,8 +620,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         query: { path },
       });
     },
-    shareDownloadUrl(id, path = "/") {
-      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "download"), { path });
+    shareDownloadUrl(id, path = "/", preview) {
+      return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "download"), {
+        path,
+        ...(preview === undefined ? {} : { preview }),
+      });
+    },
+    sharePreview(id, path) {
+      return post(publicShareRoute(id, "preview"), SharePreviewResponse, { query: { path } });
     },
     shareArchiveUrl(id) {
       return buildRequestUrl(ctx.baseUrl, publicShareRoute(id, "archive"));
@@ -639,7 +639,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
     shareUpload(id, path, body, signal) {
-      return put(publicShareRoute(id, "upload"), OkResponse, {
+      return put(publicShareRoute(id, "upload"), ShareUploadResponse, {
         query: { path },
         rawBody: body,
         signal,
@@ -655,21 +655,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     changePassword(req: ChangePasswordRequest): Promise<OkResponse> {
       return post(ROUTES.auth.password, OkResponse, { jsonBody: req });
-    },
-
-    linkIdentity(input) {
-      return post(ROUTES.account.identities, MeResponse, { jsonBody: input });
-    },
-    unlinkIdentity(id, input) {
-      return del(`${ROUTES.account.identities}/${encodeURIComponent(id)}`, MeResponse, {
-        jsonBody: input,
-      });
-    },
-    switchIdentity(id) {
-      return post(ROUTES.account.activeIdentity, MeResponse, { jsonBody: { identityId: id } });
-    },
-    accountFavorites() {
-      return get(ROUTES.account.favorites, AccountFavoritesResponse);
     },
 
     me(): Promise<MeResponse> {
@@ -720,8 +705,15 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return buildRequestUrl(ctx.baseUrl, ROUTES.fs.download, {
         path,
         inline: opts?.inline === true ? "1" : undefined,
-        [IDENTITY_QUERY_PARAM]: ctx.identityId,
       });
+    },
+
+    transcodeUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.transcode, { path });
+    },
+
+    subtitlesUrl(path: string): string {
+      return buildRequestUrl(ctx.baseUrl, ROUTES.fs.subtitles, { path });
     },
 
     upload(path: string, body: UploadBody, opts?: ApiClientUploadOptions): Promise<FsEntry> {
@@ -764,6 +756,10 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
 
     folderSize(path: string): Promise<FolderSizeResponse> {
       return get(ROUTES.fs.folderSize, FolderSizeResponse, { query: { path } });
+    },
+
+    storageUsage(): Promise<StorageUsageResponse> {
+      return get(ROUTES.storage, StorageUsageResponse);
     },
 
     async jobs(): Promise<JobStatus[]> {
@@ -816,6 +812,14 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return buildRequestUrl(ctx.baseUrl, ROUTES.thumb, { path, size: String(size) });
     },
 
+    photos(cursor?: string): Promise<PhotosResponse> {
+      return get(ROUTES.photos.list, PhotosResponse, { query: { cursor } });
+    },
+
+    photoDetails(path: string): Promise<PhotoDetailsResponse> {
+      return get(ROUTES.photos.details, PhotoDetailsResponse, { query: { path } });
+    },
+
     setupStatus(): Promise<SetupStatusResponse> {
       return get(ROUTES.setup.status, SetupStatusResponse);
     },
@@ -827,10 +831,6 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       });
     },
 
-    providers: () => get(ROUTES.providers, ProvidersResponse),
-    adminProviders: () => get(ROUTES.admin.providers, AdminProvidersResponse),
-    adminUpdateProvider: (id: string, input: AdminProviderUpdateRequest) =>
-      patch(adminProviderRoute(id), AdminProvider, { jsonBody: input }),
     adminUsers: () => get(ROUTES.admin.users, AdminUsersResponse),
     adminCreateUser: (req: AdminUserCreateRequest) =>
       post(ROUTES.admin.users, AdminUser, { jsonBody: req }),
@@ -856,6 +856,12 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     systemUpdatePublicUrl(input: PublicUrlUpdateRequest): Promise<PublicUrlSettings> {
       return put(ROUTES.system.publicUrl, PublicUrlSettings, { jsonBody: input });
+    },
+    systemStorage(): Promise<SystemStorage> {
+      return get(ROUTES.system.storage, SystemStorage);
+    },
+    systemUpdateStorage(input: SystemStorageUpdateRequest): Promise<SystemStorage> {
+      return patch(ROUTES.system.storage, SystemStorage, { jsonBody: input });
     },
     systemOffice(): Promise<SystemOfficeResponse> {
       return get(ROUTES.system.office, SystemOfficeResponse);
@@ -908,10 +914,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     actOnChat(id: string, actionId: string, req: ChatActionRequest): Promise<Chat> {
       return post(chatActionRoute(id, actionId), Chat, { jsonBody: req });
     },
-    systemTrash(providerId: string): Promise<TrashSettings> {
-      return get(ROUTES.system.trash, TrashSettings, { query: { providerId } });
-    },
-    systemUpdateTrash(input: TrashSettingsUpdateRequest): Promise<TrashSettings> {
+    systemUpdateTrash(input: TrashSettings): Promise<TrashSettings> {
       return put(ROUTES.system.trash, TrashSettings, { jsonBody: input });
     },
     systemActivity(): Promise<SystemActivityResponse> {
@@ -1094,6 +1097,18 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return del(ROUTES.favorites.base, OkResponse, { jsonBody: req });
     },
 
+    listSavedSearches(): Promise<SavedSearchesResponse> {
+      return get(ROUTES.savedSearches, SavedSearchesResponse);
+    },
+
+    createSavedSearch(req: CreateSavedSearchRequest): Promise<SavedSearch> {
+      return post(ROUTES.savedSearches, SavedSearch, { jsonBody: req });
+    },
+
+    deleteSavedSearch(id: string): Promise<OkResponse> {
+      return del(savedSearchRoute(id), OkResponse);
+    },
+
     getFolderView(path: string): Promise<FolderViewResponse> {
       return get(ROUTES.folderViews.base, FolderViewResponse, { query: { path } });
     },
@@ -1118,8 +1133,8 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       return post(ROUTES.recents.touch, OkResponse, { jsonBody: req });
     },
 
-    trashStatus(): Promise<TrashStatusResponse> {
-      return get(ROUTES.trash.status, TrashStatusResponse);
+    trashSettings(): Promise<TrashSettings> {
+      return get(ROUTES.trash.settings, TrashSettings);
     },
 
     trashList(): Promise<TrashListResponse> {

@@ -36,7 +36,6 @@ function features(source: SystemFeaturesResponse["source"], values = off): Syste
       walkthroughComplete: true,
     },
     statuses: [],
-    roots: [],
   };
 }
 

@@ -1,52 +1,13 @@
-/** A storage backend instance: the files folder. */
-export interface Provider {
-  readonly id: string;
-  readonly type: string;
-  readonly baseUrl: string;
-  /** Shown to users; empty means "use the endpoint host". */
-  readonly label: string;
-  /** The provider module's configuration values, validated by the module. */
-  readonly config: Readonly<Record<string, unknown>>;
-  readonly enabled: boolean;
-  /** The endpoint is pinned by environment and cannot be changed at runtime. */
-  readonly managedByEnv: boolean;
-  readonly createdAt: Date;
-}
-
-export interface ProviderPatch {
-  readonly label?: string;
-  readonly baseUrl?: string;
-  readonly config?: Readonly<Record<string, unknown>>;
-  readonly enabled?: boolean;
-  readonly managedByEnv?: boolean;
-}
-
-export interface ProviderRepo {
-  get(id: string): Promise<Provider | null>;
-  /** Every provider, oldest first. */
-  list(): Promise<Provider[]>;
-  /**
-   * Finds the provider for (type, baseUrl), creating it when it does not
-   * exist yet. Idempotent: repeated calls with the same input always
-   * return the same row, and never change an existing row's other fields.
-   */
-  ensure(input: { type: string; baseUrl: string }): Promise<Provider>;
-  /** Atomic insert-only creation; duplicate endpoint throws ConflictError. */
-  create(input: { type: string; baseUrl: string } & ProviderPatch): Promise<Provider>;
-  /** Applies `patch` and returns the row, or `null` when no such provider exists. */
-  update(id: string, patch: ProviderPatch): Promise<Provider | null>;
-  /**
-   * Deletes the provider. Throws `ConflictError` while identities still
-   * reference it; a no-op when it does not exist.
-   */
-  delete(id: string): Promise<void>;
-}
+import type { SearchTypeFilter } from "@fdrive/contracts";
+import type { LoginRepo } from "./logins-types.js";
 
 /** A user of the built-in local storage, which fdrive owns. */
 export interface LocalUser {
   readonly username: string;
   readonly passwordHash: string;
   readonly disabled: boolean;
+  /** The most bytes their home folder may hold; `null` for no limit. */
+  readonly storageLimit: number | null;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -54,6 +15,7 @@ export interface LocalUser {
 export interface LocalUserPatch {
   readonly passwordHash?: string;
   readonly disabled?: boolean;
+  readonly storageLimit?: number | null;
 }
 
 export interface LocalUserRepo {
@@ -62,8 +24,6 @@ export interface LocalUserRepo {
   /** Every user, by name. */
   list(): Promise<LocalUser[]>;
   count(): Promise<number>;
-  /** Throws `ConflictError` when the name is taken in any case. */
-  create(input: { username: string; passwordHash: string }): Promise<LocalUser>;
   /** Applies `patch`; `null` when no such user exists. */
   update(username: string, patch: LocalUserPatch): Promise<LocalUser | null>;
   /** A no-op when the user does not exist. */
@@ -123,28 +83,21 @@ export interface AccountRepo {
   setAdmin(id: string, isAdmin: boolean): Promise<void>;
 }
 
-/** A login on a provider. Belongs to exactly one account. */
+/** A login, named after its local user. Belongs to exactly one account. */
 export interface Identity {
   readonly id: string;
   readonly accountId: string;
-  readonly providerId: string;
-  readonly externalUsername: string;
+  readonly username: string;
   readonly createdAt: Date;
   readonly lastLoginAt: Date | null;
 }
 
 export interface IdentityRepo {
-  findByProviderUsername(providerId: string, username: string): Promise<Identity | null>;
-  create(input: {
-    accountId: string;
-    providerId: string;
-    externalUsername: string;
-  }): Promise<Identity>;
+  /** The login named exactly `username`. */
+  findByUsername(username: string): Promise<Identity | null>;
+  create(input: { accountId: string; username: string }): Promise<Identity>;
   get(id: string): Promise<Identity | null>;
-  listByAccount(accountId: string): Promise<Identity[]>;
   touchLogin(id: string, at: Date): Promise<void>;
-  /** How many identities reference `providerId`. */
-  countByProvider(providerId: string): Promise<number>;
   /**
    * Every identity across every account. Used by the indexer event listener
    * to resolve which identities a filesystem change under a given root and
@@ -154,34 +107,12 @@ export interface IdentityRepo {
   listAll(): Promise<Identity[]>;
 }
 
-/**
- * The envelope-encrypted credential an identity last signed in with. The
- * cached token columns held a sealed upstream token for storage that minted
- * one; no storage does any more, so they stay empty.
- */
-export interface Credential {
-  readonly identityId: string;
-  readonly ciphertext: Uint8Array;
-  readonly keyId: string;
-  readonly cachedToken: string | null;
-  readonly cachedTokenExpiresAt: Date | null;
-  readonly updatedAt: Date;
-}
-
-export interface CredentialRepo {
-  put(input: { identityId: string; ciphertext: Uint8Array; keyId: string }): Promise<void>;
-  get(identityId: string): Promise<Credential | null>;
-  setCachedToken(
-    identityId: string,
-    token: { sealed: string; expiresAt: Date } | null,
-  ): Promise<void>;
-}
-
 /** An opaque server-side session. The cookie carries the raw id; only its hash is stored. */
 export interface Session {
   readonly idHash: string;
   readonly accountId: string;
-  readonly activeIdentityId: string | null;
+  /** The account's one login, which the session acts as. */
+  readonly identityId: string;
   readonly createdAt: Date;
   readonly expiresAt: Date;
   readonly lastSeenAt: Date;
@@ -193,7 +124,7 @@ export interface SessionRepo {
   create(input: {
     idHash: string;
     accountId: string;
-    activeIdentityId: string | null;
+    identityId: string;
     expiresAt: Date;
     userAgent: string | null;
     ip: string | null;
@@ -228,8 +159,8 @@ export interface SettingsRepo {
 }
 
 /**
- * A long-lived per-account (optionally per-identity) token for MCP and
- * Raycast, shown once at creation and stored only as a sha256 hash.
+ * A long-lived token for MCP, Raycast and the Mac app, acting as the login
+ * that created it, shown once at creation and stored only as a sha256 hash.
  */
 export interface ApiTokenAccess {
   readonly mode: "read" | "organize" | "full";
@@ -239,11 +170,10 @@ export interface ApiTokenAccess {
 export interface ApiToken {
   readonly id: string;
   readonly accountId: string;
-  /** The identity the token is scoped to. `null` after that identity is unlinked; such a token can no longer authenticate. */
-  readonly identityId: string | null;
+  readonly identityId: string;
   readonly name: string;
   readonly tokenHash: string;
-  readonly access?: ApiTokenAccess;
+  readonly access: ApiTokenAccess;
   readonly createdAt: Date;
   readonly lastUsedAt: Date | null;
   readonly expiresAt: Date | null;
@@ -252,10 +182,10 @@ export interface ApiToken {
 export interface ApiTokenRepo {
   create(input: {
     accountId: string;
-    identityId: string | null;
+    identityId: string;
     name: string;
     tokenHash: string;
-    access?: ApiTokenAccess;
+    access: ApiTokenAccess;
     expiresAt: Date | null;
   }): Promise<ApiToken>;
   /** Looks up a token by its sha256 hash. `null` when no token has that hash, expired or not. */
@@ -396,6 +326,24 @@ export interface RecentRepo {
   deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
   /** Deletes every row for `identityId` beyond the `keep` most recently opened. */
   prune(identityId: string, keep: number): Promise<void>;
+}
+
+/** A search an account saved from the search panel. */
+export interface SavedSearch {
+  readonly id: string;
+  readonly name: string;
+  readonly query: string;
+  readonly type: SearchTypeFilter;
+  /** The folder "This folder only" searched; null searches everything. */
+  readonly folder: string | null;
+}
+
+export interface SavedSearchRepo {
+  /** The account's saved searches, oldest first. */
+  list(accountId: string): Promise<SavedSearch[]>;
+  create(accountId: string, input: Omit<SavedSearch, "id">): Promise<SavedSearch>;
+  /** Deletes the search, scoped to `accountId`. A no-op when not found. */
+  delete(id: string, accountId: string): Promise<void>;
 }
 
 /**
@@ -549,12 +497,12 @@ export interface SystemEventRepo {
 
 /** The full set of app-schema repositories, bundled for convenient wiring. */
 export interface Repos {
-  readonly providers: ProviderRepo;
   readonly localUsers: LocalUserRepo;
   readonly localGrants: LocalGrantRepo;
   readonly accounts: AccountRepo;
   readonly identities: IdentityRepo;
-  readonly credentials: CredentialRepo;
+  /** Writes that span users, accounts, logins and sessions; the only way to create a user. */
+  readonly logins: LoginRepo;
   readonly sessions: SessionRepo;
   readonly settings: SettingsRepo;
   readonly apiTokens: ApiTokenRepo;
@@ -563,6 +511,7 @@ export interface Repos {
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
   readonly recents: RecentRepo;
+  readonly savedSearches: SavedSearchRepo;
   readonly metadataPaths: MetadataPathRepo;
   readonly systemEvents: SystemEventRepo;
   readonly aiChats: AiChatRepo;

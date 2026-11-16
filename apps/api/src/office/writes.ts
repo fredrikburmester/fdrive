@@ -1,20 +1,21 @@
-import { baseName, extensionOf, joinPath, parentPath } from "@fdrive/core";
-import { recordOfficeAction } from "../activity/office.js";
+import { baseName, extensionOf, isStorageError, joinPath, parentPath } from "@fdrive/core";
+import { officeFileActor } from "../activity/office.js";
 import { requireOfficeEdit } from "./auth.ts";
 import { requireMatchingLock, WopiError } from "./errors.ts";
 import { decodeUtf7, lockHeader, requireFilename, suggestedFilename } from "./names.ts";
-import {
-  fileExists,
-  mintedFields,
-  mutationKey,
-  officeLocation,
-  publishOfficeChange,
-} from "./service.ts";
-import { contentVersion, withStagedUpload } from "./streams.ts";
+import { documentVersion } from "./protocol/version.ts";
+import { fileExists, mintedFields, mutationKey, officeLocation } from "./service.ts";
+import { type BoundedProgress, boundedStream } from "./streams.ts";
 import type { OfficeConfig, OfficeDeps, OpenedFile } from "./types.ts";
 import { editorHostUrl } from "./urls.ts";
 import { currentWriteFile } from "./write-file.ts";
 
+/**
+ * Streams the request body into `path`. Storage writes it beside the target
+ * and renames it into place only once it is complete, so a body over the
+ * limit, an aborted request, admission withdrawn while the body arrived or a
+ * failed upload publishes nothing.
+ */
 async function uploadRequest(
   deps: OfficeDeps,
   opened: OpenedFile,
@@ -22,40 +23,56 @@ async function uploadRequest(
   request: Request,
   config: OfficeConfig,
   signal: AbortSignal,
-  bridgeId = opened.file.id,
-  overwrite = true,
+  options: { readonly bridgeId: string; readonly overwrite: boolean },
 ): Promise<void> {
   const length = request.headers.get("Content-Length");
   if (length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length))))
     throw new WopiError(400);
   if (length !== null && Number(length) > config.maxBytes) throw new WopiError(413);
-  const source =
+  const progress: BoundedProgress = { size: 0 };
+  const body = boundedStream(
     request.body ??
-    new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.close();
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    config.maxBytes,
+    signal,
+    progress,
+  ).pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      // Once the whole body is here, and before storage publishes it.
+      async flush() {
+        try {
+          await requireOfficeEdit(deps, opened.actor, opened.path);
+          if (path !== opened.path) await requireOfficeEdit(deps, opened.actor, path);
+        } catch (error) {
+          progress.failure = error;
+          throw error;
+        }
       },
-    });
-  await withStagedUpload(source, config.maxBytes, signal, async (body, size) => {
-    if (length !== null && Number(length) !== size) throw new WopiError(400);
-    await requireOfficeEdit(deps, opened.actor, opened.path);
-    if (path !== opened.path) await requireOfficeEdit(deps, opened.actor, path);
-    await recordOfficeAction(
-      deps,
-      opened.actor,
-      path === opened.path ? "file.save" : "file.copy",
-      opened.path,
+    }),
+  );
+  try {
+    await deps.operations.upload(
+      officeFileActor(deps, opened.actor, options.bridgeId),
       path,
-      bridgeId,
-      () =>
-        opened.actor.storage.upload(path, body, {
-          signal,
-          contentLength: size,
-          ...(overwrite ? {} : { overwrite: false }),
-        }),
-      { size },
+      body,
+      {
+        // Save As reads as a copy of the document the editor opened.
+        ...(path === opened.path
+          ? { action: "file.save" }
+          : { action: "file.copy", from: opened.path }),
+        signal,
+        overwrite: options.overwrite,
+        ...(length === null ? {} : { contentLength: Number(length) }),
+      },
     );
-  });
+  } catch (error) {
+    // Storage reports a body that failed as its own failure; answer with the body's reason.
+    throw progress.failure ?? error;
+  }
 }
 async function putFile(
   deps: OfficeDeps,
@@ -65,29 +82,27 @@ async function putFile(
   signal: AbortSignal,
 ): Promise<Response> {
   const provided = lockHeader(request.headers.get("X-WOPI-Lock"));
-  const result = await deps.withWriteScope(initial.actor.identity.providerId, async (scope) => {
-    const opened = await currentWriteFile(deps, scope.files, initial);
-    return scope.locks.withFileLock(opened.file.id, async (locked) => {
-      const current = await locked.get(deps.clock());
+  const result = await deps.withWriteScope((scope) =>
+    scope.locks.withFileLock(initial.file.id, async (locked) => {
+      // Resolved under the document's lock, so a save follows an earlier rename
+      // and never recreates a deleted path.
+      const opened = await currentWriteFile(deps, scope.files, initial);
       const stat = await opened.actor.storage.statFile(opened.path);
-      requireMatchingLock(current, provided, stat.size === 0);
-      await uploadRequest(deps, opened, opened.path, request, config, signal);
-      const content = await contentVersion(
-        opened.actor.storage,
-        opened.path,
-        config.maxBytes,
-        signal,
-      );
+      requireMatchingLock(await locked.get(deps.clock()), provided, stat.size === 0);
+      await uploadRequest(deps, opened, opened.path, request, config, signal, {
+        bridgeId: opened.file.id,
+        overwrite: true,
+      });
+      const { version } = await documentVersion(opened.actor.storage, opened.path);
       return {
         path: opened.path,
         response: new Response(null, {
           status: 200,
-          headers: { "X-WOPI-ItemVersion": content.version },
+          headers: { "X-WOPI-ItemVersion": version },
         }),
       };
-    });
-  });
-  publishOfficeChange(deps, initial.actor, result.path, "update");
+    }),
+  );
   return result.response;
 }
 async function renameFile(
@@ -104,48 +119,38 @@ async function renameFile(
     throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Invalid filename" });
   }
   const provided = lockHeader(request.headers.get("X-WOPI-Lock"));
-  const result = await deps.withWriteScope(initial.actor.identity.providerId, async (scope) => {
-    const opened = await currentWriteFile(deps, scope.files, initial);
-    const sourceName = baseName(opened.path);
-    const suffix = extensionOf(sourceName);
-    const ext = suffix ? sourceName.slice(-suffix.length) : "";
-    const full = requireFilename(`${name}${ext}`);
-    const target = joinPath(parentPath(opened.path), full);
-    const location = officeLocation(opened.actor, target);
-    const response = await scope.locks.withFileLock(mutationKey(location), () =>
-      scope.locks.withFileLock(opened.file.id, async (locked) => {
-        requireMatchingLock(await locked.get(deps.clock()), provided);
-        await requireOfficeEdit(deps, opened.actor, opened.path);
-        await requireOfficeEdit(deps, opened.actor, target);
-        if (target === opened.path) return Response.json({ Name: name });
-        if (await fileExists(opened.actor, target))
-          throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Name already exists" });
-        await recordOfficeAction(
-          deps,
-          opened.actor,
-          "file.rename",
-          opened.path,
-          target,
-          opened.file.id,
-          () => opened.actor.storage.move(opened.path, target),
-        );
-        await scope.files.movePrefix({
-          providerId: opened.file.providerId,
-          rootName: opened.file.rootName,
-          from: opened.file.path,
-          to: location.path,
-          at: deps.clock(),
-        });
-        return Response.json({ Name: name });
-      }),
-    );
-    return { source: opened.path, target, response };
-  });
-  if (result.target !== result.source) {
-    await deps.metadata.onMoved(initial.actor.identity.id, result.source, result.target, false);
-    publishOfficeChange(deps, initial.actor, result.source, "move", result.target);
-  }
-  return result.response;
+  const result = await deps.withWriteScope((scope) =>
+    scope.locks.withFileLock(initial.file.id, async (locked) => {
+      const opened = await currentWriteFile(deps, scope.files, initial);
+      requireMatchingLock(await locked.get(deps.clock()), provided);
+      const sourceName = baseName(opened.path);
+      const suffix = extensionOf(sourceName);
+      const ext = suffix ? sourceName.slice(-suffix.length) : "";
+      const full = requireFilename(`${name}${ext}`);
+      const target = joinPath(parentPath(opened.path), full);
+      const response = Response.json({ Name: name });
+      if (target === opened.path) return response;
+      await requireOfficeEdit(deps, opened.actor, target);
+      const location = await officeLocation(deps, opened.actor, target);
+      // The document keeps its id: the rename moves it with links and the rest.
+      await scope.locks.withFileLock(mutationKey(location), async () => {
+        try {
+          await deps.operations.move(
+            officeFileActor(deps, opened.actor, opened.file.id),
+            opened.path,
+            target,
+            { action: "file.rename" },
+          );
+        } catch (error) {
+          if (isStorageError(error) && error.kind === "conflict")
+            throw new WopiError(400, { "X-WOPI-InvalidFileNameError": "Name already exists" });
+          throw error;
+        }
+      });
+      return response;
+    }),
+  );
+  return result;
 }
 async function putRelative(
   deps: OfficeDeps,
@@ -165,20 +170,19 @@ async function putRelative(
     throw new WopiError(400);
   const overwrite = relative !== null && overwriteHeader === "true";
   const provided = lockHeader(request.headers.get("X-WOPI-Lock"));
-  const result = await deps.withWriteScope(initial.actor.identity.providerId, async (scope) => {
+  // PutRelative does not change the source, so its lock is only compared, never
+  // held. WOPI clients omit the header.
+  if (provided !== undefined)
+    requireMatchingLock(await deps.locks.get(initial.file.id, deps.clock()), provided);
+  const result = await deps.withWriteScope(async (scope) => {
     const opened = await currentWriteFile(deps, scope.files, initial);
-    // PutRelative does not mutate the source. WOPI clients omit its lock header.
-    if (provided !== undefined)
-      await scope.locks.withFileLock(opened.file.id, async (locked) =>
-        requireMatchingLock(await locked.get(deps.clock()), provided),
-      );
     for (let attempt = 0; attempt < 1000; attempt++) {
       const name =
         relative === null
           ? suggestedFilename(opened.path, decoded, attempt)
           : requireFilename(decoded);
       const path = joinPath(parentPath(opened.path), name);
-      const location = officeLocation(opened.actor, path);
+      const location = await officeLocation(deps, opened.actor, path);
       const result = await scope.locks.withFileLock(mutationKey(location), async () => {
         await requireOfficeEdit(deps, opened.actor, path);
         const exists = await fileExists(opened.actor, path);
@@ -186,20 +190,18 @@ async function putRelative(
           if (relative === null) return null;
           throw new WopiError(409, { "X-WOPI-Lock": "" });
         }
-        const file = await scope.files.ensure(location);
+        // On its own transaction: in this one the registry's lock would hold
+        // the owner's files until the upload below is done.
+        const file = await deps.files.ensure(location);
         return scope.locks.withFileLock(file.id, async (locked) => {
           const current = await locked.get(deps.clock());
           if (current !== null) throw new WopiError(409, { "X-WOPI-Lock": current });
-          // Recheck at the last moment so a suggested name can still move on.
-          if (!overwrite && (await fileExists(opened.actor, path))) {
-            if (relative === null) return null;
-            throw new WopiError(409, { "X-WOPI-Lock": "" });
-          }
-          // A writer outside fdrive can still take the name before the
-          // publish; `overwrite: false` then refuses it as a `conflict`
-          // (409), since the request body is already spent.
-          await uploadRequest(deps, opened, path, request, config, signal, file.id, overwrite);
-          await contentVersion(opened.actor.storage, path, config.maxBytes, signal);
+          // Without overwrite, a name a writer outside fdrive took since the
+          // check above is refused as a `conflict` (409), never replaced.
+          await uploadRequest(deps, opened, path, request, config, signal, {
+            bridgeId: file.id,
+            overwrite,
+          });
           const fields = mintedFields(deps, config, opened.actor, file, "edit");
           return {
             path,
@@ -207,8 +209,8 @@ async function putRelative(
             response: Response.json({
               Name: baseName(path),
               Url: `${config.wopiUrl}/files/${file.id}?access_token=${encodeURIComponent(fields.formFields.access_token)}`,
-              HostViewUrl: editorHostUrl(config, opened.actor.identity.id, path, "view"),
-              HostEditUrl: editorHostUrl(config, opened.actor.identity.id, path, "edit"),
+              HostViewUrl: editorHostUrl(config, path, "view"),
+              HostEditUrl: editorHostUrl(config, path, "edit"),
             }),
           };
         });
@@ -217,7 +219,6 @@ async function putRelative(
     }
     throw new WopiError(500);
   });
-  publishOfficeChange(deps, initial.actor, result.path, result.exists ? "update" : "create");
   return result.response;
 }
 export async function dispatchOfficeWrite(

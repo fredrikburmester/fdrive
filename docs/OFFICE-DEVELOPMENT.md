@@ -8,30 +8,54 @@ Entry points: [service](../apps/api/src/office/service.ts),
 
 ## File identity and authorization
 
-`app.office_files` supplies stable UUIDs for provider/root/path locations, independent of
-index rows. Moves preserve UUIDs; deletes tombstone them; recreation gets a new UUID.
-Callbacks resolve the current location, current identity/session and current scope before
-using that identity's storage. Neither a known UUID nor a matching content hash grants access.
+`app.office_files` supplies stable UUIDs keyed by where a document lies in its owner's files:
+the owner's login and the owner's path. A path in a folder shared with someone is its
+owner's (`LocalGrantService.ownerPath`), so everyone who reaches a document opens one UUID;
+the index plays no part, and Office works with indexing off. The registry follows paths with
+grants and links, in the file operations' transaction (`files/access.ts`): fdrive's moves,
+MCP, Office renames, Trash moves and restores carry the UUID along, into the Trash and back
+too, as do Mac writes (after their receipt, `office/moves.ts`) and moves the indexer's watcher
+journals; deletes tombstone it; recreation gets a new UUID.
+Callbacks resolve the current row back into the caller's files (`pathFor`, `null` when the
+login no longer reaches it), with the current identity and session, before using that
+identity's storage. Neither a known UUID nor a matching content hash grants access. WOPI's
+`OwnerId` is the owner's login.
 
 Office tokens are purpose-separated and session-bound. Revoked or expired sessions fail
-callbacks. Editing requires explicit administrator admission, including the provider-bound
-editor allowlist and any advanced path policy. Browser edit intent is not authority: a
-read-only coeditor can otherwise affect another writer's save. Keep the real-editor
-regression that checks persisted content, not just the reader's own rejected upload.
+callbacks. Editing requires explicit administrator admission (`office/edit-policy.ts`): one of
+the editors chosen from fdrive's users, never in a folder shared with them to view only. Browser
+edit intent is not authority: a read-only coeditor can otherwise affect another writer's save.
+Keep the real-editor regression that checks persisted content, not just the reader's own
+rejected upload.
 
 ## Writes and concurrency
 
-The [write scope](../packages/db/src/repos/office-write-scope.ts) coordinates registry and
-WOPI locks on one database transaction/connection. Nested lock work must not check out a
-second connection: a small pool can deadlock when another writer waits on the provider gate.
-Metadata notifications run after commit. Scope handles cannot escape their callback lifetime.
+Each write runs in one [write scope](../packages/db/src/repos/office-write-scope.ts), a
+transaction holding the locks of the documents and names it touches until it commits: the
+document's own (its file UUID, the key WOPI lock requests take too) and, for a new name, the
+name's. Saves to one document wait for each other; saves to different documents run side by
+side. Nested lock and registry work stays on the scope's connection. Writes and renames go
+through the file operations like every other change to files. The document's lock is held
+while a save's body streams in, on purpose; it is document-scoped, on the scopes' own pool,
+and outside the file operations' transaction, which holds the path only for the publish. Scope
+handles cannot escape their callback lifetime.
 
-Re-resolve current registry paths inside writes so a queued save cannot resurrect a renamed
-path. Check edit admission and destination conflicts under the relevant locks. The locks
-serialize fdrive's own writers; create and non-overwriting saves (`PutRelativeFile` without
-overwrite) also pass `overwrite: false`, which the local folder publishes as a real
-create-if-absent, so a writer outside fdrive that takes the name after the absence check gets
-a 409 instead of being replaced. Storage that cannot honour `overwrite: false` keeps that race.
+The scopes and the WOPI lock repository have a pool of their own. A save holds its document's
+lock, and a connection, while its body streams in, and checks admission and records history on
+the main pool meanwhile; nothing on the main pool waits for these locks, so a saturated pool
+cannot deadlock. The registry's own lock is the exception, since registry and desktop
+transactions on the main pool wait for it: a write ensures a registry row on its own
+transaction, and a rename moves its row in the file operation's transaction, never on the
+scope.
+
+Re-resolve current registry paths under the document's lock so a queued save cannot resurrect a
+renamed path. Saves stream into storage, which writes beside the document and renames into
+place, so a body over the limit, an aborted request, or edit admission gone by the time the
+body has arrived (checked again then) publishes nothing. Create, rename and non-overwriting
+saves (`PutRelativeFile` without overwrite) pass `overwrite: false`, a real create-if-absent in
+the files folder, and answer a taken name from the storage's `conflict`: 409, or 400 with
+`X-WOPI-InvalidFileNameError` for a rename. `PutRelativeFile` still looks for a free suggested
+name before it spends the body. Saves that replace a document pass `overwrite: true`.
 
 ## Callback proof and cache versions
 
@@ -39,6 +63,8 @@ Proof URLs derive from configured callback addresses and the original request pa
 not arbitrary Host headers. Discovery and iframe origins are trusted configuration. Preserve
 profile-specific authentication and real-editor checks; never introduce a generic proof bypass.
 
-Content versions must detect same-size, same-second external replacements. Streaming hashes
-and version tracking avoid relying solely on Last-Modified seconds. Keep bounded streaming,
-upload limits, lock conflict behavior and view-only mutation rejection.
+Versions come from the file's stamp (`contentStamp`: size, modification time, inode and change
+time), so they cost no read of the document. Any write moves the change time and a publish
+replaces the inode, so a same-size external replacement that keeps its modification time still
+gets a new version. Office requires storage with stamps. Keep bounded streaming, upload limits,
+lock conflict behavior and view-only mutation rejection.

@@ -37,7 +37,7 @@ and answers with links to the files it talks about.
 
 When it wants to change something, it shows a card instead: moves grouped by destination that
 you can uncheck or redirect, new names you can uncheck or retype (a name already taken in the
-folder starts unchecked), items to move to Trash (only where Trash is configured), or a new
+folder starts unchecked), items to move to Trash, or a new
 text file (or a new version of an attached text file) whose text you see first. Nothing happens
 until you apply the card; the assistant then continues with the outcome. Sending a new message
 declines any waiting cards. Recent chats are in the panel's menu; a chat keeps its transcript
@@ -109,13 +109,14 @@ suggestions, which the person still has to approve; the organizer has no tool th
 - Chat (`apps/api/src/ai/chat/`, routes under `/api/v1/ai/chats`) is the API side of
   [AI chat](plans/AI-CHAT.md); the panel is not built yet. A chat's *references* (the files and
   folders a person attached), plus the folder the person has open when sending a message (a
-  verified folder outside Trash, stored as that message's `location`, never as a reference),
+  verified folder outside fdrive's own folders such as Trash, stored as that message's
+  `location`, never as a reference),
   are the tools' focus for that message. `service.ts` stores transcripts and references
   through `AiChatRepo` (`app.ai_chats`, `app.ai_chat_messages`, `app.ai_chat_references`), keeps
   one live provider conversation per active chat in memory (`live.ts`) and rebuilds it from the
   transcript as plain text after a restart (`history.ts`). Read tools (`tools.ts`: `read_file`,
   `file_info`, `duplicates_of`) run at once. Write tools (`action-tools.ts`: `move_items`,
-  `rename_items`, `trash_items` where Trash is configured, `write_text_file`) never write: `agent.ts` verifies
+  `rename_items`, `trash_items`, `write_text_file`) never write: `agent.ts` verifies
   the call into a pending action card, the turn pauses in `awaiting_approval`, and only
   `POST /ai/chats/:id/actions/:actionId` applies it under the same identity, re-checking the
   session, SHA-256 and targets, before the assistant continues with the outcome. A new message

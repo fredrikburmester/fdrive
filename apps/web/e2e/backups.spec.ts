@@ -24,7 +24,7 @@ test.describe("installation backups", () => {
     await environment?.stop();
     if (directory) await rm(directory, { recursive: true, force: true });
   });
-  test("owner saves a key, uploads an external ZIP, and downloads a verified snapshot on desktop and mobile", async ({
+  test("owner saves a key, downloads a verified snapshot and is offered bucket destinations only, on desktop and mobile", async ({
     page,
   }) => {
     test.setTimeout(240_000);
@@ -38,10 +38,12 @@ test.describe("installation backups", () => {
     ).json()) as { account: { id: string } };
     const db = new Client({ connectionString: environment.databaseUrl });
     await db.connect();
+    let storageId: unknown;
     try {
       await db.query("insert into app.settings(key,value) values('setup.owner.v1',$1)", [
         JSON.stringify({ state: "complete", accountId: me.account.id }),
       ]);
+      storageId = (await db.query("select value from app.settings where key='storage.id'")).rows;
     } finally {
       await db.end();
     }
@@ -61,7 +63,7 @@ test.describe("installation backups", () => {
       ).ok(),
     ).toBe(true);
     await page.goto(`${environment.webBaseUrl}/system/backups`);
-    await page.getByLabel("Your current password").fill("alice-password");
+    await page.getByLabel("Current password").fill("alice-password");
     await page.getByRole("button", { name: "Unlock backups" }).click();
     await expect(page.getByText("Backup controls unlocked.")).toBeVisible();
     const keyDownload = page.waitForEvent("download");
@@ -74,15 +76,8 @@ test.describe("installation backups", () => {
     await page.getByLabel("Paste the saved recovery key to confirm").fill(kit);
     await page.getByRole("button", { name: "Confirm saved key" }).click();
     await expect(page.getByText("Recovery key confirmed", { exact: true })).toBeVisible();
-    await page.getByLabel("Bundle name").fill("Fileserver configuration");
-    await page.getByLabel("Configuration ZIP").setInputFiles({
-      name: "fileserver.zip",
-      mimeType: "application/zip",
-      buffer: Buffer.from("PK opaque configuration fixture"),
-    });
-    await page.getByLabel("Restore notes (optional)").fill("Import manually on the fileserver");
-    await page.getByRole("button", { name: "Upload configuration ZIP" }).click();
-    await expect(page.getByText("Fileserver configuration", { exact: true })).toBeVisible();
+    // Configuration ZIPs are gone.
+    await expect(page.getByText("Additional configuration files")).toHaveCount(0);
     await page.getByRole("button", { name: "Prepare local download" }).click();
     const download = page.getByRole("button", { name: "Download backup" }).first();
     await expect(download).toBeVisible({ timeout: 30_000 });
@@ -96,19 +91,28 @@ test.describe("installation backups", () => {
     );
     await page.getByRole("button", { name: "Verify bytes" }).first().click();
     await expect(page.getByText(/Bytes verified/).first()).toBeVisible({ timeout: 20_000 });
+    // A destination is a bucket: the form asks for one and offers no folder in the files folder.
     await page.getByRole("button", { name: "Add destination" }).click();
-    await page.getByLabel("Name", { exact: true }).fill("Separate fileserver");
-    await page.getByLabel("Destination type").click();
-    await page.getByRole("option", { name: "Connected fileserver" }).click();
-    await page.getByLabel("Fileserver", { exact: true }).click();
-    await page.getByRole("option").first().click();
-    await page.getByLabel("Backup username").fill("alice");
-    await page.getByLabel("Backup password").fill("alice-password");
-    await page.getByLabel("Private backup directory").fill("/docs");
-    await page.getByRole("button", { name: "Test and save" }).click();
-    await expect(page.getByText("Separate fileserver", { exact: true }).first()).toBeVisible();
+    await expect(page.getByLabel("S3 endpoint")).toBeVisible();
+    await expect(page.getByLabel("Destination type")).toHaveCount(0);
+    await expect(page.getByLabel("Private backup directory")).toHaveCount(0);
+    await page.getByLabel("Secret access key").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: test.info().outputPath("backups-destination-form.png") });
+    await page.getByRole("button", { name: "Add destination" }).click();
+    await expect(page.getByLabel("S3 endpoint")).toHaveCount(0);
     await page.getByRole("button", { name: "Back up now", exact: true }).click();
-    await expect(page.getByText("Separate fileserver: complete")).toBeVisible({ timeout: 30_000 });
+    // Both backups complete; daily retention keeps only the newer local archive.
+    await expect
+      .poll(
+        async () =>
+          (
+            (await (
+              await page.request.get(`${environment.webBaseUrl}/api/v1/system/backups`)
+            ).json()) as { runs: { state: string }[] }
+          ).runs.filter((run) => run.state === "complete").length,
+        { timeout: 30_000 },
+      )
+      .toBe(2);
     // Health: a size estimate runs through the worker, and an owner-recorded rehearsal report
     // replaces the monthly reminder.
     await expect(page.getByText(/Restore rehearsal due/)).toBeVisible();
@@ -232,13 +236,13 @@ test.describe("installation backups", () => {
       await restoredDb.connect();
       try {
         expect(
-          (await restoredDb.query("select count(*)::int as count from app.backup_attachments"))
-            .rows[0].count,
-        ).toBe(1);
-        expect(
-          (await restoredDb.query("select bool_and(not enabled) as paused from app.providers"))
-            .rows[0].paused,
+          (await restoredDb.query("select restored from app.backup_configuration")).rows[0]
+            .restored,
         ).toBe(true);
+        // The files folder keeps its id, so paired Macs still recognise their locations.
+        expect(
+          (await restoredDb.query("select value from app.settings where key='storage.id'")).rows,
+        ).toEqual(storageId);
       } finally {
         await restoredDb.end();
       }

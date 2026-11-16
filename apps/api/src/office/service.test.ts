@@ -2,6 +2,14 @@ import { generateKeyPairSync, randomUUID } from "node:crypto";
 import { StorageError } from "@fdrive/core";
 import { describe, expect, it, vi } from "vitest";
 import { officeHarness, proofKey } from "../../test/fixtures/office/harness.ts";
+import {
+  expectRangeAnswer,
+  RANGE_FILE,
+  rangeCases,
+  rangeHeaders,
+} from "../../test/fixtures/range-cases.ts";
+import { recordingGate } from "../../test/recording-gate.ts";
+import { WopiError } from "./errors.ts";
 import { createOfficeService, fileExists } from "./service.ts";
 
 describe("office opening and creation", () => {
@@ -15,12 +23,12 @@ describe("office opening and creation", () => {
     expect(a.actionUrl).toContain("https://app.test/onlyoffice/editor?");
     expect(a.formFields.access_token_ttl).toBe(String(h.clock().getTime() + 8 * 3600000));
     const before = (await (await h.callback(a)).json()) as { Version: string };
-    await h.storage.upload("/a.docx", Buffer.from("world"));
+    await h.storage.upload("/a.docx", Buffer.from("world"), { overwrite: true });
     await h.open();
     const after = (await (await h.callback(a)).json()) as { Version: string; Size: number };
     expect(before.Version).not.toBe(after.Version);
     expect(after.Size).toBe(5);
-    expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+    expect((await h.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
     // Recently opened reads history, so each browser open is recorded there too.
     expect(h.activity.outcomes.map((row) => [row.action, row.outcome])).toEqual([
       ["file.open", "success"],
@@ -37,13 +45,24 @@ describe("office opening and creation", () => {
     expect(h.activity.outcomes[0]?.bridge).toEqual({ namespace: "office", externalId: a.fileId });
   });
 
+  it("records an open, its recent entry and its history together, under the backups' write gate", async () => {
+    const steps: string[] = [];
+    const h = await officeHarness({
+      deps: {
+        gate: recordingGate(steps, () => `gate let go, ${h.activity.outcomes.length} recorded`),
+      },
+    });
+    await h.open();
+    expect(steps).toEqual(["gate held", "gate let go, 1 recorded"]);
+  });
+
   it("still opens and keeps legacy recents when no history is configured", async () => {
     const h = await officeHarness({ deps: { activity: undefined } });
 
     expect((await h.open()).fileId).toBeTruthy();
 
     expect(h.activity.operations).toEqual([]);
-    expect((await h.deps.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
+    expect((await h.metadata.listRecents(h.alice.identity.id))[0]?.path).toBe("/a.docx");
   });
 
   it("refuses to record an open whose session is revoked after it was authorized", async () => {
@@ -59,7 +78,7 @@ describe("office opening and creation", () => {
     expect(h.activity.outcomes).toEqual([
       expect.objectContaining({ action: "file.open", outcome: "denied" }),
     ]);
-    expect(await h.deps.metadata.listRecents(h.alice.identity.id)).toEqual([]);
+    expect(await h.metadata.listRecents(h.alice.identity.id)).toEqual([]);
   });
   it("returns quiet unavailable status for missing config and discovery failure", async () => {
     const h = await officeHarness();
@@ -102,10 +121,9 @@ describe("office opening and creation", () => {
       const request = { parent: "/", name: `New.${ext}` };
       const created = await h.service.create(input, request);
       expect(created.path).toBe(`/New.${ext}`);
-      const bytes = await new Response((await h.storage.download(created.path)).body).arrayBuffer();
+      const bytes = await new Response((await h.storage.open(created.path)).stream()).arrayBuffer();
       expect(Buffer.from(bytes).subarray(0, 2).toString()).toBe("PK");
-      await expect(h.service.create(input, request)).rejects.toMatchObject({ status: 409 });
-      expect(h.events.at(-1)?.type).toBe("fs");
+      await expect(h.service.create(input, request)).rejects.toMatchObject({ kind: "conflict" });
     },
   );
   it("serializes concurrent creates and publishes without overwriting a name taken meanwhile", async () => {
@@ -123,20 +141,12 @@ describe("office opening and creation", () => {
       expect.anything(),
       expect.objectContaining({ overwrite: false }),
     );
-    // A writer outside fdrive takes the name between the check and the
-    // publish: the storage refuses it, and nothing is overwritten.
+    // A name taken by a writer outside fdrive is refused, and nothing is overwritten.
     upload.mockRejectedValueOnce(new StorageError("conflict", "exists"));
     await expect(h.service.create(input, { parent: "/", name: "Race.docx" })).rejects.toMatchObject(
       { kind: "conflict" },
     );
     await expect(h.storage.statFile("/Race.docx")).rejects.toMatchObject({ kind: "not_found" });
-    const stat = vi
-      .spyOn(h.storage, "statFile")
-      .mockResolvedValueOnce({ size: 1, modifiedAt: null, contentType: null });
-    await expect(
-      h.service.create(input, { parent: "/", name: "Taken.docx" }),
-    ).rejects.toMatchObject({ status: 409 });
-    stat.mockRestore();
   });
   it("preserves storage denial and directory collisions", async () => {
     const h = await officeHarness();
@@ -147,12 +157,17 @@ describe("office opening and creation", () => {
           identity: h.alice.identity,
           session: h.alice.session,
           storage: h.storage,
-          scopes: [{ rootName: "files", fsPrefix: "/shared", virtualPrefix: "/" }],
         },
         "/directory.docx",
       ),
     ).toBe(true);
-    vi.spyOn(h.storage, "statFile").mockRejectedValue(new StorageError("forbidden", "private"));
+    await expect(
+      h.service.create(
+        { principal: h.alice.principal, sessionId: h.alice.sessionId },
+        { parent: "/", name: "directory.docx" },
+      ),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    vi.spyOn(h.storage, "upload").mockRejectedValue(new StorageError("forbidden", "private"));
     await expect(
       h.service.create(
         { principal: h.alice.principal, sessionId: h.alice.sessionId },
@@ -194,20 +209,19 @@ describe("WOPI authentication", () => {
     await h.repos.sessions.delete(h.alice.session.idHash);
     expect((await h.callback(opened)).status).toBe(401);
   });
-  it("rechecks account, identity and provider on every callback", async () => {
+  it("rechecks the session's login on every callback", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    const get = vi.spyOn(h.repos.identities, "get");
-    get.mockResolvedValueOnce({ ...h.alice.identity, accountId: h.bob.account.id });
+    vi.spyOn(h.repos.sessions, "getByIdHash").mockResolvedValueOnce({
+      ...h.alice.session,
+      identityId: h.bob.identity.id,
+    });
     expect((await h.callback(opened)).status).toBe(401);
+    const get = vi.spyOn(h.repos.identities, "get");
     get.mockResolvedValueOnce(null);
     expect((await h.callback(opened)).status).toBe(401);
-    get.mockResolvedValueOnce({ ...h.alice.identity, providerId: randomUUID() });
-    expect((await h.callback(opened)).status).toBe(401);
-    vi.spyOn(h.repos.accounts, "get").mockResolvedValueOnce(null);
-    expect((await h.callback(opened)).status).toBe(401);
   });
-  it("rejects expired, removed, foreign-provider and newly out-of-scope records", async () => {
+  it("rejects expired, removed, another owner's unreachable and newly hidden records", async () => {
     const h = await officeHarness();
     const opened = await h.open();
     h.now.value = new Date(h.clock().getTime() + 8 * 3600000);
@@ -218,12 +232,12 @@ describe("WOPI authentication", () => {
     expect((await h.callback(opened)).status).toBe(404);
     const file = await h.files.get(opened.fileId);
     if (!file) throw new Error("missing");
-    get.mockResolvedValueOnce({ ...file, providerId: randomUUID() });
+    get.mockResolvedValueOnce({ ...file, identityId: h.bob.identity.id });
     expect((await h.callback(opened)).status).toBe(404);
-    get.mockResolvedValueOnce({ ...file, path: "other/a.docx" });
+    vi.spyOn(h.deps.grants, "pathFor").mockResolvedValueOnce(null);
     expect((await h.callback(opened)).status).toBe(404);
   });
-  it("rejects browser-session account mismatch and changed connection", async () => {
+  it("rejects browser-session account mismatch and a login whose storage is gone", async () => {
     const h = await officeHarness();
     await expect(
       h.service.open(
@@ -231,7 +245,12 @@ describe("WOPI authentication", () => {
         { path: "/a.docx", mode: "edit" },
       ),
     ).rejects.toMatchObject({ status: 401 });
-    const service = createOfficeService({ ...h.deps, location: async () => null });
+    const service = createOfficeService({
+      ...h.deps,
+      storageFactory: async () => {
+        throw new WopiError(401);
+      },
+    });
     await expect(
       service.open(
         { principal: h.alice.principal, sessionId: h.alice.sessionId },
@@ -268,7 +287,7 @@ describe("WOPI reads", () => {
       UserCanWrite: false,
       ReadOnly: true,
       UserCanNotWriteRelative: true,
-      OwnerId: h.provider.id,
+      OwnerId: h.alice.identity.id,
       UserId: h.alice.identity.id,
     });
     const content = await h.callback(opened, { contents: true });
@@ -293,38 +312,48 @@ describe("WOPI reads", () => {
       ).status,
     ).toBe(status);
   });
-  it("enforces configured max and detects a larger actual download", async () => {
+  it("enforces the configured max on the file it opens, and closes it", async () => {
     const h = await officeHarness({ config: { maxBytes: 5 } });
     const opened = await h.open();
-    await h.storage.upload("/a.docx", Buffer.from("longer"));
+    await h.storage.upload("/a.docx", Buffer.from("longer"), { overwrite: true });
+    // A document past the limit does not open, and an open one is not served.
+    await expect(h.open()).rejects.toMatchObject({ status: 413 });
+    const open = h.storage.open.bind(h.storage);
+    const close = vi.fn();
+    vi.spyOn(h.storage, "open").mockImplementation(async (path) => ({
+      ...(await open(path)),
+      close,
+    }));
     expect((await h.callback(opened, { contents: true })).status).toBe(413);
-    vi.spyOn(h.storage, "statFile").mockResolvedValue({
-      size: 5,
-      modifiedAt: null,
-      contentType: null,
-    });
     expect(
       (await h.callback(opened, { contents: true, headers: { "X-WOPI-MaxExpectedSize": "5" } }))
         .status,
     ).toBe(412);
-    expect((await h.callback(opened, { contents: true })).status).toBe(413);
+    expect(close).toHaveBeenCalledTimes(2);
   });
-  it("handles absent content metadata and errors inside async GET", async () => {
+  it("answers every Range and If-Range as every file route does", async () => {
+    const h = await officeHarness();
+    await h.storage.upload("/a.docx", Buffer.from(RANGE_FILE), { overwrite: true });
+    const opened = await h.open();
+    const cases = rangeCases((await h.storage.statFile("/a.docx")).modifiedAt);
+    for (const item of cases) {
+      await expectRangeAnswer(
+        await h.callback(opened, { contents: true, headers: rangeHeaders(item) }),
+        item,
+      );
+    }
+  });
+  it("types a document by its name, with its length and time, and fails inside async GET", async () => {
     const h = await officeHarness();
     const opened = await h.open();
-    const original = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockImplementation(async (...args) => ({
-      ...(await original(...args)),
-      contentLength: null,
-      lastModified: null,
-      contentType: "text/plain",
-    }));
     const content = await h.callback(opened, { contents: true });
-    expect(content.headers.get("Content-Type")).toBe("text/plain");
+    expect(content.headers.get("Content-Type")).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    );
+    expect(content.headers.get("Content-Length")).toBe("5");
+    expect(content.headers.get("Last-Modified")).toBe(new Date(0).toUTCString());
     expect(await content.text()).toBe("hello");
-    const info = (await (await h.callback(opened)).json()) as { LastModifiedTime?: string };
-    expect(info.LastModifiedTime).toBeUndefined();
-    vi.spyOn(h.storage, "download").mockRejectedValue(new Error("private"));
+    vi.spyOn(h.storage, "contentStamp").mockRejectedValue(new Error("private"));
     expect((await h.callback(opened)).status).toBe(500);
   });
   it("returns 501 for unsupported methods", async () => {
@@ -346,7 +375,7 @@ it("supports an old-proof-only rotation and rejects absent timestamp", async () 
   noTimestamp.headers.delete("X-WOPI-TimeStamp");
   expect((await h.app.request(noTimestamp)).status).toBe(500);
 });
-it("revalidates session expiry and principal account even with permissive repositories", async () => {
+it("revalidates session expiry and the session's login even with permissive repositories", async () => {
   const h = await officeHarness();
   const opened = await h.open();
   const sessions = vi
@@ -357,7 +386,7 @@ it("revalidates session expiry and principal account even with permissive reposi
   await expect(
     h.service.open(
       {
-        principal: { ...h.alice.principal, accountId: h.bob.account.id },
+        principal: { ...h.alice.principal, identityId: h.bob.identity.id },
         sessionId: h.alice.sessionId,
       },
       { path: "/a.docx", mode: "edit" },
@@ -374,12 +403,6 @@ it("returns router-compatible folder and explicit edit links from view mode", as
   expect(info.CloseUrl).toBe(`${h.config.appUrl}/files/folder%20%C3%A5`);
   expect(info.HostViewUrl).toContain("?mode=view");
   expect(info.HostEditUrl).toContain("?mode=edit");
-  vi.spyOn(h.repos.sessions, "getByIdHash").mockResolvedValue({
-    ...h.alice.session,
-    activeIdentityId: h.bob.identity.id,
-  });
-  const nonactive = (await (await h.callback(opened)).json()) as Record<string, unknown>;
-  expect(nonactive.CloseUrl).toBe(`${h.config.appUrl}/files`);
 });
 
 it("applies runtime activation changes to status, opens and existing callbacks", async () => {

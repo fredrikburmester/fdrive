@@ -7,6 +7,7 @@
 
 export { FileIcon } from "@/components/files/file-icon";
 export { apiClient } from "@/lib/api/client";
+export { queryKeys } from "@/lib/api/keys";
 export { pathFromFilesPathname, pathToHref, viewHref } from "@/lib/files/path-url";
 export { revealTarget } from "@/lib/files/reveal";
 export type { StorageLike } from "@/lib/files/storage";

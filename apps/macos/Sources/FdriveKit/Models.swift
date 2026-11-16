@@ -2,6 +2,9 @@ import Foundation
 
 public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case invalidServer, authentication, unavailable, missing, expiredSnapshot, changedContent, unsupported, cancelled
+    /// The server no longer holds this credential (revoked, or deleted with its login): a
+    /// 401 carrying `credential_gone`. A plain 401 is `authentication`.
+    case credentialGone
     case server(String), database(String)
     case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
     case nameCollision(String)
@@ -10,6 +13,7 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
         case .authentication: "Sign in again to reconnect this location."
+        case .credentialGone: "The server no longer has this connection. Connect again to use this location."
         case .unavailable: "The server is unavailable. Downloaded files may still be available offline."
         case .missing: "This item no longer exists."
         case .expiredSnapshot: "The folder changed or its listing expired. Refresh to try again."
@@ -77,6 +81,8 @@ public struct Location: Codable, Sendable, Equatable {
     public var writeUnavailableReason: String? = nil
     /// The server answers folder checks, so a refresh lists only folders that changed.
     public var listingChecks: Bool? = nil
+    /// The server answers which folders changed since an anchor, so a refresh asks once.
+    public var changeFeed: Bool? = nil
 }
 public struct Credential: Codable, Sendable {
     public let token: String
@@ -165,6 +171,22 @@ public struct FolderCheck: Codable, Sendable, Equatable { public let path: Strin
 public enum FolderState: String, Codable, Sendable { case unchanged, changed, missing, forbidden }
 public struct FolderStatus: Codable, Sendable, Equatable { public let path: String; public let status: FolderState }
 struct FolderChecks: Codable, Sendable { let folders: [FolderStatus] }
+/// One answer of the server's change feed: what changed after an anchor, or `resync` when the
+/// anchor is unknown, from before a restore or older than the changes the server keeps.
+public struct ChangePage: Codable, Sendable, Equatable {
+    public enum Status: String, Codable, Sendable { case changes, resync }
+    public let status: Status
+    /// Changed paths: each browsed folder at or below one is listed, each download there checked.
+    public var paths: [String]? = nil
+    /// Folders whose listing changed because something in them did.
+    public var folders: [String]? = nil
+    public let anchor: String
+    /// More changes follow; ask again from `anchor` before applying any.
+    public var more: Bool? = nil
+    public init(status: Status, paths: [String]? = nil, folders: [String]? = nil, anchor: String, more: Bool? = nil) {
+        self.status = status; self.paths = paths; self.folders = folders; self.anchor = anchor; self.more = more
+    }
+}
 public struct ContentVersion: Codable, Sendable { public let path: String; public let version: String; public let size: Int64 }
 public struct Versions: Codable, Sendable { public let items: [ContentVersion] }
 
@@ -173,9 +195,15 @@ public struct SavedLocation: Codable, Sendable, Identifiable, Equatable {
     public let server: URL
     public var location: Location
     public let expiresAt: String?
+    /// Removal has started. Nothing uses the credential any more, and every launch and refresh
+    /// finishes the removal until it succeeds.
     public var disconnecting: Bool
-    public init(id: String = UUID().uuidString, server: URL, location: Location, expiresAt: String? = nil, disconnecting: Bool = false) {
-        self.id = id; self.server = server; self.location = location; self.expiresAt = expiresAt; self.disconnecting = disconnecting
+    /// When the server first said this credential is gone. Absent from older configurations.
+    public var goneSince: Date? = nil
+    public init(id: String = UUID().uuidString, server: URL, location: Location, expiresAt: String? = nil,
+                disconnecting: Bool = false, goneSince: Date? = nil) {
+        self.id = id; self.server = server; self.location = location; self.expiresAt = expiresAt
+        self.disconnecting = disconnecting; self.goneSince = goneSince
     }
     public var title: String { "\(location.displayName) (\(location.username))" }
 
@@ -243,16 +271,10 @@ public struct WriteRequest: Codable, Sendable {
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 }
-/// How far a publication that runs long enough to be worth watching has got, in
-/// bytes. Only a publication that copies object by object reports it.
-public struct WriteProgress: Codable, Sendable {
-    public let completed: Int64, total: Int64
-}
 public struct WriteResult: Codable, Sendable {
     public let operationId: String, state: String
     public let item: RemoteEntry?
     public let recoveryId: String?
-    public var progress: WriteProgress? = nil
 }
 public struct PendingWrite: Codable, Sendable, Identifiable {
     public let id: String, key: String, localId: String, route: String

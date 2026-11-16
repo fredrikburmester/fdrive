@@ -70,21 +70,29 @@ describe("stat on a disk that ignores how accents are encoded", () => {
     expect(await f.storage.stat(`/${TYPED}`)).toMatchObject({ kind: "dir", path: `/${STORED}` });
   });
 
-  it("says nothing more for a path asked by its stored spelling", async () => {
-    expect(await f.storage.stat(`/${STORED}/Notes/plan.txt`)).not.toHaveProperty("path");
-    expect(await f.storage.stat("/")).not.toHaveProperty("path");
+  it("reports the path asked for when it is the stored spelling", async () => {
+    expect(await f.storage.stat(`/${STORED}/Notes/plan.txt`)).toMatchObject({
+      path: `/${STORED}/Notes/plan.txt`,
+      name: "plan.txt",
+    });
+    expect(await f.storage.stat("/")).toMatchObject({ path: "/", name: "" });
   });
 
   it("reports a shared folder's spelling under the name the user sees it by", async () => {
     const bob = createUserStorage({
       home: join(f.root, "bob"),
-      shared: async () => [{ name: "Alice's", dir: f.home, ownerHome: f.home, writable: false }],
+      shared: async () => [
+        { name: "Alice's", dir: f.home, owner: "alice", ownerHome: f.home, writable: false },
+      ],
     });
     expect(await bob.stat(`/Shared with me/Alice's/${TYPED}/Notes`)).toMatchObject({
       kind: "dir",
       path: `/Shared with me/Alice's/${STORED}/Notes`,
     });
-    expect(await bob.stat("/Shared with me/Alice's")).not.toHaveProperty("path");
+    expect(await bob.stat("/Shared with me/Alice's")).toMatchObject({
+      path: "/Shared with me/Alice's",
+      name: "Alice's",
+    });
   });
 });
 

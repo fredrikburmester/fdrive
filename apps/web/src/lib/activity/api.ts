@@ -1,6 +1,5 @@
 import {
   ActivityFileResponse,
-  ActivityLocationsResponse,
   ApiError,
   CanonicalUuid,
   type PersonalActivityFilters,
@@ -43,18 +42,13 @@ export async function activityFeed(filters: Partial<PersonalActivityFilters>, sc
 export async function activityFile(id: string) {
   return ActivityFileResponse.parse(await activityRequest(`/files/${encodeURIComponent(id)}`));
 }
-/** The history ID recorded for a path of one login, or null while nothing has been recorded there. */
-export async function resolveActivityFile(identityId: string, path: string) {
+/** The history ID recorded for a path, or null while nothing has been recorded there. */
+export async function resolveActivityFile(path: string) {
   try {
-    const value = await activityRequest(
-      `/files/resolve?${new URLSearchParams({ identityId, path })}`,
-    );
+    const value = await activityRequest(`/files/resolve?${new URLSearchParams({ path })}`);
     return CanonicalUuid.parse((value as { id?: unknown }).id);
   } catch (error) {
     if (error instanceof ActivityRequestError && error.status === 404) return null;
     throw error;
   }
-}
-export async function activityLocations() {
-  return ActivityLocationsResponse.parse(await activityRequest("/locations")).items;
 }

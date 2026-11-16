@@ -1,17 +1,23 @@
 import type { ApiTokenAccess } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
+import type { Login } from "@fdrive/db";
 import type { Context, MiddlewareHandler } from "hono";
 import { ApiHttpError } from "../errors.js";
+import { buildUserStorage, type StorageSource } from "./storage-factory.ts";
 
 /**
- * The authenticated caller of a request: which account and identity they
- * are acting as, plus the storage adapter scoped to that identity. Route
- * handlers behind `createRequireAuth` read this from `c.get("principal")`.
+ * The authenticated caller of a request: which account and login they act
+ * as, read with whatever authenticated the request, plus the storage
+ * adapter scoped to that login. Route handlers behind `createRequireAuth`
+ * read this from `c.get("principal")`; nothing needs to look the login up
+ * again.
  */
 export interface Principal {
   readonly accountId: string;
   readonly identityId: string;
+  /** The login's username, which names its home folder and its index scopes. */
   readonly username: string;
+  /** Built on first use, so a request that touches no files builds none. */
   readonly storage: StorageProvider;
   /** True when this account can reach the System admin routes and pages. */
   readonly isAdmin: boolean;
@@ -19,14 +25,45 @@ export interface Principal {
   readonly tokenAccess?: ApiTokenAccess;
   /**
    * Re-checks that whatever authenticated this principal (its session) is
-   * still valid and still entitles it to act as `identityId`: the session
-   * exists, is unexpired and under its maximum age, and the identity still
-   * belongs to the session's account. Work that outlives the request (a
-   * queued job) must call this before touching storage so a logout, an
-   * unlink or a revocation stops it. Absent for principals that cannot go
-   * stale beyond the request itself.
+   * still valid: the session exists, is unexpired and under its maximum
+   * age. Work that outlives the request (a queued job) must call this
+   * before touching storage so a logout or a revocation stops it. Absent
+   * for principals that cannot go stale beyond the request itself.
    */
   readonly verifyAuthority?: () => Promise<boolean>;
+}
+
+/** What a principal adds to its login: a token's grants, a session's recheck. */
+export type PrincipalExtras = Pick<Principal, "tokenAccess" | "verifyAuthority">;
+
+/** Builds the principal of an admitted login. */
+export type PrincipalFactory = (login: Login, extras?: PrincipalExtras) => Promise<Principal>;
+
+export interface CreatePrincipalFactoryDeps {
+  readonly folder: Pick<StorageSource, "storage">;
+}
+
+/**
+ * Builds principals for logins a session or token query already read and
+ * admitted, so a request reads nothing more to act: the storage is built
+ * from the username on first use (`buildUserStorage`). The caller refuses
+ * an inactive login before asking.
+ */
+export function createPrincipalFactory(deps: CreatePrincipalFactoryDeps): PrincipalFactory {
+  return async (login, extras) => {
+    let storage: StorageProvider | undefined;
+    return {
+      accountId: login.accountId,
+      identityId: login.identityId,
+      username: login.username,
+      isAdmin: login.isAdmin,
+      get storage() {
+        storage ??= buildUserStorage(deps.folder, login.username);
+        return storage;
+      },
+      ...extras,
+    };
+  };
 }
 
 /** Hono `Variables` shape for routes mounted behind `createRequireAuth`. */

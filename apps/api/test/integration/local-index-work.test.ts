@@ -1,45 +1,50 @@
 import { createHash } from "node:crypto";
-import type { StorageProvider, StorageSession } from "@fdrive/core";
+import type { StorageProvider } from "@fdrive/core";
 import {
+  createChangeWriter,
   createDb,
   createIndexQueries,
-  createIndexWorkWriter,
   createRepos,
+  INDEX_ROOT_ID,
   migrate,
 } from "@fdrive/db";
-import { createLocalModule, type IndexChange, type LocalUsers } from "@fdrive/local";
+import { createFilesFolder, type IndexChange, type LocalUsers } from "@fdrive/local";
 import { sql } from "drizzle-orm";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createIndexWorkQueue, type IndexWorkQueue } from "../../src/local/index-work.js";
+import { Client } from "pg";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { type ChangeQueue, createChangeQueue } from "../../src/local/change-queue.js";
+import { createNameIndexClient } from "../../src/search/name-index.js";
 import { LocalIndexerStack } from "./helpers/local-indexer-stack.js";
 
 const users: LocalUsers = {
-  verify: async () => ({ result: "invalid" }),
   status: async () => "active",
   shared: async () => [],
 };
 
-function session(externalUsername: string): StorageSession {
-  return {
-    externalUsername,
-  };
-}
-
 /**
  * The watcher is off and the next scan is an hour away, so anything indexed
- * within seconds reached the indexer through `idx.work`.
+ * within seconds reached the indexer through the change journal.
  */
 describe("changes fdrive makes, through the real indexer with its watcher off", () => {
   const stack = new LocalIndexerStack();
   let connection: ReturnType<typeof createDb>;
-  let queue: IndexWorkQueue;
+  let queue: ChangeQueue;
   let storage: StorageProvider;
   const failures: unknown[] = [];
+  /** Each time the indexer said it took a change in (`LISTEN idx_events`), by root name. */
+  const heard: string[] = [];
+  let listener: Client | undefined;
 
   beforeAll(async () => {
     await stack.startDatabaseAndStorage();
     connection = createDb(stack.connectionString);
     await migrate(connection.db);
+    listener = new Client({ connectionString: stack.connectionString });
+    listener.on("notification", (message) => {
+      if (message.channel === "idx_events") heard.push(message.payload ?? "");
+    });
+    await listener.connect();
+    await listener.query("LISTEN idx_events");
     // Text search reads plain text itself, so no ml service is needed.
     await createRepos(connection.db).settings.set("features.configuration", {
       version: 1,
@@ -55,23 +60,26 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
       },
     });
     await stack.startIndexer({ watch: false });
-    queue = createIndexWorkQueue({
-      write: createIndexWorkWriter(connection.db),
+    // The indexer starts reading the journal at its end; changes before that
+    // are its first scan's.
+    await vi.waitFor(async () => expect(await indexerPosition()).not.toBeNull(), {
+      timeout: 15_000,
+      interval: 100,
+    });
+    queue = createChangeQueue({
+      write: createChangeWriter(connection.db, "api"),
       onError: (error) => failures.push(error),
     });
-    const module = createLocalModule({
+    storage = createFilesFolder({
       root: stack.folder.root,
       users,
-      indexRoot: "files",
-      onIndexChange: (root, change) => queue.record(root, change),
-    });
-    storage = module.createStorage({ id: "p1", baseUrl: "local", config: {} }, session("alice"), {
-      fetch: globalThis.fetch,
-    });
+      onIndexChange: (change) => queue.record(change),
+    }).storage("alice");
   }, 720_000);
 
   afterAll(async () => {
     try {
+      await listener?.end();
       await connection?.close();
     } finally {
       await stack.stop();
@@ -81,7 +89,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   async function notes(): Promise<{ path: string; sha256: string | null; status: string }[]> {
     const result = await connection.db.execute(
       sql`select path, sha256, text_status from idx.files
-          where path like 'alice/notes/%' and deleted_at is null order by path`,
+          where path like 'alice/notes/%' order by path`,
     );
     return result.rows.map((row) => ({
       path: String(row.path),
@@ -100,21 +108,46 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   async function settle(change: IndexChange, paths: Record<string, boolean>): Promise<void> {
     await queue.flush();
     for (const [path, present] of Object.entries(paths)) await stack.seen(path, present);
-    queue.record("files", change);
+    queue.record(change);
     await queue.flush();
   }
 
-  async function count(table: "idx.scans" | "idx.work"): Promise<number> {
+  async function count(table: "idx.scans"): Promise<number> {
     const result = await connection.db.execute(
       sql`select count(*)::int as n from ${sql.raw(table)}`,
     );
     return Number(result.rows[0]?.n);
   }
 
+  /** The position the indexer has read the journal to, or `null` before it started. */
+  async function indexerPosition(): Promise<number | null> {
+    const result = await connection.db.execute(
+      sql`select position from idx.change_cursors where consumer = 'indexer'`,
+    );
+    const position = result.rows[0]?.position;
+    return position === undefined ? null : Number(position);
+  }
+
+  /** Every row of the journal, by source, then whether the indexer read past them. */
+  async function journal(): Promise<{ sources: string[]; read: boolean }> {
+    const result = await connection.db.execute(
+      sql`select coalesce(max(id), 0)::bigint as newest, array_agg(distinct source) as sources
+          from idx.changes`,
+    );
+    const row = result.rows[0];
+    return {
+      sources: (row?.sources as string[] | null) ?? [],
+      read: (await indexerPosition()) === Number(row?.newest),
+    };
+  }
+
   it("indexes an upload, follows its move and drops it once deleted, within seconds", async () => {
     const scans = await count("idx.scans");
     const bytes = new TextEncoder().encode("quarterly invoice from the harbour office");
-    await storage.upload("/notes/invoice.txt", bytes, { mkdirParents: true });
+    // As the browser uploads, published by a rename. A new file published
+    // with a hard link, then moved, stays visible under its old name to a
+    // Docker Desktop container for longer than `seen` waits.
+    await storage.upload("/notes/invoice.txt", bytes, { mkdirParents: true, overwrite: true });
     await queue.flush();
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([
       {
@@ -146,11 +179,16 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     await expect.poll(notes, { timeout: 15_000, interval: 100 }).toEqual([]);
 
-    const events = await connection.db.execute(
-      sql`select kind from idx.events where path like 'alice/notes/%' order by id`,
-    );
-    expect(events.rows.map((row) => row.kind)).toEqual(["created", "moved", "deleted"]);
-    await expect.poll(() => count("idx.work"), { timeout: 15_000, interval: 100 }).toBe(0);
+    // The indexer said it took each change in, naming only its root; nothing stores that.
+    await expect
+      .poll(() => heard.length, { timeout: 15_000, interval: 100 })
+      .toBeGreaterThanOrEqual(3);
+    expect(new Set(heard)).toEqual(new Set(["files"]));
+    // Only fdrive wrote rows: the first scan of an empty index journaled
+    // nothing, and the indexer has read every row.
+    await expect
+      .poll(journal, { timeout: 15_000, interval: 100 })
+      .toEqual({ sources: ["api"], read: true });
     expect(await count("idx.scans")).toBe(scans);
     expect(failures).toEqual([]);
   });
@@ -158,8 +196,7 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
   it("records a new folder, empty or not, so search finds it by name within seconds", async () => {
     const scans = await count("idx.scans");
     const queries = createIndexQueries(connection.db);
-    const roots = await queries.rootIdsByName();
-    const scope = [{ rootId: roots.files ?? -1, fsPrefix: "/alice" }];
+    const scope = [{ rootId: INDEX_ROOT_ID, fsPrefix: "/alice" }];
     const found = async () =>
       (await queries.folders(scope, ["microlä"], "Microlä", 10)).map((row) =>
         row.path.normalize("NFC"),
@@ -187,6 +224,39 @@ describe("changes fdrive makes, through the real indexer with its watcher off", 
     );
     await expect.poll(found, { timeout: 15_000, interval: 100 }).toEqual([]);
     expect(await count("idx.scans")).toBe(scans);
+    expect(failures).toEqual([]);
+  });
+
+  it("finds a new folder by a name typed with a typo, and follows it when it moves", async () => {
+    const names = createNameIndexClient({
+      baseUrl: await stack.indexerUrl(),
+      fetch: globalThis.fetch,
+    });
+    const found = async () => {
+      const hits = await names.search({
+        query: "Microlär",
+        scopes: [{ rootId: INDEX_ROOT_ID, fsPrefix: "/alice" }],
+        exclude: { prefixes: [] },
+        files: 5,
+        folders: 5,
+      });
+      return hits?.folders.map((hit) => hit.path.normalize("NFC")) ?? null;
+    };
+
+    await storage.mkdir("/Kurser/Mikrolärande", { parents: true });
+    await settle({ kind: "changed", path: "alice/Kurser" }, { "alice/Kurser/Mikrolärande": true });
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Kurser/Mikrolärande"]);
+
+    await storage.move("/Kurser/Mikrolärande", "/Mikrolärande 2026");
+    await settle(
+      { kind: "moved", path: "alice/Kurser/Mikrolärande", target: "alice/Mikrolärande 2026" },
+      { "alice/Kurser/Mikrolärande": false, "alice/Mikrolärande 2026": true },
+    );
+    await expect
+      .poll(found, { timeout: 15_000, interval: 100 })
+      .toEqual(["alice/Mikrolärande 2026"]);
     expect(failures).toEqual([]);
   });
 });

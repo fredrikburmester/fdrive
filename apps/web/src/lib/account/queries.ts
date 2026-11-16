@@ -37,17 +37,8 @@ export function useRevokeApiToken() {
   });
 }
 
-/** Favorites retain their owning identity, including duplicate virtual paths. */
-export function useAccountFavorites(accountId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.account.favorites(accountId ?? ""),
-    queryFn: () => apiClient.accountFavorites(),
-    enabled: accountId !== undefined,
-  });
-}
-
 /**
- * Changes the active local login's own password. The API ends the
+ * Changes the signed-in login's own password. The API ends the
  * account's other sessions; this one stays signed in, so nothing cached
  * needs refreshing.
  */

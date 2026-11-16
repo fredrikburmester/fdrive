@@ -17,14 +17,15 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { createGzip } from "node:zlib";
 import { createDb, migrate } from "@fdrive/db";
-import { startPostgres } from "@fdrive/testkit";
+import { migrationsThrough, SQUASHED_MIGRATIONS, startPostgres } from "@fdrive/testkit";
 import { Decrypter, Encrypter, generateIdentity, identityToRecipient } from "age-encryption";
+import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
 import type { Pool } from "pg";
 import tar from "tar-stream";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import {
-  AttachmentStore,
   assertCoverage,
+  BACKUP_GATE,
   BackupEngine,
   BackupOperations,
   BackupStore,
@@ -34,7 +35,6 @@ import {
   destinationKey,
   digest,
   discoverBackups,
-  extractAttachment,
   fetchBackup,
   inspectArchive,
   legacyOcrMappings,
@@ -49,7 +49,7 @@ import {
   restoreArchive,
   retentionKeep,
   verifyDelivery,
-  withBackupWriter,
+  withDatabaseWriter,
 } from "../src/index.js";
 import type { BackupSource, SnapshotHeader, SnapshotManifest } from "../src/types.js";
 import { memoryDestination, required, secrets } from "./helpers.js";
@@ -143,28 +143,20 @@ afterAll(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 }, 180_000);
 
-it("roundtrips all registered tables, configuration ZIPs and exact bigint values", async () => {
+it("roundtrips all registered tables, recovery files and exact bigint values", async () => {
   await db.pool.query(
     "insert into app.system_events(id,subsystem,level,message,data) values(9007199254740993,'general','info','Durable activity',$1)",
     [JSON.stringify({ nested: ["x", null] })],
   );
-  const attachments = new AttachmentStore(store, join(directory, randomUUID()), secrets);
-  const id = await attachments.upload(
-    {
-      label: "Router",
-      filename: "router.zip",
-      sourceDate: "2026-09-01T00:00:00Z",
-      notes: "External configuration",
-    },
-    bytesStream(Buffer.from("opaque ZIP bytes")),
-  );
-  const rows = await store.attachments();
-  expect(await store.attachment(id)).not.toBeNull();
+  const root = join(directory, randomUUID());
+  await mkdir(root);
+  await writeFile(join(root, "proof.key"), "office recovery bytes");
   const file = await snapshot({
-    blobs: async () => ({ sources: rows.map((row) => attachments.source(row)), coverage: [] }),
+    blobs: async () => ({ sources: await localBlobs(root, "office"), coverage: [] }),
   });
   const inspection = await inspectArchive(file.output, key);
   expect(Object.keys(inspection.manifest.tables)).toHaveLength(DURABLE_TABLES.length);
+  expect(inspection.manifest.blobs).toMatchObject([{ kind: "office", path: "proof.key" }]);
   const target = await fresh();
   const stage = join(directory, randomUUID());
   await mkdir(stage);
@@ -173,7 +165,6 @@ it("roundtrips all registered tables, configuration ZIPs and exact bigint values
     file: file.output,
     identity: key,
     stateDirectory: stage,
-    secrets,
     reseal: (bytes) => bytes,
   });
   expect(
@@ -182,33 +173,108 @@ it("roundtrips all registered tables, configuration ZIPs and exact bigint values
   const state = (
     await target.pool.query("select value from app.settings where key='backup.restore.v1'")
   ).rows[0].value;
-  const restoredStore = new BackupStore(target.pool);
-  const restored = new AttachmentStore(
-    restoredStore,
-    join(state.stateDirectory, "attachments"),
-    secrets,
+  // Recovery files stay quarantined under their archive entry for the operator.
+  expect(await readFile(join(state.stateDirectory, "blobs-0"), "utf8")).toBe(
+    "office recovery bytes",
   );
-  expect(
-    (
-      await readBounded(await restored.download(required((await restoredStore.attachments())[0])))
-    ).toString(),
-  ).toBe("opaque ZIP bytes");
-  const record = required(inspection.manifest.blobs[0]);
-  const output = join(directory, `${randomUUID()}.zip`);
-  await extractAttachment(file.output, key, record, output);
-  expect(await readFile(output, "utf8")).toBe("opaque ZIP bytes");
-  await expect(extractAttachment(file.output, key, record, output)).rejects.toThrow();
-  expect(await readFile(output, "utf8")).toBe("opaque ZIP bytes");
   await expect(
     restoreArchive({
       pool: target.pool,
       file: file.output,
       identity: key,
       stateDirectory: stage,
-      secrets,
       reseal: (bytes) => bytes,
     }),
   ).rejects.toThrow("not empty");
+  // A rehearsal restores under an installation identity of its own.
+  const rehearsal = await fresh();
+  await restoreArchive({
+    pool: rehearsal.pool,
+    file: file.output,
+    identity: key,
+    stateDirectory: stage,
+    reseal: (bytes) => bytes,
+    rehearsal: true,
+  });
+  const restored = await new BackupStore(rehearsal.pool).configuration();
+  expect(restored.restored).toBe(true);
+  expect(restored.installation_id).not.toBe(inspection.header.installationId);
+});
+it("restores across a database upgraded from v0.7.0-rc.11 and a new install, both ways", async () => {
+  /** A database v0.7.0-rc.11 left (the squashed history through 0046), not yet upgraded. */
+  async function rc11() {
+    const name = `backup_rc11_${sequence++}`;
+    await control.pool.query(`create database ${name}`);
+    const url = new URL(container.connectionString);
+    url.pathname = `/${name}`;
+    const database = createDb(url.toString());
+    databases.push(database);
+    const migrations = await migrationsThrough(SQUASHED_MIGRATIONS, "0046_trash_items");
+    try {
+      await runMigrations(database.db, { migrationsFolder: migrations });
+    } finally {
+      await rm(migrations, { recursive: true, force: true });
+    }
+    return database;
+  }
+  async function rows(pool: Pool, table: string) {
+    return (await pool.query(`select to_jsonb(t) as row from ${table} t order by 1`)).rows;
+  }
+  async function restore(target: Pool, file: string) {
+    const stage = join(directory, randomUUID());
+    await mkdir(stage);
+    await restoreArchive({
+      pool: target,
+      file,
+      identity: key,
+      stateDirectory: stage,
+      reseal: (bytes) => bytes,
+    });
+  }
+  // The owner's database: Trash rows and a link as rc.11 stored them, then this release's upgrade.
+  const owner = await rc11();
+  const account = randomUUID();
+  const login = randomUUID();
+  await owner.pool.query("insert into app.accounts (id) values ($1)", [account]);
+  await owner.pool.query(
+    "insert into app.identities (id, account_id, username) values ($1, $2, 'alice')",
+    [login, account],
+  );
+  await owner.pool.query(
+    `insert into app.trash_items (identity_id, original_path, name, kind, size, deleted_at) values
+      ($1, '/docs/report.pdf', 'report.pdf', 'file', 1234, '2026-11-14T10:00:00Z'),
+      ($1, '/photos/2024', '2024', 'dir', 0, '2026-11-13T09:00:00Z')`,
+    [login],
+  );
+  await owner.pool.query(
+    "insert into app.shares (identity_id, name, scope, paths) values ($1, 'Report', 'read', array['/docs/report.pdf'])",
+    [login],
+  );
+  await migrate(owner.db);
+  const output = join(directory, `${randomUUID()}.age`);
+  await captureSnapshot(source({ pool: owner.pool }), {
+    id: randomUUID(),
+    installationId: (await new BackupStore(owner.pool).configuration()).installation_id,
+    recipient,
+    output,
+  });
+
+  const installed = await fresh();
+  await restore(installed.pool, output);
+  for (const table of ["app.identities", "app.trash_items", "app.shares"])
+    expect(await rows(installed.pool, table)).toEqual(await rows(owner.pool, table));
+  expect(await rows(installed.pool, "app.trash_items")).toHaveLength(2);
+
+  // A new install's backup restores onto an upgraded database as well.
+  await db.pool.query(
+    "insert into app.system_events(id,subsystem,level,message) values(7,'general','info','Installed')",
+  );
+  const upgraded = await rc11();
+  await migrate(upgraded.db);
+  await restore(upgraded.pool, (await snapshot()).output);
+  expect(await rows(upgraded.pool, "app.system_events")).toEqual(
+    await rows(db.pool, "app.system_events"),
+  );
 });
 it("rejects wrong keys, damaged ciphertext, unknown tables and missing required schema", async () => {
   const file = await snapshot();
@@ -232,13 +298,13 @@ it("keeps partial metadata snapshots honest and rejects changed source files", a
   const root = join(directory, randomUUID());
   await mkdir(root);
   await writeFile(join(root, "bytes"), "123");
-  const selected = await localBlobs(root, "desktop");
+  const selected = await localBlobs(root, "office");
   await appendFile(join(root, "bytes"), "4");
   await expect(required(selected[0]).open()).rejects.toThrow("changed");
   const metadata = await snapshot(
     {
       blobs: async () => ({
-        sources: await localBlobs(root, "desktop"),
+        sources: await localBlobs(root, "office"),
         coverage: ["Office keys unavailable"],
       }),
     },
@@ -246,13 +312,14 @@ it("keeps partial metadata snapshots honest and rejects changed source files", a
   );
   const result = await inspectArchive(metadata.output, key);
   expect(result.manifest.blobs).toHaveLength(0);
-  expect(result.manifest.coverage).toHaveLength(2);
+  // A metadata-only capture never lists recovery files, so it reports them excluded instead.
+  expect(result.manifest.coverage).toEqual(["Recovery files excluded by metadata-only request"]);
   const regular = await snapshot({
-    blobs: async () => ({ sources: await localBlobs(root, "desktop"), coverage: [] }),
+    blobs: async () => ({ sources: await localBlobs(root, "office"), coverage: [] }),
   });
   expect((await inspectArchive(regular.output, key)).manifest.blobs[0]?.size).toBe(4);
   await symlink("bytes", join(root, "link"));
-  await expect(localBlobs(root, "desktop")).rejects.toThrow("Symbolic links");
+  await expect(localBlobs(root, "office")).rejects.toThrow("Symbolic links");
 });
 it("streams bounded entries and stable prefixes of diagnostic logs", async () => {
   expect(await digest(bytesStream(Buffer.from("abc")))).toEqual({
@@ -271,29 +338,6 @@ it("streams bounded entries and stable prefixes of diagnostic logs", async () =>
   await appendFile(join(root, "service.log"), "after\n");
   for (const file of files) expect((await readBounded(await file.open())).length).toBe(file.size);
   await expect(localBlobs(root, "logs", 0)).rejects.toThrow("Too many");
-});
-it("publishes immutable configuration versions and preserves old bytes on failed replacement", async () => {
-  const attachments = new AttachmentStore(store, join(directory, randomUUID()), secrets, 10, 20);
-  const metadata = { label: "Config", filename: "config.zip", sourceDate: null, notes: "" };
-  const id = await attachments.upload(metadata, bytesStream(Buffer.from("first")));
-  const first = await store.attachment(id);
-  await expect(attachments.upload(metadata, bytesStream(Buffer.alloc(11)), id)).rejects.toThrow(
-    "quota",
-  );
-  expect((await store.attachment(id))?.version_id).toBe(first?.version_id);
-  await expect(
-    attachments.upload({ ...metadata, filename: "../config.zip" }, bytesStream(Buffer.from("bad"))),
-  ).rejects.toThrow("simple filename");
-  await expect(attachments.upload(metadata, bytesStream(Buffer.alloc(0)))).rejects.toThrow("empty");
-  await attachments.upload(metadata, bytesStream(Buffer.from("second")), id);
-  expect((await store.attachment(id))?.version_id).not.toBe(first?.version_id);
-  expect((await readBounded(await attachments.download(required(first)))).toString()).toBe("first");
-  await attachments.collect();
-  expect(await readdir(attachments.directory)).toHaveLength(1);
-  await store.deleteAttachment(id);
-  await attachments.collect();
-  expect(await store.attachment(id)).toBeNull();
-  expect(() => attachments.path("../bad")).toThrow();
 });
 it("checks key possession, owner authority, transactional queues and schedule validation", async () => {
   const { engine: worker } = engine();
@@ -410,33 +454,67 @@ it("retries the retained artifact after a destination fails without recapturing 
   await expect(worker.verify(id)).rejects.toThrow("Destination binding changed");
   await expect(worker.remove(id)).rejects.toThrow("Destination changed");
 });
-it("coordinates blob writers with capture using real PostgreSQL advisory locks", async () => {
+it("holds requests only for the database snapshot and recovery writers for the whole capture", async () => {
   let release!: () => void;
   const hold = new Promise<void>((resolve) => {
     release = resolve;
   });
   let writing = false;
-  const writer = withBackupWriter(db.pool, async () => {
+  const writer = withDatabaseWriter(db.pool, async () => {
     writing = true;
     await hold;
     return "done";
   });
   await vi.waitFor(() => expect(writing).toBe(true));
-  let captured = false;
+  let listing!: () => void;
+  const listed = new Promise<void>((resolve) => {
+    listing = resolve;
+  });
+  let finish!: () => void;
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let started = false;
+  const events = async () =>
+    Number((await db.pool.query("select count(*) from app.system_events")).rows[0].count);
+  const before = await events();
   const run = snapshot({
     blobs: async () => {
-      captured = true;
+      started = true;
+      listing();
+      await finished;
       return { sources: [], coverage: [] };
     },
   });
   await new Promise((resolve) => setTimeout(resolve, 30));
-  expect(captured).toBe(false);
+  // A request in flight holds the snapshot back until it ends.
+  expect(started).toBe(false);
   release();
   expect(await writer).toBe("done");
-  await run;
-  expect(captured).toBe(true);
+  await listed;
+  // The snapshot is taken: a request runs at once, and the snapshot does not see it.
+  await withDatabaseWriter(db.pool, () =>
+    db.pool.query(
+      "insert into app.system_events(subsystem,level,message,data) values('general','info','During capture','{}')",
+    ),
+  );
+  // A recovery file writer (OCR) waits until every recovery file is read.
+  const ocr = await db.pool.connect();
+  let recovering = false;
+  const recovery = ocr.query("select pg_advisory_lock_shared($1)", [BACKUP_GATE]).then(() => {
+    recovering = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(recovering).toBe(false);
+  finish();
+  const result = await run;
+  await recovery;
+  await ocr.query("select pg_advisory_unlock_shared($1)", [BACKUP_GATE]);
+  ocr.release();
+  expect(result.manifest.tables["app.system_events"]?.rows).toBe(before);
+  expect(await events()).toBe(before + 1);
   await expect(
-    withBackupWriter(db.pool, async () => {
+    withDatabaseWriter(db.pool, async () => {
       throw Error("writer failed");
     }),
   ).rejects.toThrow("writer failed");
@@ -587,7 +665,7 @@ it("fails capture safely and releases ownership when a source changes or cancell
     blobs: async () => ({
       sources: [
         {
-          kind: "desktop",
+          kind: "office",
           path: "payload",
           size: 3,
           open: async () => bytesStream(Buffer.from("larger")),
@@ -738,7 +816,7 @@ it("rejects untrusted archive structure before restoring any database rows or fi
       jsonEntry("manifest.json", {
         ...manifest,
         blobs: [
-          { entry: "blobs/0", kind: "desktop", path: "payload", size: 4, sha256: "0".repeat(64) },
+          { entry: "blobs/0", kind: "office", path: "payload", size: 4, sha256: "0".repeat(64) },
         ],
       }),
     ],
@@ -757,9 +835,8 @@ it("rejects untrusted archive structure before restoring any database rows or fi
   );
   const blob = {
     entry: "blobs/0",
-    kind: "remote" as const,
-    path: "/.fdrive-desktop/old",
-    identityId: randomUUID(),
+    kind: "office" as const,
+    path: "old",
     size: 4,
     sha256: createHash("sha256").update("data").digest("hex"),
   };
@@ -777,7 +854,6 @@ it("rejects untrusted archive structure before restoring any database rows or fi
       file: valid,
       identity: key,
       stateDirectory: directory,
-      secrets,
       reseal: (bytes) => bytes,
     }),
   ).rejects.toThrow("matching database schema");
@@ -789,17 +865,9 @@ it("rejects untrusted archive structure before restoring any database rows or fi
       file: valid,
       identity: key,
       stateDirectory: directory,
-      secrets,
       reseal: (bytes) => bytes,
     }),
   ).rejects.toThrow("same trusted");
-  const output = join(directory, randomUUID());
-  await expect(
-    extractAttachment(valid, key, { ...blob, entry: "blobs/9" }, output),
-  ).rejects.toThrow("not found");
-  await expect(
-    extractAttachment(valid, key, { ...blob, sha256: "0".repeat(64) }, output),
-  ).rejects.toThrow("integrity");
 });
 it("rejects stale or tampered remote catalogs and preserves existing output files", async () => {
   const remote = memoryDestination();
@@ -840,10 +908,10 @@ it("releases writer clients when acquiring or releasing the checkpoint fails", a
   const release = vi.fn();
   const query = vi.fn().mockRejectedValue(Error("connection lost"));
   const pool = { connect: async () => ({ query, release }) } as unknown as Pool;
-  await expect(withBackupWriter(pool, async () => "unused")).rejects.toThrow("connection lost");
+  await expect(withDatabaseWriter(pool, async () => "unused")).rejects.toThrow("connection lost");
   expect(release).toHaveBeenCalledOnce();
   query.mockResolvedValueOnce({}).mockResolvedValueOnce({});
-  expect(await withBackupWriter(pool, async () => "written")).toBe("written");
+  expect(await withDatabaseWriter(pool, async () => "written")).toBe("written");
   expect(release).toHaveBeenCalledTimes(2);
 });
 
@@ -871,7 +939,7 @@ it("cancels in-flight capture when its persisted lease is cancelled, replaced or
       blobs: async () => ({
         sources: [
           {
-            kind: "desktop" as const,
+            kind: "office" as const,
             path: "stalled",
             size: 1,
             open: async () => new Readable({ read() {} }),
@@ -962,7 +1030,7 @@ it("ends a stalled run on its deadline and when its worker ownership connection 
     worker.options.source.blobs = async () => ({
       sources: [
         {
-          kind: "desktop",
+          kind: "office",
           path: "stalled",
           size: 1,
           open: async () => new Readable({ read() {} }),
@@ -993,28 +1061,14 @@ it("ends a stalled run on its deadline and when its worker ownership connection 
   }
 });
 
-it("validates attachment bytes, recovers ordinary quarantine files, and refuses credential and blob reference corruption", async () => {
-  const attachments = new AttachmentStore(store, join(directory, "attachments"), secrets);
-  await attachments.collect();
-  const id = await attachments.upload(
-    { label: "Config", filename: "config.zip", sourceDate: null, notes: "" },
-    bytesStream(Buffer.from("config")),
-  );
-  const row = required(await store.attachment(id));
-  await expect(readBounded(await attachments.download({ ...row, bytes: "999" }))).rejects.toThrow(
-    "integrity",
-  );
-  await expect(
-    readBounded(await attachments.download({ ...row, sha256: "0".repeat(64) })),
-  ).rejects.toThrow("integrity");
+it("recovers ordinary quarantine files and refuses secret corruption and configuration ZIP entries", async () => {
   const result = await snapshot({
     blobs: async () => ({
       sources: [
         {
-          kind: "remote",
-          path: "/.fdrive-desktop/payload",
+          kind: "office",
+          path: "payload",
           sourceId: "mount-a",
-          identityId: randomUUID(),
           size: 3,
           open: async () => bytesStream(Buffer.from("old")),
         },
@@ -1028,7 +1082,6 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
     file: result.output,
     identity: key,
     stateDirectory: directory,
-    secrets,
     reseal: (bytes) => bytes,
   });
   const state = (
@@ -1039,16 +1092,16 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
   const header = (await inspectArchive(result.output, key)).header;
   const manifest = emptyManifest(header);
   const head = jsonEntry("header.json", header);
-  const values = required(header.schema["app.credentials"]).map(() => null);
-  const rowEntry = jsonEntry("rows/app.credentials/0.json", values);
-  const badCredentials = await archive([
+  const values = required(header.schema["app.backup_destinations"]).map(() => null);
+  const rowEntry = jsonEntry("rows/app.backup_destinations/0.json", values);
+  const badSecret = await archive([
     head,
     rowEntry,
     jsonEntry("manifest.json", {
       ...manifest,
       tables: {
         ...manifest.tables,
-        "app.credentials": {
+        "app.backup_destinations": {
           rows: 1,
           sha256: createHash("sha256").update(rowEntry.bytes).digest("hex"),
         },
@@ -1058,13 +1111,13 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
   await expect(
     restoreArchive({
       pool: (await fresh()).pool,
-      file: badCredentials,
+      file: badSecret,
       identity: key,
       stateDirectory: directory,
-      secrets,
       reseal: (bytes) => bytes,
     }),
-  ).rejects.toThrow("Invalid encrypted credential");
+  ).rejects.toThrow("Invalid encrypted secret");
+  // An archive from before backups dropped configuration ZIPs no longer reads.
   const blob = {
     entry: "blobs/0",
     kind: "attachment",
@@ -1072,21 +1125,12 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
     size: 3,
     sha256: createHash("sha256").update("zip").digest("hex"),
   };
-  const badReference = await archive([
+  const attachment = await archive([
     head,
     { name: "blobs/0", bytes: Buffer.from("zip") },
     jsonEntry("manifest.json", { ...manifest, blobs: [blob] }),
   ]);
-  await expect(
-    restoreArchive({
-      pool: (await fresh()).pool,
-      file: badReference,
-      identity: key,
-      stateDirectory: directory,
-      secrets,
-      reseal: (bytes) => bytes,
-    }),
-  ).rejects.toThrow("Attachment reference");
+  await expect(inspectArchive(attachment, key)).rejects.toThrow();
   // Multiple catalog entries exercise ordering independently of filesystem enumeration order.
   const remote = memoryDestination();
   for (const date of ["2026-01-01", "2026-02-01"]) {
@@ -1114,14 +1158,6 @@ it("validates attachment bytes, recovers ordinary quarantine files, and refuses 
 it("refuses work before exhausting disk space and rejects tampered retained archives on retry", async () => {
   const available = await statfs(directory);
   const full = { ...available, bavail: 0 };
-  const attachments = new AttachmentStore(store, join(directory, "attachments"), secrets);
-  vi.mocked(statfs).mockResolvedValueOnce(full);
-  await expect(
-    attachments.upload(
-      { label: "Config", filename: "config.zip", sourceDate: null, notes: "" },
-      bytesStream(Buffer.from("data")),
-    ),
-  ).rejects.toThrow("storage is full");
   const snapshotFile = await snapshot();
   const target = await fresh();
   vi.mocked(statfs).mockResolvedValueOnce(full);
@@ -1131,7 +1167,6 @@ it("refuses work before exhausting disk space and rejects tampered retained arch
       file: snapshotFile.output,
       identity: key,
       stateDirectory: directory,
-      secrets,
       reseal: (bytes) => bytes,
     }),
   ).rejects.toThrow("Insufficient storage");
@@ -1177,24 +1212,8 @@ it("refuses work before exhausting disk space and rejects tampered retained arch
   );
 });
 
-it("reseals stored credentials and destination secrets while discarding credential token caches", async () => {
-  const provider = randomUUID(),
-    account = randomUUID(),
-    identity = randomUUID(),
-    destination = randomUUID();
-  await db.pool.query(
-    "insert into app.providers(id,type,label,base_url) values($1,'webdav','Storage','http://fixture.invalid')",
-    [provider],
-  );
-  await db.pool.query("insert into app.accounts(id) values($1)", [account]);
-  await db.pool.query(
-    "insert into app.identities(id,account_id,provider_id,external_username) values($1,$2,$3,'owner')",
-    [identity, account, provider],
-  );
-  await db.pool.query(
-    "insert into app.credentials(identity_id,ciphertext,key_id,cached_token,cached_token_expires_at) values($1,$2,'master-v1','transient-token',now())",
-    [identity, secrets.seal(Buffer.from("storage credential"), identity)],
-  );
+it("reseals destination secrets under the new master key", async () => {
+  const destination = randomUUID();
   await store.saveDestination({
     id: destination,
     revision: randomUUID(),
@@ -1215,20 +1234,19 @@ it("reseals stored credentials and destination secrets while discarding credenti
     file: result.output,
     identity: key,
     stateDirectory: directory,
-    secrets,
     reseal: (bytes, context) => {
       contexts.push(context);
       return bytes;
     },
   });
-  expect(contexts).toEqual(expect.arrayContaining([identity, `backup-destination:${destination}`]));
-  const restored = (await target.pool.query("select * from app.credentials")).rows[0];
-  expect(restored.cached_token).toBeNull();
-  expect(restored.cached_token_expires_at).toBeNull();
-  expect(Buffer.from(secrets.open(restored.ciphertext, identity)).toString()).toBe(
-    "storage credential",
-  );
-  expect((await new BackupStore(target.pool).destination(destination))?.enabled).toBe(false);
+  expect(contexts).toEqual(expect.arrayContaining([`backup-destination:${destination}`]));
+  const restored = await new BackupStore(target.pool).destination(destination);
+  expect(
+    Buffer.from(
+      secrets.open(required(restored).secret, `backup-destination:${destination}`),
+    ).toString(),
+  ).toBe("bucket credential");
+  expect(restored?.enabled).toBe(false);
 });
 
 it("publishes worker-created archives with the shared directory owner's permissions", async () => {
@@ -1256,7 +1274,7 @@ it("refuses captures whose metadata cannot pass the restore format limits", asyn
   );
   await expect(snapshot({ masterKey: "invalid" })).rejects.toThrow();
   const blob = {
-    kind: "desktop" as const,
+    kind: "office" as const,
     path: "file",
     size: 0,
     open: async () => bytesStream(Buffer.alloc(0)),
@@ -1310,12 +1328,12 @@ it("never replaces an existing archive and removes its own output after a failed
   await expect(stat(output)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("persists worker status, bounded estimates, immutable ZIP inventory and owner rehearsal reports", async () => {
+it("persists worker status, bounded estimates and owner rehearsal reports", async () => {
   const estimateSource = source({
     blobs: async () => ({
       sources: [
         {
-          kind: "attachment",
+          kind: "office",
           path: "version",
           size: 1024,
           open: async () => bytesStream(Buffer.alloc(1024)),
@@ -1362,11 +1380,6 @@ it("persists worker status, bounded estimates, immutable ZIP inventory and owner
   const config = await store.configuration();
   const snapshotId = await runner.queue(randomUUID(), { destinationIds: [], metadataOnly: false });
   await runner.tick();
-  await operations.inventory(snapshotId, ["one", "two"]);
-  expect(await operations.inventories([snapshotId, "missing"])).toEqual({
-    [snapshotId]: { attachmentVersions: ["one", "two"] },
-    missing: { attachmentVersions: [] },
-  });
   const report = {
     sourceInstallationId: config.installation_id,
     snapshotId,
@@ -1519,17 +1532,11 @@ it("removes only settled orphaned archives and stale markers from the spool", as
   }
 });
 
-it("publishes periodic worker heartbeats and records attachment inventory from engine captures", async () => {
+it("publishes periodic worker heartbeats while the engine captures", async () => {
   const { engine: runner } = engine();
   await confirmed(runner);
   runner.options.source.blobs = async () => ({
     sources: [
-      {
-        kind: "attachment",
-        path: "attachments/version-one",
-        size: 4,
-        open: async () => bytesStream(Buffer.from("zip!")),
-      },
       {
         kind: "logs",
         path: "logs/indexer.log",
@@ -1559,9 +1566,6 @@ it("publishes periodic worker heartbeats and records attachment inventory from e
     await vi.waitFor(async () =>
       expect((await runner.operations.status()).workerSeenAt).not.toBe(before),
     );
-    expect(await runner.operations.inventories([id])).toEqual({
-      [id]: { attachmentVersions: ["attachments/version-one"] },
-    });
   } finally {
     spy.mockRestore();
   }
@@ -1619,9 +1623,9 @@ it("creates one scheduled local snapshot and a distinct partial fallback after f
   const { engine: runner } = engine();
   await confirmed(runner);
   await store.setSchedule(policy, new Date(Date.now() - 2 * 86400_000));
-  runner.options.source.blobs = async (_client, metadataOnly) => {
-    if (!metadataOnly) throw Error("Recovery mount disconnected");
-    return { sources: [], coverage: [] };
+  // A metadata-only capture never lists recovery files, so only the full one fails.
+  runner.options.source.blobs = async () => {
+    throw Error("Recovery mount disconnected");
   };
   await runner.tick();
   let runs = await store.runs();
@@ -1640,13 +1644,12 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
   const root = join(directory, randomUUID());
   await mkdir(join(root, "originals"), { recursive: true });
   await mkdir(join(root, "original-mappings"));
-  await db.pool.query("insert into idx.roots(id,name) values(1,'documents')");
   const original = Buffer.from("original PDF bytes");
   const probe = join(root, "originals", "probe");
   await writeFile(probe, original);
   await utimes(probe, 1700000000, 1700000000);
   const time = String((await stat(probe, { bigint: true })).mtimeNs);
-  const filename = `${createHash("sha256").update(`documents:folder/report.pdf:${original.length}:${time}`).digest("hex").slice(0, 16)}_report.pdf`;
+  const filename = `${createHash("sha256").update(`files:folder/report.pdf:${original.length}:${time}`).digest("hex").slice(0, 16)}_report.pdf`;
   const { rename } = await import("node:fs/promises");
   await rename(probe, join(root, "originals", filename));
   // The OCR receipt has the rewritten size, while its timestamp matches the preserved original.
@@ -1670,7 +1673,7 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
     const resolved = required(mapped.sources.find((blob) => blob.path.includes(filename)));
     expect(JSON.parse((await readBounded(await resolved.open())).toString())).toMatchObject({
       status: "resolved",
-      root: "documents",
+      root: "files",
       path: "folder/report.pdf",
       original: filename,
       size: original.length,
@@ -1685,7 +1688,7 @@ it("recovers only uniquely matched legacy OCR originals and preserves unresolved
     const truncated = {
       query: async () => ({
         rows: Array.from({ length: 1001 }, () => ({
-          root: "documents",
+          root: "files",
           path: "folder/report.pdf",
           mtime_ns: time,
         })),

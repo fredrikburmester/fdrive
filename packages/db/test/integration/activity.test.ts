@@ -22,36 +22,24 @@ import { finishNativeFailure } from "../../src/repos/activity-native.js";
 import { requireActivityRow } from "../../src/repos/activity-types.js";
 import { appendActivityEvent } from "../../src/repos/activity-writer.js";
 
-it("keeps personal journeys stable, immutable and private across pools and identity transfer", {
+it("keeps personal journeys stable, immutable and private across pools", {
   timeout: 180_000,
 }, async () => {
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
   const first = createDb(container.getConnectionUri()),
     second = createDb(container.getConnectionUri());
-  const firstLocks = createDb(container.getConnectionUri()),
-    secondLocks = createDb(container.getConnectionUri());
   try {
     await migrate(first.db);
     const repos = createRepos(first.db);
     const alice = await repos.accounts.create({ displayName: "Alice" });
     const bob = await repos.accounts.create({ displayName: "Bob" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://activity.test",
-    });
     const identity = await repos.identities.create({
       accountId: alice.id,
-      providerId: provider.id,
-      externalUsername: "alice",
-    });
-    const otherIdentity = await repos.identities.create({
-      accountId: bob.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "alice",
     });
     let at = new Date("2026-09-14T10:00:00.000Z");
-    const a = createActivityRepo(first.db, () => at, firstLocks.db),
-      b = createActivityRepo(second.db, () => at, secondLocks.db);
+    const a = createActivityRepo(first.db, () => at),
+      b = createActivityRepo(second.db, () => at);
     const actor = { accountId: alice.id, identityId: identity.id };
     const batchId = randomUUID();
     async function run(
@@ -110,7 +98,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     const saved = await run(
       "file.save",
       { path: "/b.txt" },
-      { path: "/b.txt", kind: "file", size: 5, version: "v2" },
+      { path: "/b.txt", kind: "file", size: 5, sha256: "b".repeat(64) },
       { path: "/b.txt", kind: "file", size: 4 },
     );
     expect(saved.fileId).toBe(uploaded.fileId);
@@ -131,9 +119,13 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect(await b.subjects(bob.id, [uploaded.id])).toEqual([]);
     expect(await b.subjects(alice.id, [])).toEqual([]);
     expect((await b.file(alice.id, uploaded.fileId as string))?.file.path).toBe("/b.txt");
+    // A journey names the login it was recorded under by its username.
+    expect((await b.file(alice.id, uploaded.fileId as string))?.storage).toEqual({
+      identityId: identity.id,
+      label: "alice",
+    });
     expect((await b.list(alice.id, { q: "a_%" })).some((row) => row.id === uploaded.id)).toBe(true);
     expect(await b.list(alice.id, { q: "a_X" })).toEqual([]);
-    expect(await b.list(alice.id, { identityId: otherIdentity.id })).toEqual([]);
     const page = await b.list(alice.id, {
       limit: 2,
       outcome: "success",
@@ -161,7 +153,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       { path: "/b.txt", kind: "file" },
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/b.txt",
       },
     );
     expect(trash.fileId).toBe(saved.fileId);
@@ -169,7 +161,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       "file.restore",
       {
         path: "/b.txt",
-        trashLeaf: "/.trash/.fdrive-move-v1/file/p/b.txt/v/1234567890000000000",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/b.txt",
         targetPath: "/restored.txt",
       },
       { path: "/restored.txt", kind: "file" },
@@ -266,7 +258,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       at,
       outcome: "unknown",
     });
-    expect(await reads.provisional(alice.id, identity.id)).toHaveLength(2);
+    expect(await reads.provisional(alice.id)).toHaveLength(2);
     expect((await reads.recents(alice.id, identity.id))[0]?.path).toBe("/c.txt");
     at = new Date(at.getTime() + 420_000);
     expect(await reads.seal()).toBe(2);
@@ -310,8 +302,8 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       ...actor,
       path: "/never-seen",
       kind: "missing" as const,
-      source: "refresh" as const,
-      evidence: "refresh_comparison" as const,
+      source: "indexer" as const,
+      evidence: "watcher_change" as const,
     };
     expect(await observations.observe(unseen)).toBeNull();
     const observedFile = await run(
@@ -337,8 +329,8 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       ...actor,
       path: "/observe.txt",
       kind: "present",
-      source: "refresh",
-      evidence: "refresh_comparison",
+      source: "indexer",
+      evidence: "watcher_change",
       after: { path: "/observe.txt", size: 1, modifiedAt: at.toISOString() },
     });
     expect(recovered?.parentEventId).toBe(missing?.id);
@@ -354,8 +346,8 @@ it("keeps personal journeys stable, immutable and private across pools and ident
         ...actor,
         path: "/observe.txt",
         kind: "present",
-        source: "refresh",
-        evidence: "refresh_comparison",
+        source: "indexer",
+        evidence: "watcher_change",
         after: { path: "/observe.txt", size: 1, modifiedAt: at.toISOString() },
       }),
     ).toBeNull();
@@ -381,11 +373,9 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       "/external.txt",
     );
     expect(
-      (await observations.children(alice.id, identity.id, "/")).some(
-        (file) => file.id === rediscovered?.fileId,
-      ),
-    ).toBe(true);
-    expect(await observations.children(bob.id, identity.id, "/")).toEqual([]);
+      (await observations.tracked(alice.id, identity.id, "/external.txt")).map((file) => file.id),
+    ).toEqual([rediscovered?.fileId]);
+    expect(await observations.tracked(bob.id, identity.id, "/external.txt")).toEqual([]);
     await observations.observe({
       ...actor,
       path: "/external.txt",
@@ -422,11 +412,11 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     ).toBeNull();
     await a.heartbeat(alice.id, deferred.id);
     const unknown = await a.finish(alice.id, deferred.id, { outcome: "unknown" });
-    await run("file.save", { path: "/c.txt" }, { path: "/c.txt", version: "newer" });
+    await run("file.save", { path: "/c.txt" }, { path: "/c.txt", sha256: "c".repeat(64) });
     const latestRevision = (await a.file(alice.id, copied.fileId as string))?.file.revisionId;
     const repaired = await a.finish(alice.id, deferred.id, {
       outcome: "success",
-      after: { path: "/c.txt", version: "old-result" },
+      after: { path: "/c.txt", sha256: "d".repeat(64) },
     });
     expect(repaired.parentEventId).toBe(unknown.id);
     expect((await a.file(alice.id, copied.fileId as string))?.file.revisionId).toBe(latestRevision);
@@ -484,7 +474,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     );
     // Restoring a trashed folder by its leaf carries the tracked descendants to the new path,
     // so a child keeps one journey across the folder's trip through the trash.
-    const folderLeaf = "/.trash/.fdrive-move-v1/dir/p/moved/v/1234567890000000002";
+    const folderLeaf = "/.trash/7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d/moved";
     const folderTrash = await run(
       "file.trash",
       { path: "/moved", kind: "dir" },
@@ -525,14 +515,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
         alice.id,
         nativeId,
         { item: { id: nativeItem, size: 3 } },
-        {
-          from: null,
-          to: "/native.txt",
-          directory: false,
-          trash: false,
-          office: null,
-          snapshots: [],
-        },
+        { from: null, to: "/native.txt", directory: false, trash: false },
       ),
     ).toBe(true);
     expect(
@@ -541,14 +524,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
         alice.id,
         nativeId,
         { item: { id: nativeItem, size: 3 } },
-        {
-          from: null,
-          to: "/native.txt",
-          directory: false,
-          trash: false,
-          office: null,
-          snapshots: [],
-        },
+        { from: null, to: "/native.txt", directory: false, trash: false },
       ),
     ).toBe(false);
     const nativeEvents = await a.list(alice.id, { source: "native" });
@@ -557,7 +533,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect((await a.list(alice.id, { source: "native" })).map((event) => event.id)).toEqual(
       nativeEvents.map((event) => event.id),
     );
-    for (const state of ["failed", "conflict", "cancelled", "uncertain"]) {
+    for (const state of ["failed", "conflict", "cancelled"]) {
       const id = randomUUID();
       await native.reserve({
         id,
@@ -619,7 +595,7 @@ it("keeps personal journeys stable, immutable and private across pools and ident
           alice.id,
           id,
           { item: itemId ? { id: itemId } : null },
-          { from, to, directory, trash, restored, office: null, snapshots: [] },
+          { from, to, directory, trash, restored },
         ),
       ).toBe(true);
       return (await a.list(alice.id, { source: "native" })).find(
@@ -723,13 +699,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect((await exports.revisions(alice.id, snapshot.snapshotSequence)).length).toBeGreaterThan(
       0,
     );
-    expect(await a.locations(alice.id)).toHaveLength(1);
-    expect(await a.locations(bob.id)).toEqual([]);
-    const secondLogin = await repos.identities.create({
-      accountId: alice.id,
-      providerId: provider.id,
-      externalUsername: "alice-other",
-    });
     const tag = await repos.tags.create(alice.id, { name: "Journey", color: null });
     const tagFact = { id: tag.id, name: tag.name, color: tag.color };
     // These paths are established by storage evidence before tag membership
@@ -737,7 +706,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     await run("file.create", { path: "/tagged.txt", kind: "file" });
     const otherTagged = await a.begin({
       ...actor,
-      identityId: secondLogin.id,
       action: "file.create",
       source: "web",
       producerOperationId: randomUUID(),
@@ -746,9 +714,9 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     });
     await a.finish(alice.id, otherTagged.id, { outcome: "success" });
     await repos.fileTags.setTags(identity.id, "/tagged.txt", [tag.id]);
-    await repos.fileTags.setTags(secondLogin.id, "/other-tagged.txt", [tag.id]);
+    await repos.fileTags.setTags(identity.id, "/other-tagged.txt", [tag.id]);
     await repos.folderViews.set(identity.id, "/pinned", { mode: "grid" });
-    await repos.folderViews.set(secondLogin.id, "/other-pinned", { mode: "tree" });
+    await repos.folderViews.set(identity.id, "/other-pinned", { mode: "tree" });
     async function metadataChange(
       action: PersonalActivityAction,
       requested: ActivityFacts,
@@ -794,11 +762,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     expect(
       (await a.subjects(alice.id, [changedTag.id])).filter((subject) => subject.fileId),
     ).toHaveLength(2);
-    expect(
-      (await a.list(alice.id, { identityId: secondLogin.id })).some(
-        (event) => event.id === changedTag.id,
-      ),
-    ).toBe(true);
     const unchangedTag = await metadataChange(
       "tag.update",
       { tags: [{ ...tagFact, name: "Renamed" }] },
@@ -837,7 +800,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
     ).toBe("skipped");
     const reset = await metadataChange("folder.view.reset", { variant: "all" }, async (tx) => {
       await tx.folderViews.clear(identity.id);
-      await tx.folderViews.clear(secondLogin.id);
     });
     expect(
       (await a.subjects(alice.id, [reset.id])).filter((subject) => subject.fileId),
@@ -1065,38 +1027,13 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       ...actor,
       path: "/live-clock.txt",
       kind: "present",
-      source: "refresh",
-      evidence: "refresh_comparison",
+      source: "indexer",
+      evidence: "watcher_change",
       after: { path: "/live-clock.txt", size: 1 },
     });
     expect((await defaultExport.create(alice.id, "json", {})).state).toBe("completed");
     expect(await a.completedChildren(alice.id, archiveJob.id)).toBe(1);
     expect(await a.completedChildren(bob.id, archiveJob.id)).toBe(0);
-    const lockOrder: number[] = [];
-    let release!: () => void;
-    let entered!: () => void;
-    const started = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const blocked = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const firstLock = a.withPathLock(identity.id, "/same", async () => {
-      lockOrder.push(1);
-      entered();
-      await blocked;
-      lockOrder.push(2);
-    });
-    await started;
-    const secondLock = b.withPathLock(identity.id, "/same", async () => {
-      lockOrder.push(3);
-    });
-    await b.withPathLock(identity.id, "/different", async () => {
-      lockOrder.push(0);
-    });
-    release();
-    await Promise.all([firstLock, secondLock]);
-    expect(lockOrder).toEqual([1, 0, 2, 3]);
     const tagA = { id: randomUUID(), name: "a", color: null },
       tagB = { id: randomUUID(), name: "b", color: null };
     expect(
@@ -1255,8 +1192,6 @@ it("keeps personal journeys stable, immutable and private across pools and ident
       ),
     ).rejects.toThrow();
   } finally {
-    await firstLocks.close();
-    await secondLocks.close();
     await first.close();
     await second.close();
     await container.stop();
@@ -1268,23 +1203,17 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
 }, async () => {
   const container = await new PostgreSqlContainer("pgvector/pgvector:pg17").start();
   const main = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
-  const locks = createDb(container.getConnectionUri(), { max: 2, connectionTimeoutMillis: 2_000 });
   try {
     await migrate(main.db);
     const repos = createRepos(main.db);
     const account = await repos.accounts.create({ displayName: "Activity regressions" });
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://regressions.test",
-    });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const actor = { accountId: account.id, identityId: identity.id };
     let now = new Date("2026-09-20T12:00:00Z");
-    const repo = createActivityRepo(main.db, () => now, locks.db);
+    const repo = createActivityRepo(main.db, () => now);
     const observations = createActivityObservationsRepo(main.db, () => now);
     async function begin(
       action: PersonalActivityAction,
@@ -1419,7 +1348,14 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
         evidence: "watcher_change",
       }),
     ).toBeNull();
-    await repo.finish(account.id, trash.id, { outcome: "success" });
+    await repo.finish(account.id, trash.id, {
+      outcome: "success",
+      after: {
+        path: "/destination",
+        kind: "dir",
+        trashLeaf: "/.trash/0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b/destination",
+      },
+    });
     expect((await repo.file(account.id, child.fileId as string))?.file.state).toBe("trashed");
 
     const queued = await begin("archive.compress", { path: "/queued", targetPath: "/queued.zip" });
@@ -1434,30 +1370,7 @@ it("preserves folder journeys, fences descendant observations, leases queued wor
     await repo.finish(account.id, queued.id, { outcome: "cancelled" });
     await repo.heartbeat(account.id, queued.id);
     expect(await repo.claim(account.id, queued.id)).toBe(false);
-
-    // Fill the entire lock pool before either callback needs the main pool.
-    // Sharing the pools deadlocks both callbacks at begin().
-    let entered = 0;
-    let release!: () => void;
-    const together = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await Promise.all(
-      ["/lock-a", "/lock-b"].map((path) =>
-        repo.withPathLock(identity.id, path, async () => {
-          if (++entered === 2) release();
-          await together;
-          const op = await begin("file.delete", { path });
-          await repo.claim(account.id, op.id);
-          await repo.finish(account.id, op.id, { outcome: "success" });
-        }),
-      ),
-    );
-    await expect(
-      createActivityRepo(main.db).withPathLock(identity.id, "/unsafe", async () => {}),
-    ).rejects.toThrow("dedicated database pool");
   } finally {
-    await locks.close();
     await main.close();
     await container.stop();
   }

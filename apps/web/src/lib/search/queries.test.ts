@@ -47,23 +47,14 @@ afterEach(() => {
 describe("imageSearchQueryKey", () => {
   it("varies with query text", async () => {
     const { imageSearchQueryKey } = await import("./queries.js");
-    const a = imageSearchQueryKey("dog", "id-1");
-    const b = imageSearchQueryKey("cat", "id-1");
+    const a = imageSearchQueryKey("dog");
+    const b = imageSearchQueryKey("cat");
     expect(a).not.toEqual(b);
-  });
-
-  it("varies with identity id", async () => {
-    const { imageSearchQueryKey } = await import("./queries.js");
-    const a = imageSearchQueryKey("sunset", "id-1");
-    const b = imageSearchQueryKey("sunset", "id-2");
-    const c = imageSearchQueryKey("sunset");
-    expect(a).not.toEqual(b);
-    expect(a).not.toEqual(c);
   });
 
   it("is stable for same inputs", async () => {
     const { imageSearchQueryKey } = await import("./queries.js");
-    expect(imageSearchQueryKey("sunset", "id-1")).toEqual(imageSearchQueryKey("sunset", "id-1"));
+    expect(imageSearchQueryKey("sunset")).toEqual(imageSearchQueryKey("sunset"));
   });
 });
 
@@ -98,68 +89,47 @@ describe("searchQueryKey", () => {
 });
 
 describe("search startup retry decisions", () => {
-  it("retries a legacy unavailable status and an indexer startup outage", async () => {
-    const { shouldRetrySearchStatus } = await import("./queries.js");
+  it("treats a status with a reason as permanent", async () => {
+    const { isPermanentSearchStatus } = await import("./queries.js");
 
-    expect(shouldRetrySearchStatus({ available: false, semantic: false })).toBe(true);
     expect(
-      shouldRetrySearchStatus({
+      isPermanentSearchStatus({
         available: false,
         semantic: false,
-        reason: "indexer_unreachable",
+        images: false,
+        reason: "not_indexed",
       }),
     ).toBe(true);
+    expect(isPermanentSearchStatus({ available: false, semantic: false, images: false })).toBe(
+      false,
+    );
+    expect(isPermanentSearchStatus({ available: true, semantic: false, images: false })).toBe(
+      false,
+    );
+    expect(isPermanentSearchStatus(undefined)).toBe(false);
   });
 
-  it("does not retry a permanent scope status", async () => {
-    const { isPermanentSearchStatus, shouldRetrySearchStatus } = await import("./queries.js");
+  it("says what search needs when the files are not indexed", async () => {
+    const { isSearchUnsupported, searchUnavailableHint, searchUnavailableMessage } = await import(
+      "./queries.js"
+    );
     const status: SearchStatusResponse = {
       available: false,
       semantic: false,
-      reason: "no_roots",
+      images: false,
+      reason: "not_indexed",
     };
-
-    expect(isPermanentSearchStatus(status)).toBe(true);
-    expect(shouldRetrySearchStatus(status)).toBe(false);
-  });
-
-  it("uses startup wording only for an indexer outage", async () => {
-    const { searchUnavailableMessage } = await import("./queries.js");
-
-    expect(
-      searchUnavailableMessage({
-        available: false,
-        semantic: false,
-        reason: "indexer_unreachable",
-      }),
-    ).toBe("Search is starting… Retrying automatically.");
-    expect(
-      searchUnavailableMessage({ available: false, semantic: false, reason: "mismatch" }),
-    ).toBe("Search is not available.");
-    expect(searchUnavailableMessage({ available: false, semantic: false })).toBe(
-      "Search is not available.",
-    );
-  });
-
-  it("says what search needs when the login's storage is not indexed", async () => {
-    const {
-      isSearchStarting,
-      isSearchUnsupported,
-      searchUnavailableHint,
-      searchUnavailableMessage,
-    } = await import("./queries.js");
-    const status: SearchStatusResponse = { available: false, semantic: false, reason: "no_roots" };
+    const other: SearchStatusResponse = { available: false, semantic: false, images: false };
 
     expect(isSearchUnsupported(status)).toBe(true);
-    expect(isSearchStarting(status)).toBe(false);
     expect(searchUnavailableMessage(status)).toBe(
-      "Search is not available for this login. Its folder is not indexed.",
+      "Search is not available. Your files are not indexed.",
     );
-    expect(searchUnavailableHint(status)).toBe("Search is not available for this login");
-    expect(searchUnavailableHint({ available: false, semantic: false, reason: "mismatch" })).toBe(
-      "Search index is unavailable",
-    );
-    expect(isSearchUnsupported({ available: true, semantic: false })).toBe(false);
+    expect(searchUnavailableHint(status)).toBe("Your files are not indexed");
+    expect(searchUnavailableMessage(other)).toBe("Search is not available.");
+    expect(searchUnavailableHint(other)).toBe("Search index is unavailable");
+    expect(searchUnavailableMessage(undefined)).toBe("Search is not available.");
+    expect(isSearchUnsupported({ available: true, semantic: false, images: false })).toBe(false);
     expect(isSearchUnsupported(undefined)).toBe(false);
   });
 
@@ -167,14 +137,19 @@ describe("search startup retry decisions", () => {
     const { shouldRetryUnavailableResult } = await import("./queries.js");
     const unavailable = { unavailable: true };
 
-    expect(shouldRetryUnavailableResult(unavailable, { available: true, semantic: false })).toBe(
-      true,
-    );
+    expect(
+      shouldRetryUnavailableResult(unavailable, {
+        available: true,
+        semantic: false,
+        images: false,
+      }),
+    ).toBe(true);
     expect(
       shouldRetryUnavailableResult(unavailable, {
         available: false,
         semantic: false,
-        reason: "mismatch",
+        images: false,
+        reason: "not_indexed",
       }),
     ).toBe(false);
     expect(shouldRetryUnavailableResult({ unavailable: false }, undefined)).toBe(false);
@@ -246,7 +221,7 @@ describe("useSearchResults", () => {
       () =>
         useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", {
           retryUnavailable: true,
-          status: { available: true, semantic: false },
+          status: { available: true, semantic: false, images: false },
         }),
       { wrapper: createWrapper(queryClient) },
     );
@@ -277,7 +252,7 @@ describe("useSearchResults", () => {
           useSearchResults(query, DEFAULT_SEARCH_CHIPS, "/", {
             enabled,
             retryUnavailable: true,
-            status: { available: true, semantic: false },
+            status: { available: true, semantic: false, images: false },
           }),
         { initialProps: { query: "readme", enabled: true }, wrapper: createWrapper(client) },
       );
@@ -296,7 +271,7 @@ describe("useSearchResults", () => {
 
 describe("useSearchStatus", () => {
   it("fetches the search status", async () => {
-    const status: SearchStatusResponse = { available: true, semantic: false };
+    const status: SearchStatusResponse = { available: true, semantic: false, images: false };
     searchStatusMock.mockResolvedValue(status);
     const { useSearchStatus } = await import("./queries.js");
     const queryClient = new QueryClient();
@@ -305,27 +280,6 @@ describe("useSearchStatus", () => {
 
     await waitFor(() => expect(result.current.data).toEqual(status));
   });
-
-  it("retries a transient startup status until it is healthy, then stops", async () => {
-    focusManager.setFocused(true);
-    const starting: SearchStatusResponse = {
-      available: false,
-      semantic: false,
-      reason: "indexer_unreachable",
-    };
-    const healthy: SearchStatusResponse = { available: true, semantic: true, images: true };
-    searchStatusMock.mockResolvedValueOnce(starting).mockResolvedValue(healthy);
-    const { useSearchStatus } = await import("./queries.js");
-    const queryClient = new QueryClient();
-
-    const { result } = renderHook(() => useSearchStatus({ retryUnavailable: true }), {
-      wrapper: createWrapper(queryClient),
-    });
-
-    await waitFor(() => expect(result.current.data).toEqual(starting));
-    await waitFor(() => expect(result.current.data).toEqual(healthy), { timeout: 7_000 });
-    expect(searchStatusMock).toHaveBeenCalledTimes(2);
-  }, 8_000);
 });
 
 describe("useImageSearchResults", () => {
@@ -335,7 +289,7 @@ describe("useImageSearchResults", () => {
     const { useImageSearchResults } = await import("./queries.js");
     const client = new QueryClient();
 
-    const { result } = renderHook(() => useImageSearchResults("sunset", { identityId: "id-1" }), {
+    const { result } = renderHook(() => useImageSearchResults("sunset"), {
       wrapper: createWrapper(client),
     });
 
@@ -347,28 +301,15 @@ describe("useImageSearchResults", () => {
     const { useImageSearchResults } = await import("./queries.js");
     const client = new QueryClient();
 
-    const { result } = renderHook(() => useImageSearchResults("   ", { identityId: "id-1" }), {
+    const { result } = renderHook(() => useImageSearchResults("   "), {
       wrapper: createWrapper(client),
     });
     expect(result.current.fetchStatus).toBe("idle");
     expect(searchImagesMock).not.toHaveBeenCalled();
 
-    renderHook(() => useImageSearchResults("sunset", { enabled: false, identityId: "id-1" }), {
+    renderHook(() => useImageSearchResults("sunset", { enabled: false }), {
       wrapper: createWrapper(client),
     });
     expect(searchImagesMock).not.toHaveBeenCalled();
   });
-});
-
-it("keys results by the active login so a switch never reuses another login's results", async () => {
-  searchMock.mockResolvedValue(EMPTY_RESPONSE);
-  const { useSearchResults } = await import("./queries");
-  const client = new QueryClient();
-  const { result } = renderHook(
-    () => useSearchResults("readme", DEFAULT_SEARCH_CHIPS, "/", { identityId: "i" }),
-    { wrapper: createWrapper(client) },
-  );
-  await waitFor(() => expect(result.current.data).toEqual(EMPTY_RESPONSE));
-  expect(searchMock).toHaveBeenCalledWith("readme", { limit: 20 });
-  expect(client.getQueryCache().getAll()[0]?.queryKey).toContain("i");
 });

@@ -1,121 +1,49 @@
 import {
-  TrashConfiguration,
+  DEFAULT_TRASH_RETENTION_DAYS,
+  TRASH_RETENTION_SETTINGS_KEY,
   TrashSettings,
-  type TrashSettingsUpdateRequest,
-  type TrashStrategy,
 } from "@fdrive/contracts";
-import type { IdentityRepo, SettingsRepo } from "@fdrive/db";
-import { ApiHttpError } from "../errors.js";
+import type { SettingsRepo } from "@fdrive/db";
+import { noopSystemEventLog, type SystemEventLog } from "../system/event-log.js";
 
-export const trashSettingsKey = (providerId: string): string => `trash.configuration.${providerId}`;
-
+/** Trash's one installation setting: how many days it keeps an item. */
 export interface TrashSettingsService {
-  configuration(providerId: string): Promise<TrashSettings>;
-  forIdentity(identityId: string): Promise<TrashSettings>;
-  pathForIdentity(identityId: string): Promise<string | null>;
-  /** Writes `input` for `providerId`; the body's own `providerId` must name the same server. */
-  update(providerId: string, input: TrashSettingsUpdateRequest): Promise<TrashSettings>;
+  /** `DEFAULT_TRASH_RETENTION_DAYS` until an administrator changes it. */
+  current(): Promise<TrashSettings>;
+  update(input: TrashSettings): Promise<TrashSettings>;
 }
 
+/**
+ * Every Trash page and delete dialog reads the setting, so it is kept in
+ * memory once read and replaced when this service saves a new one: fdrive
+ * runs one API process, and nothing else writes it.
+ */
 export function createTrashSettingsService(deps: {
-  settings: Pick<SettingsRepo, "get" | "compareAndSet">;
-  identities: Pick<IdentityRepo, "get">;
-  /**
-   * The provider module's Trash strategy for a row: `move` (fdrive moves
-   * deletes into Trash) or `none`. Only the stored configuration is
-   * persisted; the strategy is read fresh so a module change never leaves a
-   * stale value behind.
-   */
-  strategyFor: (providerId: string) => Promise<TrashStrategy>;
+  settings: Pick<SettingsRepo, "get" | "set">;
+  eventLog?: SystemEventLog;
 }): TrashSettingsService {
-  function defaults(providerId: string): TrashConfiguration {
-    return {
-      providerId,
-      revision: 0,
-      enabled: false,
-      path: "/.trash",
-      retentionHours: null,
-    };
-  }
-
-  async function read(providerId: string): Promise<{ raw: unknown | null; value: TrashSettings }> {
-    const raw = await deps.settings.get<unknown>(trashSettingsKey(providerId));
-    const strategy = await deps.strategyFor(providerId);
-    if (raw === null) return { raw, value: { ...defaults(providerId), strategy } };
-    // A row an older version saved may carry keys this one no longer stores;
-    // reading drops them, and the next save writes the row without them.
-    const stored = TrashConfiguration.strip();
-    let parsed = stored.safeParse(raw);
-    if (!parsed.success && typeof raw === "object") {
-      // Older versions accepted overlong UTF-8 path segments. Disable that configuration
-      // so authentication and the settings editor stay reachable; the next save repairs it.
-      parsed = stored.safeParse({ ...raw, path: "/.trash", enabled: false });
-    }
-    if (!parsed.success || parsed.data.providerId !== providerId)
-      throw new ApiHttpError("internal", "Stored Trash configuration is invalid.");
-    // A stored row that predates a module change may be enabled for a
-    // strategy that no longer allows it; the strategy wins.
-    const value = TrashSettings.safeParse({ ...parsed.data, strategy });
-    return {
-      raw,
-      value: value.success ? value.data : { ...parsed.data, strategy, enabled: false },
-    };
-  }
-
-  async function providerIdForIdentity(identityId: string): Promise<string> {
-    const identity = await deps.identities.get(identityId);
-    if (identity === null) throw new ApiHttpError("unauthorized", "identity no longer exists");
-    return identity.providerId;
-  }
-
-  async function forIdentity(identityId: string): Promise<TrashSettings> {
-    return (await read(await providerIdForIdentity(identityId))).value;
-  }
-
+  const eventLog = deps.eventLog ?? noopSystemEventLog;
+  let cached: TrashSettings | undefined;
   return {
-    async configuration(providerId) {
-      return (await read(providerId)).value;
+    async current() {
+      if (cached !== undefined) return cached;
+      const stored = await deps.settings.get<unknown>(TRASH_RETENTION_SETTINGS_KEY);
+      cached =
+        stored === null
+          ? { retentionDays: DEFAULT_TRASH_RETENTION_DAYS }
+          : TrashSettings.parse(stored);
+      return cached;
     },
-    forIdentity,
-    async pathForIdentity(identityId) {
-      const value = await forIdentity(identityId);
-      return value.enabled ? value.path : null;
-    },
-    async update(providerId, input) {
-      if (input.providerId !== providerId)
-        throw new ApiHttpError(
-          "conflict",
-          "These Trash settings belong to another storage server. Reload and try again.",
-        );
-      const current = await read(providerId);
-      if (input.strategy !== current.value.strategy)
-        throw new ApiHttpError(
-          "conflict",
-          "The storage provider's Trash strategy changed. Reload Trash settings and try again.",
-        );
-      if (input.revision !== current.value.revision)
-        throw new ApiHttpError(
-          "conflict",
-          "Trash settings changed in another session. Reload and try again.",
-        );
-      const next = TrashSettings.safeParse({ ...input, revision: input.revision + 1 });
-      if (!next.success)
-        throw new ApiHttpError("bad_request", "Invalid Trash settings.", {
-          issues: next.error.issues,
-        });
-      const { strategy, ...stored } = next.data;
-      if (
-        !(await deps.settings.compareAndSet(
-          trashSettingsKey(providerId),
-          current.raw,
-          TrashConfiguration.parse(stored),
-        ))
-      )
-        throw new ApiHttpError(
-          "conflict",
-          "Trash settings changed in another session. Reload and try again.",
-        );
-      return { ...stored, strategy };
+    async update(input) {
+      const next = TrashSettings.parse(input);
+      await deps.settings.set(TRASH_RETENTION_SETTINGS_KEY, next);
+      cached = next;
+      eventLog.record(
+        "general",
+        "info",
+        `Trash keeps items for ${next.retentionDays} ${next.retentionDays === 1 ? "day" : "days"}`,
+      );
+      return next;
     },
   };
 }

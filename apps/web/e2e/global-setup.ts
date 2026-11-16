@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { SEED_FILES } from "@fdrive/testkit";
 import { Client } from "pg";
 import { ACCOUNT_FILES } from "./support/account-fixture.js";
-import { INDEX_ROOT_NAME, startEnvironment } from "./support/environment.js";
+import { startEnvironment } from "./support/environment.js";
 import { startFakeIndexer } from "./support/fake-indexer.js";
 import { E2E_HOST, writeStateDirPointer } from "./support/paths.js";
 import { resolvePort } from "./support/ports.js";
 import { registry } from "./support/registry.js";
+import { STORAGE_FILES } from "./support/storage-fixture.js";
 
 function sha256Hex(content: string): string {
   return createHash("sha256").update(content, "utf-8").digest("hex");
@@ -22,7 +23,7 @@ function extensionOf(name: string): string {
 }
 
 /**
- * Seeds `idx.roots`, `idx.files` for every one of alice's testkit-seeded
+ * Seeds `idx.files` for every one of alice's testkit-seeded
  * files, `idx.folders` for the folders they are in, and an `idx.chunks` row (no embedding) for the readme's text, so
  * `search.spec.ts` has real rows to find: a filename match on "readme.md",
  * a content match on a word from the readme, and (since only alice's files
@@ -33,7 +34,7 @@ function extensionOf(name: string): string {
  * a search hit.
  *
  * Runs after the API is healthy, since the API applies the `idx`/`app`
- * schema migrations on boot (`FDRIVE_AUTO_MIGRATE=true`) and this needs
+ * schema migrations on boot and this needs
  * those tables to already exist.
  */
 async function seedSearchIndex(databaseUrl: string): Promise<void> {
@@ -57,20 +58,13 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
         },
       }),
     ]);
-    const rootResult = await client.query<{ id: number }>(
-      `insert into idx.roots (name) values ($1)
-       on conflict (name) do update set name = excluded.name
-       returning id`,
-      [INDEX_ROOT_NAME],
-    );
-    const rootId = rootResult.rows[0]?.id;
-    if (rootId === undefined) {
-      throw new Error("fdrive e2e: failed to seed idx.roots");
-    }
+    // The files folder's row in `idx.roots`, which a migration seeds.
+    const rootId = 1;
 
     const indexedFiles: Record<string, Readonly<Record<string, string>>> = {
       alice: SEED_FILES.alice ?? {},
       ...ACCOUNT_FILES,
+      ...STORAGE_FILES,
     };
     const mtimeNs = (BigInt(Date.now()) * BigInt(1_000_000)).toString();
     let readmeFileId: number | undefined;
@@ -112,6 +106,14 @@ async function seedSearchIndex(databaseUrl: string): Promise<void> {
         }
       }
     }
+
+    // `photos.spec.ts`: alice's photo with the EXIF details the indexer records.
+    await client.query(
+      `update idx.files set taken_at = '2024-05-01 14:03:09', camera = 'Apple iPhone 15 Pro',
+         width = 4032, height = 3024, latitude = 59.3293, longitude = 18.0686
+       where root_id = $1 and path = 'alice/photo.jpg'`,
+      [rootId],
+    );
 
     if (readmeFileId !== undefined && readmeText !== undefined) {
       await client.query(`delete from idx.chunks where file_id = $1`, [readmeFileId]);
@@ -167,8 +169,8 @@ async function resolveRunEnvironment(): Promise<{
  * (see `resolveRunEnvironment` above) so concurrent suites never collide;
  * starts the fake indexer sidecar `system.spec.ts` exercises; boots
  * Postgres, the local folder with every seed user's files, the API (with
- * the folder as the `files` index root so search is available and
- * `FDRIVE_INDEXER_URL` pointed at the fake indexer), and the web app once
+ * `FDRIVE_INDEXER_URL` pointed at the fake indexer, so search is available
+ * once the features are on), and the web app once
  * for the whole run (see `support/environment.ts`); seeds the search index for
  * `search.spec.ts`; and stashes the environment handle for
  * `global-teardown.ts`. Never used to seed *file* data through the UI;
@@ -184,10 +186,6 @@ export default async function globalSetup(): Promise<void> {
   const fakeIndexer = await startFakeIndexer();
 
   const environment = await startEnvironment({
-    indexRoot: true,
-    prepareStorage: async (storage) => {
-      fakeIndexer.attachStorage({ root: storage.root });
-    },
     extraApiEnv: { FDRIVE_INDEXER_URL: fakeIndexer.baseUrl },
     extraStopFns: [() => fakeIndexer.stop()],
   });

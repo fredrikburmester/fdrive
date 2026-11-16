@@ -1,13 +1,15 @@
 import { createHash } from "node:crypto";
-import { createRecycleFolderTrash, StorageError, withMoveToTrash } from "@fdrive/core";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { createMemoryStorage } from "@fdrive/testkit";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.ts";
+import { memoryTrashItemRepo } from "../../test/trash-items.ts";
 import type { Principal } from "../auth/principal.ts";
 import { createMetadataService } from "../metadata/service.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
   canBrowsePath,
@@ -17,14 +19,14 @@ import {
   ordinaryPath,
   requireMode,
   tokenScopes,
-  trashPathFor,
 } from "./access.ts";
 import {
   boundedBytes,
   decodeText,
+  liveFileInfo,
   MAX_FILE_BYTES,
   readFile,
-  readFileTextDirect,
+  readFileText,
   readStoredFile,
 } from "./content.ts";
 import {
@@ -41,10 +43,8 @@ import {
 import {
   type McpToolDeps,
   runCreateFolder,
-  runFileInfo,
   runListDirectory,
   runMovePath,
-  runReadFileText,
   runSearch,
 } from "./handlers.ts";
 import { registerMcpTools } from "./tools.ts";
@@ -57,22 +57,14 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     "/hidden/secret.txt": "secret",
   });
   const clock = () => new Date("2026-09-12T10:00:00Z");
-  const storage = {
-    ...withMoveToTrash({ storage: base, trashPath: "/.trash", clock }),
-    trash: createRecycleFolderTrash({ storage: base, trashPath: "/.trash" }),
-  };
+  const storage = base;
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: "Alice" });
-  const provider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://storage.invalid",
-  });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
-  const principal: Principal = {
+  const principal: TokenPrincipal = {
     accountId: account.id,
     identityId: identity.id,
     username: "alice",
@@ -81,36 +73,28 @@ async function fixture(mode: "read" | "organize" | "full" = "full", paths = ["/a
     tokenAccess: { mode, paths },
   };
   const metadata = createMetadataService({ ...repos });
+  const trash = memoryTrashItemRepo();
   const deps: McpToolDeps = {
-    identities: repos.identities,
-    scopeResolver: {
-      verifiedIndexScopes: vi.fn(async () => ({
-        available: false as const,
-        reason: "no_connection" as const,
-      })),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: vi.fn(async () => false),
     indexQueries: {} as McpToolDeps["indexQueries"],
     searchService: {} as McpToolDeps["searchService"],
     publicUrl: async () => "https://drive.example",
     indexerClient: null,
-    writesEnabled: false,
-    trashPath: "/.trash",
     clock,
     metadata,
-    onMutation: vi.fn(async (_p, change) => {
-      if (change.kind === "move" || (change.kind === "restore" && change.moveMetadata))
-        await metadata.onMoved(
-          identity.id,
-          change.path,
-          change.target ?? change.path,
-          change.isDir,
-        );
-      if (change.kind === "trash") await metadata.onTrashed(identity.id, change.path, change.isDir);
-    }),
+    files: testFileOperations({ metadata, trashRepo: trash }),
+    trash,
   };
-  return { base, principal, deps, repos };
+  /** Moves `path` to Trash outside MCP and its grants, as the web would. */
+  const put = (path: string) =>
+    testFileOperations({ trashRepo: trash }).trash(
+      { identityId: identity.id, storage, recorded: null },
+      path,
+    );
+  return { base, principal, deps, repos, trash, put };
 }
-async function connected(principal: Principal, deps: McpToolDeps) {
+async function connected(principal: TokenPrincipal, deps: McpToolDeps) {
   const server = new McpServer({ name: "fdrive-test", version: "1" });
   registerMcpTools(server, principal, deps);
   const [a, b] = InMemoryTransport.createLinkedPair();
@@ -144,51 +128,60 @@ it("enforces normalized grants, ancestor browsing and protected roots", async ()
   await expect(readFile(deps, principal, "/allowed/../hidden/secret.txt")).rejects.toThrow(
     "allowed folders",
   );
-  expect(() => assertMutablePath(principal, "/allowed/version.1", null)).toThrow("folder root");
+  expect(() => assertMutablePath(principal, "/allowed/version.1")).toThrow("folder root");
   const root = { ...principal, tokenAccess: { mode: "full" as const, paths: ["/"] } };
-  expect(() => assertMutablePath(root, "/", null)).toThrow("folder root");
-  expect(() => assertMutablePath(root, "/allowed", "/allowed/trash")).toThrow("containing Trash");
-  expect(() => ordinaryPath(deps, root, "/.trash/a")).toThrow("Trash");
-  expect(trashPathFor({}, principal)).toBe(null);
-  expect(trashPathFor({ trashPathForStorage: () => "/bin" }, principal)).toBe("/bin");
+  expect(() => assertMutablePath(root, "/")).toThrow("folder root");
+  expect(() => ordinaryPath(root, "/.trash/a")).toThrow("Trash");
 });
 
 it("intersects index mappings while retaining aliases and nested shadow boundaries", async () => {
   const scopes = [
-    { rootName: "home", fsPrefix: "/alice", virtualPrefix: "/" },
-    { rootName: "team", fsPrefix: "/docs", virtualPrefix: "/allowed/team" },
+    { fsPrefix: "/alice", virtualPrefix: "/" },
+    { fsPrefix: "/docs", virtualPrefix: "/allowed/team" },
   ] as const;
   expect(intersectScopes(scopes, ["/allowed", "/allowed/team/sub", "/allowed"])).toEqual([
-    { rootName: "home", fsPrefix: "/alice/allowed", virtualPrefix: "/allowed" },
+    { fsPrefix: "/alice/allowed", virtualPrefix: "/allowed" },
     scopes[1],
-    { rootName: "team", fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
+    { fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
   ]);
   expect(intersectScopes(scopes, ["/allowed/team/sub"])).toEqual([
-    { rootName: "team", fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
+    { fsPrefix: "/docs/sub", virtualPrefix: "/allowed/team/sub" },
   ]);
   expect(intersectScopes([scopes[1]], ["/other"])).toEqual([]);
-  const { principal } = await fixture();
-  const { tokenAccess: _access, ...legacy } = principal;
-  expect(tokenScopes(legacy, scopes)).toBe(scopes);
-  expect(canOrganize(legacy, true)).toBe(true);
-  expect(canOrganize(legacy, false)).toBe(false);
-  expect(() => requireMode(legacy, "full")).toThrow();
+  const { principal } = await fixture("organize");
+  // The AI's session principal carries no grants and keeps every verified scope.
+  const { tokenAccess: _access, ...session } = principal;
+  const tokenless: Principal = session;
+  expect(tokenScopes(tokenless, scopes)).toBe(scopes);
+  expect(canOrganize(principal)).toBe(true);
+  expect(canOrganize({ ...principal, tokenAccess: { mode: "read", paths: ["/"] } })).toBe(false);
+  expect(() => requireMode(principal, "organize")).not.toThrow();
+  expect(() => requireMode(principal, "full")).toThrow("does not allow full");
 });
 
 it("reads provider-backed text, bytes and metadata without index access, including punctuation and paging", async () => {
   const { principal, deps } = await fixture("read");
-  expect(
-    await runReadFileText(deps, principal, { path: "/allowed/a.txt", offset: 2 }),
-  ).toMatchObject({ text: "pha", sha256: SHA("alpha") });
+  expect(await readFileText(deps, principal, { path: "/allowed/a.txt", offset: 2 })).toMatchObject({
+    text: "pha",
+    sha256: SHA("alpha"),
+  });
   expect(await readFile(deps, principal, "/allowed/a.txt")).toMatchObject({
     data: Buffer.from("alpha").toString("base64"),
     encoding: "base64",
   });
-  expect(await runFileInfo(deps, principal, { path: "/allowed/version.1" })).toMatchObject({
+  expect(await liveFileInfo(deps, principal, "/allowed/version.1")).toMatchObject({
     kind: "dir",
+    mime: null,
     url: "https://drive.example/files/allowed/version.1",
   });
-  expect(deps.scopeResolver.verifiedIndexScopes).not.toHaveBeenCalled();
+  // A file's type comes from its name, and its modification time is always known.
+  expect(await liveFileInfo(deps, principal, "/allowed/a.txt")).toMatchObject({
+    kind: "file",
+    size_bytes: 5,
+    mime: "text/plain",
+    modified: new Date(0).toISOString(),
+  });
+  expect(deps.indexed).not.toHaveBeenCalled();
   const first = await runListDirectory(deps, principal, { path: "/allowed", limit: 1 });
   expect(first.next_offset).toBe(1);
   expect(
@@ -204,7 +197,7 @@ it("reads provider-backed text, bytes and metadata without index access, includi
   expect(decodeText(new Uint8Array([0]))).toBe(null);
 });
 
-it("bounds streams even when a provider understates content size and cancels on overflow", async () => {
+it("bounds streams and refuses a file past the limit without reading it", async () => {
   const { principal, deps } = await fixture();
   const cancelled = vi.fn();
   await expect(
@@ -219,39 +212,30 @@ it("bounds streams even when a provider understates content size and cancels on 
     ),
   ).rejects.toThrow("limit");
   expect(cancelled).toHaveBeenCalled();
-  const metadata = await principal.storage.statFile("/allowed/a.txt");
-  const download = vi.spyOn(principal.storage, "download");
-  vi.spyOn(principal.storage, "statFile").mockResolvedValueOnce({
-    ...metadata,
+  // A file past the limit is refused from its size, without reading it, and closed.
+  const open = principal.storage.open.bind(principal.storage);
+  const close = vi.fn();
+  const read = vi.fn();
+  vi.spyOn(principal.storage, "open").mockImplementationOnce(async (path) => ({
+    ...(await open(path)),
     size: MAX_FILE_BYTES + 1,
-  });
+    read,
+    close,
+  }));
   await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
-  expect(download).not.toHaveBeenCalled();
-  const response = await principal.storage.download("/allowed/a.txt");
-  download.mockResolvedValueOnce({ ...response, contentLength: MAX_FILE_BYTES + 1 });
-  await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
-  download.mockResolvedValueOnce({
-    ...response,
-    contentLength: null,
-    body: new ReadableStream({
-      start(c) {
-        c.enqueue(new Uint8Array(MAX_FILE_BYTES + 1));
-        c.close();
-      },
-    }),
-  });
-  await expect(readStoredFile(deps, principal, "/allowed/a.txt")).rejects.toThrow("limit");
+  expect(read).not.toHaveBeenCalled();
+  expect(close).toHaveBeenCalledOnce();
 });
 
 it("uses optional byte extraction for documents and reports absent or unreachable processing", async () => {
   const { base, principal, deps } = await fixture();
   await base.upload("/allowed/a.pdf", Buffer.from("%PDF fixture"));
-  await expect(readFileTextDirect(deps, principal, { path: "/allowed/a.pdf" })).rejects.toThrow(
+  await expect(readFileText(deps, principal, { path: "/allowed/a.pdf" })).rejects.toThrow(
     "unavailable",
   );
   const extractContent = vi.fn(async () => ({ text: "document text", status: "ok" }));
-  const enabled = { ...deps, indexerClient: { extract: vi.fn(), extractContent } };
-  expect(await readFileTextDirect(enabled, principal, { path: "/allowed/a.pdf" })).toMatchObject({
+  const enabled = { ...deps, indexerClient: { extractContent } };
+  expect(await readFileText(enabled, principal, { path: "/allowed/a.pdf" })).toMatchObject({
     text: "document text",
     status: "ok",
   });
@@ -260,11 +244,9 @@ it("uses optional byte extraction for documents and reports absent or unreachabl
     bytes: Buffer.from("%PDF fixture"),
   });
   await expect(
-    readFileTextDirect(
-      { ...deps, indexerClient: { extract: vi.fn(), extractContent: async () => null } },
-      principal,
-      { path: "/allowed/a.pdf" },
-    ),
+    readFileText({ ...deps, indexerClient: { extractContent: async () => null } }, principal, {
+      path: "/allowed/a.pdf",
+    }),
   ).rejects.toThrow("reachable");
 });
 
@@ -277,7 +259,7 @@ it("organizes independently of indexing and rejects unauthorized writes, collisi
   expect(
     await copyPath(deps, principal, { src: "/allowed/new", dst: "/allowed/copy.1" }),
   ).toMatchObject({ to: "/allowed/copy.1" });
-  expect(await new Response((await base.download("/allowed/copy.1/README")).body).text()).toBe(
+  expect(await new Response((await base.open("/allowed/copy.1/README")).stream()).text()).toBe(
     "alpha",
   );
   await expect(
@@ -300,7 +282,7 @@ it("organizes independently of indexing and rejects unauthorized writes, collisi
 it("creates/uploads exact bytes, checks stale edits, and preserves occupied targets", async () => {
   const { principal, deps, base } = await fixture();
   await createFile(deps, principal, { path: "/allowed/#?%.txt", text: "before" });
-  const previous = await readFileTextDirect(deps, principal, { path: "/allowed/#?%.txt" });
+  const previous = await readFileText(deps, principal, { path: "/allowed/#?%.txt" });
   expect(previous.url).toContain("%23%3F%25.txt");
   expect(
     await editFile(deps, principal, {
@@ -337,23 +319,18 @@ it("creates/uploads exact bytes, checks stale edits, and preserves occupied targ
       expected_sha256: createHash("sha256").update(Buffer.from("AP8=", "base64")).digest("hex"),
     }),
   ).rejects.toThrow("UTF-8");
-  const broken = {
-    ...deps,
-    onMutation: async () => {
-      throw new Error("database down");
-    },
-  };
+  // A new file has nothing kept by path to follow, so nothing can fail after it.
   expect(
-    await createFile(broken, principal, { path: "/allowed/done", text: "done" }),
-  ).toHaveProperty("warnings");
+    await createFile(deps, principal, { path: "/allowed/done", text: "done" }),
+  ).not.toHaveProperty("warnings");
   expect(await base.stat("/allowed/done")).toMatchObject({ kind: "file" });
 });
 
 it("restores only authorized Trash entries and preserves tags/favorites through move and alternate restore", async () => {
-  const { principal, deps, base } = await fixture();
+  const { principal, deps, trash, put } = await fixture();
   await fileTags(deps, principal, "/allowed/a.txt", ["Work", "Work"]);
   await setFavorite(deps, principal, { path: "/allowed/a.txt", favorite: true });
-  await principal.storage.deleteFile("/hidden/secret.txt");
+  await put("/hidden/secret.txt");
   await trashPath(deps, principal, "/allowed/a.txt");
   const listing = await listTrash(deps, principal, {});
   expect(listing.entries).toHaveLength(1);
@@ -361,8 +338,8 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   await expect(
     restorePath(deps, principal, { id, target: "/hidden/restored.txt" }),
   ).rejects.toThrow("allowed folders");
-  const all = await principal.storage.trash?.list({ limit: 100 });
-  const hidden = all?.entries.find((e) => e.originalPath.startsWith("/hidden"));
+  const all = await trash.list(principal.identityId, 100);
+  const hidden = all.items.find((e) => e.originalPath.startsWith("/hidden"));
   await expect(restorePath(deps, principal, { id: hidden?.id ?? "missing" })).rejects.toThrow(
     "allowed folders",
   );
@@ -372,16 +349,34 @@ it("restores only authorized Trash entries and preserves tags/favorites through 
   expect((await fileTags(deps, principal, "/allowed/restored.txt")).tags[0]?.name).toBe("Work");
   await setFavorite(deps, principal, { path: "/allowed/restored.txt", favorite: false });
   expect(await fileTags(deps, principal, "/allowed/restored.txt", [])).toMatchObject({ tags: [] });
-  await expect(restorePath(deps, principal, { id })).rejects.toThrow("listing");
-  await expect(
-    trashPath({ ...deps, trashPath: null }, principal, "/allowed/restored.txt"),
-  ).rejects.toThrow("no file was deleted");
-  expect(await base.stat("/allowed/restored.txt")).toMatchObject({ kind: "file" });
+  // Restored, it is no Trash item any more.
+  await expect(restorePath(deps, principal, { id })).rejects.toThrow("not a Trash item id");
   await trashPath(deps, principal, "/allowed/version.1");
   const folder = (await listTrash(deps, principal, { offset: 0, limit: 1 })).entries[0];
   expect(await restorePath(deps, principal, { id: folder?.id ?? "missing" })).toMatchObject({
     restored: "/allowed/version.1",
   });
+});
+
+it("restores a Trash item from its id without listing Trash", async () => {
+  const { principal, deps, base, trash } = await fixture();
+  await trashPath(deps, principal, "/allowed/a.txt");
+  const [entry] = (await listTrash(deps, principal, {})).entries;
+  if (entry === undefined) throw new Error("expected a Trash item");
+  const list = vi.spyOn(trash, "list");
+
+  expect(await restorePath(deps, principal, { id: entry.id })).toMatchObject({
+    restored: "/allowed/a.txt",
+  });
+  expect(list).not.toHaveBeenCalled();
+  expect(await base.stat("/allowed/a.txt")).toMatchObject({ kind: "file" });
+  await expect(restorePath(deps, principal, { id: "allowed/a.txt" })).rejects.toThrow(
+    "not a Trash item id",
+  );
+  // An id Trash does not hold, or holds for someone else, is none either.
+  await expect(
+    restorePath(deps, principal, { id: "7a4b2c1d-3e5f-4a6b-8c7d-9e0f1a2b3c4d" }),
+  ).rejects.toThrow("not a Trash item id");
 });
 
 it("preserves search availability and passes grants to visual search", async () => {
@@ -399,9 +394,7 @@ it("preserves search availability and passes grants to visual search", async () 
   expect(
     await searchImages({ ...deps, imageSearchService: { search } }, principal, { query: "red" }),
   ).toMatchObject({ partial: true });
-  expect(search).toHaveBeenCalledWith(
-    expect.objectContaining({ scopes: [], trashPath: "/.trash" }),
-  );
+  expect(search).toHaveBeenCalledWith(expect.objectContaining({ scopes: [] }));
   const searchService = {
     search: vi.fn(async () => ({ sections: { files: [] }, partial: true, degraded: true })),
   } as unknown as McpToolDeps["searchService"];
@@ -466,19 +459,19 @@ describe("SDK tool discovery and calls", () => {
       }
     },
   );
-  it("keeps new direct read tools away from legacy tokens", async () => {
-    const { principal, deps } = await fixture();
-    const { tokenAccess: _access, ...legacy } = principal;
-    const { client, close } = await connected(legacy, deps);
+  it("reports each token's own access level in capabilities", async () => {
+    const { principal, deps } = await fixture("organize", ["/allowed"]);
+    const { client, close } = await connected(principal, deps);
     try {
-      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain("read_file");
-      await expect(readFile(deps, legacy, "/allowed/a.txt")).rejects.toThrow(
-        "explicit permissions",
-      );
-      await expect(runReadFileText(deps, legacy, { path: "/allowed/a.txt" })).rejects.toThrow();
-      await expect(runReadFileText(deps, legacy, { path: "/.trash/secret" })).rejects.toThrow(
-        "Trash",
-      );
+      const result = await client.callTool({ name: "capabilities", arguments: {} });
+      const content = result.content as { type: string; text: string }[];
+      expect(JSON.parse(content[0]?.text ?? "{}")).toMatchObject({
+        access: { mode: "organize", paths: ["/allowed"] },
+        organize: true,
+        full_management: false,
+      });
+      const root = { ...principal, tokenAccess: { mode: "read" as const, paths: ["/"] } };
+      await expect(readFileText(deps, root, { path: "/.trash/secret" })).rejects.toThrow("Trash");
     } finally {
       await close();
     }
@@ -557,7 +550,7 @@ it("executes all advertised management tools through the MCP SDK", async () => {
 });
 
 it("handles cancellation, unavailable metadata and post-restore failures without lying about the storage result", async () => {
-  const { principal, deps, base } = await fixture();
+  const { principal, deps, base, repos, trash } = await fixture();
   expect(
     await boundedBytes(
       new ReadableStream({
@@ -588,42 +581,32 @@ it("handles cancellation, unavailable metadata and post-restore failures without
     "containing Trash",
   );
   await copyPath(deps, principal, { src: "/allowed/a.txt", dst: "/allowed/a.txt" });
-  expect(deps.onMutation).not.toHaveBeenCalled();
   await trashPath(deps, principal, "/allowed/a.txt");
   const id = (await listTrash(deps, principal, {})).entries[0]?.id ?? "missing";
-  const stat = principal.storage.stat;
-  principal.storage.stat = async (path) => {
-    if (path === "/allowed/a.txt") throw new StorageError("upstream_unavailable", "probe failed");
-    return stat(path);
-  };
+  const failing = createMetadataService({ ...repos });
+  vi.spyOn(failing, "onMoved").mockRejectedValue(new Error("metadata failed"));
   const restored = await restorePath(
-    {
-      ...deps,
-      onMutation: async () => {
-        throw new Error("metadata failed");
-      },
-    },
+    { ...deps, files: testFileOperations({ metadata: failing, trashRepo: trash }) },
     principal,
     { id, target: "/allowed/recovered.txt" },
   );
-  expect(restored.warnings).toHaveLength(2);
+  expect(restored.warnings).toHaveLength(1);
+  const { files: _files, ...writeless } = deps;
+  await expect(trashPath(writeless, principal, "/allowed/recovered.txt")).rejects.toThrow(
+    "file changes are unavailable",
+  );
+  const { trash: _trash, ...trashless } = deps;
+  await expect(listTrash(trashless, principal, {})).rejects.toThrow("file changes are unavailable");
   expect(await base.stat("/allowed/recovered.txt")).toMatchObject({ kind: "file" });
 });
 
-it("keeps capabilities available when index mapping fails", async () => {
+it("keeps capabilities available while the files folder is not indexed", async () => {
   const { principal, deps } = await fixture("read");
-  const { client, close } = await connected(principal, {
-    ...deps,
-    scopeResolver: {
-      verifiedIndexScopes: async () => {
-        throw new Error("indexer unreachable");
-      },
-    },
-  });
+  const { client, close } = await connected(principal, deps);
   try {
     const response = await client.callTool({ name: "capabilities", arguments: {} });
     expect(response.isError).not.toBe(true);
-    expect(JSON.stringify(response.content)).toContain("index mapping unavailable");
+    expect(JSON.stringify(response.content)).toContain("the files folder is not indexed");
   } finally {
     await close();
   }
@@ -648,12 +631,13 @@ it("pages multiple Trash entries and reuses existing tag names without creating 
 
 it("passes only the token’s mapped folders to indexed text and image search", async () => {
   const { principal, deps } = await fixture("read", ["/allowed/version.1"]);
-  const scopes = [{ rootName: "disk", fsPrefix: "/alice", virtualPrefix: "/" }];
+  const scopes = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
   const search = vi.fn(async () => ({ sections: { files: [] }, unavailable: false }));
   const images = vi.fn(async () => ({ query: "q", hits: [], tookMs: 0, unavailable: false }));
   const indexed: McpToolDeps = {
     ...deps,
-    scopeResolver: { verifiedIndexScopes: async () => ({ available: true, scopes }) },
+    scopeResolver: { scopesFor: async () => scopes },
+    indexed: async () => true,
     searchService: { search } as unknown as McpToolDeps["searchService"],
     imageSearchService: { search: images },
   };
@@ -664,7 +648,6 @@ it("passes only the token’s mapped folders to indexed text and image search", 
       expect.objectContaining({
         scopes: [
           {
-            rootName: "disk",
             fsPrefix: "/alice/allowed/version.1",
             virtualPrefix: "/allowed/version.1",
           },

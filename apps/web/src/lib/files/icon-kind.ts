@@ -10,6 +10,7 @@ export type FileIconKind =
   | "code"
   | "presentation"
   | "table"
+  | "link"
   | "file";
 
 const ARCHIVE_EXTS = new Set([
@@ -81,11 +82,15 @@ export interface FileIconInput {
  * (`video/mp2t`); trusting the extension keeps those files showing a code
  * icon instead of a media one. Media (image/video/audio) is only decided
  * from `mime` once the extension is not recognized as one of those known
- * non-media kinds. Directories are always "folder".
+ * non-media kinds. Directories are always "folder", and symbolic links
+ * "link", whatever their name says.
  */
 export function fileIconKind(entry: FileIconInput): FileIconKind {
   if (entry.kind === "dir") {
     return "folder";
+  }
+  if (entry.kind === "symlink") {
+    return "link";
   }
 
   const ext = entry.ext.toLowerCase();

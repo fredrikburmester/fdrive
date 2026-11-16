@@ -1,44 +1,27 @@
 import { type ApiError, MeResponse, ROUTES } from "@fdrive/contracts";
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import type { Logger } from "pino";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app";
 import { loadConfig } from "../config";
-import { localModuleFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
+import { filesFolderFixture, seedLocalUsers } from "../local/test-fixtures/index.ts";
 import {
-  fakeProviderModule,
-  memoryProviderService,
-  seedLocalProvider,
-  seedProviderRow,
-} from "../providers/test-fixtures/index.ts";
-import { parseMasterKey } from "./crypto";
-import { createAuthModule } from "./index";
+  createAuthModule,
+  createLoginLimiter,
+  createPasswordCheck,
+  type Installation,
+} from "./index";
+import { createPrincipalFactory } from "./principal";
 import { registerAuthRoutes } from "./routes";
-import { memoryIdentityOperations } from "./test-fixtures/index.ts";
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 const REQUIRED_ENV: Record<string, string> = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
   FDRIVE_SESSION_TTL_DAYS: "30",
   FDRIVE_COOKIE_SECURE: "auto",
@@ -67,12 +50,7 @@ function createClock(startMs: number) {
 }
 
 /** The setup gate open: these tests exercise auth, not setup. */
-const READY = async () => ({ required: false, providers: [] });
-
-/** No request may leave these tests unless one names a fake server. */
-const offline: typeof globalThis.fetch = async (input) => {
-  throw new TypeError(`fetch failed: no network in tests (${String(input)})`);
-};
+const READY = async () => false;
 
 const USERS = [
   { username: "alice", password: "wonderland" },
@@ -83,26 +61,23 @@ const USERS = [
 async function buildTestApp(opts: {
   clockCtl: ReturnType<typeof createClock>;
   envOverrides?: Record<string, string>;
+  installation?: () => Promise<Installation>;
 }) {
   const repos: Repos = createMemoryRepos();
   const config = loadConfig({ ...REQUIRED_ENV, ...opts.envOverrides });
-  const local = localModuleFixture(repos);
+  const local = filesFolderFixture(repos);
   await seedLocalUsers(repos, USERS);
-  const providers = memoryProviderService(repos, {
-    fetch: offline,
-    clock: opts.clockCtl.clock,
-    modules: { local: local.module },
-  });
-  await providers.seedFromEnvironment();
   const authModule = createAuthModule({
-    identityLinks: memoryIdentityOperations(repos),
     repos,
-    providers,
-    fetch: offline,
-    master: parseMasterKey(config.fdriveMasterKey),
     clock: opts.clockCtl.clock,
     config,
-    storageFactory: async () => FAKE_STORAGE,
+    checkPassword: createPasswordCheck({
+      limiter: createLoginLimiter({ clock: opts.clockCtl.clock }),
+      users: local.users,
+    }),
+    principalFor: createPrincipalFactory({ folder: { storage: () => FAKE_STORAGE } }),
+    installation:
+      opts.installation ?? (async () => ({ storageName: "Local folder", index: false })),
   });
   const app = createApp({
     config,
@@ -111,11 +86,11 @@ async function buildTestApp(opts: {
     startedAt: new Date(0),
     clock: opts.clockCtl.clock,
     principalResolver: authModule.principalResolver,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: authModule.registerRoutes,
   });
 
-  return { app, repos, users: local.users, config, authModule, providers };
+  return { app, repos, users: local.users, config, authModule };
 }
 
 async function readJson<T>(res: Response): Promise<T> {
@@ -146,7 +121,7 @@ async function login(
       "x-requested-with": "fdrive",
       ...extraHeaders,
     },
-    body: JSON.stringify("credential" in body ? body : { credential: body }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -155,84 +130,6 @@ describe("auth routes: POST /auth/login", () => {
 
   beforeEach(() => {
     clockCtl = createClock(Date.now());
-  });
-
-  it("responds setup_required when no provider is configured", async () => {
-    // The app-level setup gate is open, so the 503 comes from the auth
-    // service itself: it sees no provider rows at all.
-    const repos: Repos = createMemoryRepos();
-    const config = loadConfig(REQUIRED_ENV);
-    const authModule = createAuthModule({
-      identityLinks: memoryIdentityOperations(repos),
-      repos,
-      providers: memoryProviderService(repos, { fetch: offline, clock: clockCtl.clock }),
-      fetch: offline,
-      master: parseMasterKey(config.fdriveMasterKey),
-      clock: clockCtl.clock,
-      config,
-      storageFactory: async () => FAKE_STORAGE,
-    });
-    const app = createApp({
-      config,
-      logger: createTestLogger(),
-      version: "1.0.0",
-      startedAt: new Date(0),
-      clock: clockCtl.clock,
-      principalResolver: authModule.principalResolver,
-      connectionStatus: READY,
-      registerRoutes: authModule.registerRoutes,
-    });
-
-    const res = await login(app, { username: "alice", password: "wonderland" });
-
-    expect(res.status).toBe(503);
-    expect(await readJson<ApiError>(res)).toMatchObject({ error: { kind: "setup_required" } });
-  });
-
-  it("binds a setup candidate login to its own provider row even while that row is disabled", async () => {
-    const repos = createMemoryRepos();
-    const config = loadConfig(REQUIRED_ENV);
-    // Which row's address each sign-in is checked against.
-    const requests: string[] = [];
-    const module = fakeProviderModule({
-      async authenticate(instance, credential) {
-        requests.push(instance.baseUrl);
-        if (credential.password !== "wonderland") throw new Error("wrong password");
-        return { externalUsername: credential.username ?? "" };
-      },
-    });
-    const active = await seedProviderRow(repos, "http://active.test", { managedByEnv: true });
-    const candidate = await seedProviderRow(repos, "http://candidate.test", { enabled: false });
-    const auth = createAuthModule({
-      identityLinks: memoryIdentityOperations(repos),
-      repos,
-      providers: memoryProviderService(repos, {
-        fetch: offline,
-        clock: clockCtl.clock,
-        modules: { local: module },
-      }),
-      fetch: offline,
-      master: parseMasterKey(config.fdriveMasterKey),
-      clock: clockCtl.clock,
-      config,
-      storageFactory: async () => FAKE_STORAGE,
-    });
-
-    const result = await auth.service.loginCandidate(
-      {
-        credential: { username: "alice", password: "wonderland" },
-        userAgent: null,
-        ip: "127.0.0.1",
-      },
-      candidate.id,
-    );
-    const identity = await repos.identities.get(result.me.activeIdentityId);
-    if (identity === null) throw new Error("expected candidate identity");
-
-    expect(requests).toEqual(["http://candidate.test"]);
-    expect(identity.providerId).toBe(candidate.id);
-    expect((await repos.providers.get(active.id))?.enabled).toBe(true);
-    expect((await repos.providers.get(candidate.id))?.enabled).toBe(false);
   });
 
   it("succeeds with correct credentials, returns MeResponse, and sets a non-Secure cookie over plain http", async () => {
@@ -245,7 +142,8 @@ describe("auth routes: POST /auth/login", () => {
     expect(MeResponse.safeParse(body).success).toBe(true);
     expect(body).toMatchObject({
       account: { displayName: "alice" },
-      identities: [{ username: "alice", providerType: "local", providerLabel: "Local folder" }],
+      identity: { username: "alice" },
+      storageName: "Local folder",
     });
 
     const setCookie = res.headers.get("set-cookie");
@@ -253,17 +151,6 @@ describe("auth routes: POST /auth/login", () => {
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Lax");
     expect(setCookie).not.toContain("Secure");
-  });
-
-  it("rejects a non-canonical provider ID before repository access", async () => {
-    const { app } = await buildTestApp({ clockCtl });
-    const res = await login(app, {
-      providerId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
-      credential: { username: "alice", password: "wonderland" },
-    });
-
-    expect(res.status).toBe(400);
-    expect(await readJson<ApiError>(res)).toMatchObject({ error: { kind: "bad_request" } });
   });
 
   it("sets a Secure cookie when the request arrived over a forwarded https connection", async () => {
@@ -359,13 +246,13 @@ describe("auth routes: POST /auth/login", () => {
     const res = await app.request(ROUTES.auth.login, {
       method: "POST",
       headers: { "content-type": "application/json", "sec-fetch-site": "cross-site" },
-      body: JSON.stringify({ credential: { username: "alice", password: "wonderland" } }),
+      body: JSON.stringify({ username: "alice", password: "wonderland" }),
     });
 
     expect(res.status).toBe(403);
   });
 
-  it("logs a second identity into the same account it was created under", async () => {
+  it("signs a login in again to the account it was created under", async () => {
     const { app, repos } = await buildTestApp({ clockCtl });
 
     const first = await login(app, { username: "alice", password: "wonderland" });
@@ -374,7 +261,8 @@ describe("auth routes: POST /auth/login", () => {
     const secondBody = await readJson<MeResponse>(second);
 
     expect(secondBody.account.id).toBe(firstBody.account.id);
-    expect(await repos.identities.listByAccount(firstBody.account.id)).toHaveLength(1);
+    expect(secondBody.identity.id).toBe(firstBody.identity.id);
+    expect(await repos.identities.listAll()).toHaveLength(USERS.length);
   });
 });
 
@@ -480,62 +368,21 @@ describe("auth routes: GET /auth/me", () => {
     expect(afterTouch?.lastSeenAt.getTime()).toBe(beforeTouch?.lastSeenAt.getTime());
   });
 
-  it("uses the identity header to act as another identity linked to the same account", async () => {
-    const { app, repos } = await buildTestApp({ clockCtl });
-    const loginRes = await login(app, { username: "alice", password: "wonderland" });
-    const cookie = extractCookie(loginRes);
-    const meBody = await readJson<MeResponse>(loginRes);
-    const accountId = meBody.account.id;
-
-    // Link a second identity (another login on the local folder) to the
-    // same account by inserting it directly, as linking would.
-    const provider = await seedLocalProvider(repos);
-    const secondIdentity = await repos.identities.create({
-      accountId,
-      providerId: provider.id,
-      externalUsername: "alice-work",
-    });
-
-    const res = await app.request(ROUTES.auth.me, {
-      headers: { cookie, "x-identity-id": secondIdentity.id },
-    });
-
-    expect(res.status).toBe(200);
-    const body = await readJson<MeResponse>(res);
-    expect(body.activeIdentityId).toBe(secondIdentity.id);
-  });
-
-  it("returns 403 for an identity header pointing at another account's identity", async () => {
+  it("ignores an identity header or query: the session names its login", async () => {
     const { app } = await buildTestApp({ clockCtl });
     const aliceLogin = await login(app, { username: "alice", password: "wonderland" });
     const aliceCookie = extractCookie(aliceLogin);
-    const bobLogin = await login(app, { username: "bob", password: "builder" });
-    const bobBody = await readJson<MeResponse>(bobLogin);
-    const bobIdentity = bobBody.identities[0];
-    if (bobIdentity === undefined) {
-      throw new Error("expected bob to have at least one identity");
-    }
-    const bobIdentityId = bobIdentity.id;
+    const alice = await readJson<MeResponse>(aliceLogin);
+    const bob = await readJson<MeResponse>(
+      await login(app, { username: "bob", password: "builder" }),
+    );
 
-    const res = await app.request(ROUTES.auth.me, {
-      headers: { cookie: aliceCookie, "x-identity-id": bobIdentityId },
+    const res = await app.request(`${ROUTES.auth.me}?identity=${bob.identity.id}`, {
+      headers: { cookie: aliceCookie, "x-identity-id": bob.identity.id },
     });
 
-    expect(res.status).toBe(403);
-    const body = await res.json();
-    expect(body).toMatchObject({ error: { kind: "forbidden" } });
-  });
-
-  it("returns 403 for an identity header with an unknown identity id", async () => {
-    const { app } = await buildTestApp({ clockCtl });
-    const loginRes = await login(app, { username: "alice", password: "wonderland" });
-    const cookie = extractCookie(loginRes);
-
-    const res = await app.request(ROUTES.auth.me, {
-      headers: { cookie, "x-identity-id": "00000000-0000-0000-0000-000000000000" },
-    });
-
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(200);
+    expect((await readJson<MeResponse>(res)).identity.id).toBe(alice.identity.id);
   });
 });
 
@@ -631,7 +478,7 @@ describe("auth routes: POST /auth/logout", () => {
         storage: FAKE_STORAGE,
         isAdmin: false,
       }),
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => {
         registerAuthRoutes(groups, {
           service: { logout } as unknown as Parameters<typeof registerAuthRoutes>[1]["service"],
@@ -694,7 +541,7 @@ describe("auth routes: request ip extraction", () => {
   });
 });
 
-describe("auth routes: login upstream error mapping", () => {
+describe("auth routes: login error mapping", () => {
   let clockCtl: ReturnType<typeof createClock>;
 
   beforeEach(() => {
@@ -710,18 +557,20 @@ describe("auth routes: login upstream error mapping", () => {
 
     const res = await login(app, { username: "alice", password: "wonderland" });
     expect(res.status).toBe(403);
-    expect(await res.json()).toMatchObject({ error: { kind: "forbidden", message: "forbidden" } });
+    expect(await res.json()).toMatchObject({
+      error: { kind: "forbidden", message: "this user may not sign in" },
+    });
   });
 
-  it("maps users that cannot be read to upstream_unavailable", async () => {
+  it("answers users that cannot be read with an internal error that leaks nothing", async () => {
     const { app, users } = await buildTestApp({ clockCtl });
     vi.spyOn(users, "verify").mockRejectedValueOnce(new Error("connection refused"));
 
     const res = await login(app, { username: "alice", password: "wonderland" });
 
-    expect(res.status).toBe(502);
+    expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body).toMatchObject({ error: { kind: "upstream_unavailable" } });
+    expect(body).toMatchObject({ error: { kind: "internal" } });
     expect(JSON.stringify(body)).not.toContain("connection refused");
   });
 });
@@ -733,36 +582,15 @@ describe("auth service: direct edge cases", () => {
     clockCtl = createClock(Date.now());
   });
 
-  it("me() throws internal when the account no longer exists", async () => {
+  it("me() asks a login that no longer exists to sign in again", async () => {
     const { authModule } = await buildTestApp({ clockCtl });
 
     await expect(
-      authModule.service.me("00000000-0000-0000-0000-000000000000", "irrelevant"),
-    ).rejects.toMatchObject({ kind: "internal" });
+      authModule.service.me("00000000-0000-0000-0000-000000000000"),
+    ).rejects.toMatchObject({ kind: "unauthorized" });
   });
 
-  it("resolvePrincipal returns null (unauthorized) when the session has no active identity", async () => {
-    const { app, repos } = await buildTestApp({ clockCtl });
-    const account = await repos.accounts.create({ displayName: "no-identity" });
-    const { generateSessionId, hashSessionId } = await import("./sessions.js");
-    const rawSessionId = generateSessionId();
-    await repos.sessions.create({
-      idHash: hashSessionId(rawSessionId),
-      accountId: account.id,
-      activeIdentityId: null,
-      expiresAt: new Date(clockCtl.clock().getTime() + 60_000),
-      userAgent: null,
-      ip: null,
-    });
-
-    const res = await app.request(ROUTES.auth.me, {
-      headers: { cookie: `fdrive_session=${rawSessionId}` },
-    });
-
-    expect(res.status).toBe(401);
-  });
-
-  it("resolvePrincipal returns null (unauthorized) when the active identity no longer exists", async () => {
+  it("resolvePrincipal returns null (unauthorized) when the session's login no longer exists", async () => {
     const { app, repos } = await buildTestApp({ clockCtl });
     const account = await repos.accounts.create({ displayName: "dangling-identity" });
     const { generateSessionId, hashSessionId } = await import("./sessions.js");
@@ -770,7 +598,7 @@ describe("auth service: direct edge cases", () => {
     await repos.sessions.create({
       idHash: hashSessionId(rawSessionId),
       accountId: account.id,
-      activeIdentityId: "00000000-0000-0000-0000-000000000000",
+      identityId: "00000000-0000-0000-0000-000000000000",
       expiresAt: new Date(clockCtl.clock().getTime() + 60_000),
       userAgent: null,
       ip: null,
@@ -830,75 +658,10 @@ describe("auth service: principal.verifyAuthority", () => {
   });
 });
 
-describe("native safe-request identity selection", () => {
-  it("selects an owned query identity for GET/HEAD without switching session", async () => {
-    const h = await buildTestApp({ clockCtl: createClock(Date.now()) });
-    const response = await login(h.app, { username: "alice", password: "wonderland" });
-    const cookie = extractCookie(response);
-    const me = await readJson<MeResponse>(response);
-    const provider = await seedLocalProvider(h.repos);
-    const other = await h.repos.identities.create({
-      accountId: me.account.id,
-      providerId: provider.id,
-      externalUsername: "alice-other",
-    });
-    expect(
-      (
-        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}&identity=${other.id}`, {
-          headers: { cookie },
-        })
-      ).status,
-    ).toBe(403);
-    for (const method of ["GET", "HEAD"]) {
-      const result = await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
-        method,
-        headers: { cookie },
-      });
-      expect(result.status).toBe(200);
-      if (method === "GET")
-        expect((await readJson<MeResponse>(result)).activeIdentityId).toBe(other.id);
-    }
-    expect(
-      (await readJson<MeResponse>(await h.app.request(ROUTES.auth.me, { headers: { cookie } })))
-        .activeIdentityId,
-    ).toBe(me.activeIdentityId);
-    expect(
-      (
-        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
-          headers: { cookie, "x-identity-id": other.id },
-        })
-      ).status,
-    ).toBe(200);
-    expect(
-      (
-        await h.app.request(`${ROUTES.auth.me}?identity=${other.id}`, {
-          headers: { cookie, "x-identity-id": me.activeIdentityId },
-        })
-      ).status,
-    ).toBe(403);
-    for (const id of ["", "missing"]) {
-      expect(
-        (await h.app.request(`${ROUTES.auth.me}?identity=${id}`, { headers: { cookie } })).status,
-      ).toBe(403);
-    }
-    const foreignLogin = await login(h.app, { username: "bob", password: "builder" });
-    const foreign = await readJson<MeResponse>(foreignLogin);
-    expect(
-      (
-        await h.app.request(`${ROUTES.auth.me}?identity=${foreign.activeIdentityId}`, {
-          headers: { cookie },
-        })
-      ).status,
-    ).toBe(403);
-  });
-});
-
-describe("auth: FDRIVE_ADMIN_USERS", () => {
-  it("makes a listed user an administrator on the storage the deployment pins", async () => {
-    const { app } = await buildTestApp({
-      clockCtl: createClock(Date.now()),
-      envOverrides: { FDRIVE_ADMIN_USERS: "alice" },
-    });
+describe("auth: administrators and installation flags", () => {
+  it("names administrators from their account alone", async () => {
+    const { app, repos } = await buildTestApp({ clockCtl: createClock(Date.now()) });
+    await repos.logins.updateUser("alice", { isAdmin: true, at: new Date() });
 
     const alice = await readJson<MeResponse>(
       await login(app, { username: "alice", password: "wonderland" }),
@@ -911,34 +674,20 @@ describe("auth: FDRIVE_ADMIN_USERS", () => {
     expect(bob.isAdmin).toBe(false);
   });
 
-  it("never names an administrator on storage the deployment does not pin", async () => {
-    // The same username on another row is another person.
-    const repos = createMemoryRepos();
-    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ADMIN_USERS: "alice" });
-    const row = await seedProviderRow(repos, "http://other.test");
-    const clockCtl = createClock(Date.now());
-    const authModule = createAuthModule({
-      identityLinks: memoryIdentityOperations(repos),
-      repos,
-      providers: memoryProviderService(repos, {
-        fetch: offline,
-        clock: clockCtl.clock,
-        modules: { local: fakeProviderModule() },
-      }),
-      fetch: offline,
-      master: parseMasterKey(config.fdriveMasterKey),
-      clock: clockCtl.clock,
-      config,
-      storageFactory: async () => FAKE_STORAGE,
+  it("reports the storage name and indexing, read on every request", async () => {
+    let flags = { storageName: "Local folder", index: true };
+    const { app } = await buildTestApp({
+      clockCtl: createClock(Date.now()),
+      installation: async () => flags,
     });
+    const response = await login(app, { username: "bob", password: "builder" });
+    const signedIn = await readJson<MeResponse>(response);
+    expect(signedIn).toMatchObject(flags);
 
-    const result = await authModule.service.login({
-      providerId: row.id,
-      credential: { username: "alice", password: "alice-pass" },
-      userAgent: null,
-      ip: "127.0.0.1",
-    });
-
-    expect(result.me.isAdmin).toBe(false);
+    flags = { storageName: "Family files", index: false };
+    const me = await readJson<MeResponse>(
+      await app.request(ROUTES.auth.me, { headers: { cookie: extractCookie(response) } }),
+    );
+    expect(me).toMatchObject(flags);
   });
 });

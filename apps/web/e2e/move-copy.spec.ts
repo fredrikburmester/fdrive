@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { breadcrumb, listing } from "./support/regions.js";
+import { openSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
 import { uploadFiles } from "./support/upload.js";
 
@@ -20,12 +21,7 @@ async function uploadTextFile(page: Page, name: string, contents: string): Promi
 
 /** Creates a fresh sandbox folder under root, navigates into it, and returns its name. */
 async function createSandbox(page: Page): Promise<string> {
-  const sandbox = uniqueName("move-copy");
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
-  return sandbox;
+  return openSandbox(page, "move-copy");
 }
 
 test("Move to moves a file into the chosen folder", async ({ page }) => {
@@ -35,7 +31,7 @@ test("Move to moves a file into the chosen folder", async ({ page }) => {
   await uploadTextFile(page, "move-me.txt", "please move me");
 
   await listing(page).getByText("move-me.txt", { exact: true }).click({ button: "right" });
-  await page.getByRole("menuitem", { name: "Move to" }).click();
+  await page.getByRole("menuitem", { name: "Move to", exact: true }).click();
 
   const dialog = page.getByRole("dialog").filter({ hasText: "Move to" });
   await expect(dialog).toBeVisible();
@@ -93,7 +89,7 @@ for (const operation of ["Move", "Copy"] as const) {
     await expect(dialog.getByRole("button", { name: `${operation} here` })).toBeEnabled();
     const completed = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/api/v1/fs/${operation.toLowerCase()}`) &&
+        response.url().endsWith(`/api/v1/fs/${operation === "Move" ? "move-many" : "copy"}`) &&
         response.request().method() === "POST",
     );
     await dialog.getByRole("button", { name: `${operation} here` }).click();

@@ -34,8 +34,6 @@ export const FsEntry = z.object({
   ext: z.string(),
   mime: z.string().nullable(),
   meta: FsEntryMeta.optional(),
-  /** A write committed but its follow-up stat failed. Size/time are placeholders until refresh. */
-  metadataPending: z.boolean().optional(),
 });
 
 export type FsEntry = z.infer<typeof FsEntry>;
@@ -56,9 +54,9 @@ export type PathQuery = z.infer<typeof PathQuery>;
 /**
  * A directory's total size as computed from the index alone: `bytes` and
  * `files` sum every indexed file under `path` (intersected with the
- * caller's verified index scope), and `indexed` is `false` whenever that
- * total is unavailable (the folder is out of scope, not covered by any
- * indexed root, or the caller cannot currently read it), in which case
+ * caller's scopes), and `indexed` is `false` whenever that total is
+ * unavailable (the folder is out of scope, the files folder is not indexed,
+ * or the caller cannot currently read it), in which case
  * `bytes` and `files` are both `0`.
  */
 export const FolderSizeResponse = z.object({
@@ -81,6 +79,20 @@ export const UploadQuery = z.object({
   intent: z.enum(["upload", "create", "save"]).optional(),
   path: z.string(),
   mkdirParents: z.enum(["true", "false"]).optional(),
+  /**
+   * A file sent in pieces, in order: each request names the upload's part (16
+   * hex digits) and the offset of its body; only the one with `final` publishes
+   * the file, and a failed piece can be sent again.
+   */
+  part: z
+    .string()
+    .regex(/^[0-9a-f]{16}$/)
+    .optional(),
+  offset: z
+    .string()
+    .regex(/^(0|[1-9]\d{0,14})$/)
+    .optional(),
+  final: z.literal("true").optional(),
 });
 
 export type UploadQuery = z.infer<typeof UploadQuery>;

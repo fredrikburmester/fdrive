@@ -1,10 +1,9 @@
 // @vitest-environment jsdom
 import { ApiClientError, type FsEntry } from "@fdrive/contracts";
 import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { accountTransition } from "@/lib/account/transition";
 
 function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): FsEntry {
   return {
@@ -17,7 +16,6 @@ function entry(overrides: Partial<FsEntry> & Pick<FsEntry, "path" | "kind">): Fs
   };
 }
 
-const trashStatusMock = vi.fn();
 const trashListMock = vi.fn();
 const trashRestoreMock = vi.fn();
 const trashPurgeMock = vi.fn();
@@ -26,7 +24,6 @@ const toastErrorMock = vi.fn();
 
 function fakeApiClient() {
   return {
-    trashStatus: (...args: unknown[]) => trashStatusMock(...args),
     trashList: (...args: unknown[]) => trashListMock(...args),
     trashRestore: (...args: unknown[]) => trashRestoreMock(...args),
     trashPurge: (...args: unknown[]) => trashPurgeMock(...args),
@@ -36,7 +33,6 @@ function fakeApiClient() {
 
 vi.mock("./deps", () => ({
   apiClient: fakeApiClient(),
-  snapshotTabApiClient: () => fakeApiClient(),
   queryKeys: {
     trash: {
       status: () => ["trash", "status"] as const,
@@ -69,26 +65,11 @@ function createWrapper(options?: { staleTime?: number; onMutate?: () => Promise<
 }
 
 beforeEach(() => {
-  trashStatusMock.mockReset();
   trashListMock.mockReset();
   trashRestoreMock.mockReset();
   trashPurgeMock.mockReset();
   trashEmptyMock.mockReset();
   toastErrorMock.mockReset();
-});
-
-describe("useTrashStatus", () => {
-  it("fetches and returns the trash status", async () => {
-    const { useTrashStatus } = await import("./queries");
-    trashStatusMock.mockResolvedValue({ available: true, path: "/.trash", retentionHours: 720 });
-    const { wrapper } = createWrapper();
-
-    const { result } = renderHook(() => useTrashStatus(), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(trashStatusMock).toHaveBeenCalledWith();
-    expect(result.current.data).toEqual({ available: true, path: "/.trash", retentionHours: 720 });
-  });
 });
 
 describe("useTrash", () => {
@@ -219,62 +200,6 @@ describe("useTrashEmpty", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(trashEmptyMock).toHaveBeenCalledWith();
     expect(invalidateSpy).toHaveBeenCalledExactlyOnceWith({ queryKey: ["trash", "list"] });
-  });
-});
-
-describe("identity-bound trash mutations", () => {
-  it("rejects a queued purge after its displayed login changes", async () => {
-    const { useTrashPurge } = await import("./queries");
-    const gate = Promise.withResolvers<void>();
-    const entered = vi.fn(() => gate.promise);
-    const { wrapper, queryClient } = createWrapper({ onMutate: entered });
-    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    const { result, rerender } = renderHook(() => useTrashPurge(), { wrapper });
-    act(() => result.current.mutate(["docs/a.txt/123"]));
-    await waitFor(() => expect(entered).toHaveBeenCalled());
-    act(() => {
-      accountTransition.begin();
-      accountTransition.finish(true);
-    });
-    rerender();
-    gate.resolve();
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(trashPurgeMock).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
-    expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects mutations while a login change is pending", async () => {
-    const { useTrashEmpty } = await import("./queries");
-    const { wrapper } = createWrapper();
-    const { result } = renderHook(() => useTrashEmpty(), { wrapper });
-    accountTransition.begin();
-    try {
-      await act(async () => {
-        await expect(result.current.mutateAsync(undefined)).rejects.toThrow(
-          "The active login changed.",
-        );
-      });
-      expect(trashEmptyMock).not.toHaveBeenCalled();
-    } finally {
-      accountTransition.finish(false);
-    }
-  });
-
-  it("ignores a late success callback from the previous login", async () => {
-    const { useTrashPurge } = await import("./queries");
-    const response = Promise.withResolvers<{ ok: true }>();
-    trashPurgeMock.mockReturnValue(response.promise);
-    const { wrapper, queryClient } = createWrapper();
-    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
-    const { result } = renderHook(() => useTrashPurge(), { wrapper });
-    act(() => result.current.mutate(["docs/a.txt/123"]));
-    await waitFor(() => expect(trashPurgeMock).toHaveBeenCalled());
-    accountTransition.begin();
-    accountTransition.finish(true);
-    response.resolve({ ok: true });
-    await waitFor(() => expect(result.current.isPending).toBe(false));
-    expect(invalidate).not.toHaveBeenCalled();
   });
 });
 

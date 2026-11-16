@@ -1,37 +1,18 @@
 import { createHash } from "node:crypto";
-import { extensionOf, isStorageError, trashLeafPath } from "@fdrive/core";
+import { extensionOf, isTrashId, TRASH_PATH } from "@fdrive/core";
 import { recordMetadataCommand } from "../activity/metadata.js";
-import type { Principal } from "../auth/principal.ts";
-import { relocatePath, requireUnoccupiedTarget } from "../fs/mutations.ts";
-import { createReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { TokenPrincipal } from "../tokens/principal.ts";
 import {
   assertMutablePath,
   canReadPath,
   containsPath,
   ordinaryPath,
-  requireExplicitAccess,
   requireMode,
   tokenScopes,
-  trashPathFor,
 } from "./access.ts";
 import { decodeText, liveFileInfo, MAX_FILE_BYTES, readStoredFile } from "./content.ts";
-import type { McpToolDeps } from "./handlers.ts";
+import { type McpToolDeps, McpToolError, mcpFiles, warningsOf } from "./handlers.ts";
 import { fileUrl, folderUrl } from "./urls.ts";
-
-async function mutationEffects(
-  deps: McpToolDeps,
-  principal: Principal,
-  change: Parameters<NonNullable<McpToolDeps["onMutation"]>>[1],
-) {
-  try {
-    await deps.onMutation?.(principal, change);
-    return {};
-  } catch {
-    return {
-      warnings: ["Storage operation completed, but metadata or live updates could not be updated."],
-    };
-  }
-}
 
 function checkedBytes(bytes: Buffer): Buffer {
   if (bytes.length > MAX_FILE_BYTES)
@@ -41,11 +22,11 @@ function checkedBytes(bytes: Buffer): Buffer {
 
 export async function createFile(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text?: string; data?: string },
 ) {
   requireMode(principal, "full");
-  const path = ordinaryPath(deps, principal, args.path);
+  const path = ordinaryPath(principal, args.path);
   const bytes = checkedBytes(
     args.text !== undefined
       ? Buffer.from(args.text, "utf8")
@@ -53,9 +34,10 @@ export async function createFile(
   );
   if (args.data !== undefined && bytes.toString("base64") !== args.data)
     throw new Error("data must be canonical base64");
-  await requireUnoccupiedTarget(principal.storage, path);
   const publicUrl = await deps.publicUrl();
-  await principal.storage.upload(path, bytes, {
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.upload(actor, path, bytes, {
+    action: args.data === undefined ? "file.create" : "file.upload",
     overwrite: false,
     contentLength: bytes.length,
     signal: AbortSignal.timeout(30_000),
@@ -65,7 +47,7 @@ export async function createFile(
     url: fileUrl(publicUrl, path),
     size_bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    ...(await mutationEffects(deps, principal, { kind: "create", path, isDir: false })),
+    ...warningsOf(done),
   };
 }
 
@@ -74,11 +56,11 @@ export async function createFile(
 const editing = new Map<string, Promise<void>>();
 export async function editFile(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text: string; expected_sha256: string },
 ) {
   requireMode(principal, "full");
-  const path = ordinaryPath(deps, principal, args.path);
+  const path = ordinaryPath(principal, args.path);
   const key = JSON.stringify([principal.identityId, path]);
   const prior = editing.get(key) ?? Promise.resolve();
   let release = () => {};
@@ -97,7 +79,7 @@ export async function editFile(
 
 async function editFileUnlocked(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; text: string; expected_sha256: string },
 ) {
   requireMode(principal, "full");
@@ -111,7 +93,10 @@ async function editFileUnlocked(
   ) {
     throw new Error("edit_file only replaces UTF-8 text files");
   }
-  await principal.storage.upload(previous.path, bytes, {
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.upload(actor, previous.path, bytes, {
+    action: "file.save",
+    overwrite: true,
     contentLength: bytes.length,
     signal: AbortSignal.timeout(30_000),
   });
@@ -120,86 +105,65 @@ async function editFileUnlocked(
     url: previous.url,
     size_bytes: bytes.length,
     sha256: createHash("sha256").update(bytes).digest("hex"),
-    ...(await mutationEffects(deps, principal, {
-      kind: "create",
-      path: previous.path,
-      isDir: false,
-    })),
+    ...warningsOf(done),
   };
 }
 
 export async function copyPath(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { src: string; dst: string },
 ) {
-  requireExplicitAccess(principal);
   requireMode(principal, "organize");
-  const src = ordinaryPath(deps, principal, args.src);
-  const dst = ordinaryPath(deps, principal, args.dst);
-  const trashPath = trashPathFor(deps, principal);
-  if (trashPath !== null && containsPath(src, trashPath))
-    throw new Error("cannot copy a folder containing Trash");
-  const stat = await principal.storage.stat(src);
+  const src = ordinaryPath(principal, args.src);
+  const dst = ordinaryPath(principal, args.dst);
+  if (containsPath(src, TRASH_PATH)) throw new Error("cannot copy a folder containing Trash");
   const publicUrl = await deps.publicUrl();
-  await relocatePath(principal.storage, "copy", src, dst);
+  const { files, actor } = mcpFiles(deps, principal);
+  const { entry } = await files.copy(actor, src, dst);
   return {
     copied: src,
     to: dst,
-    url: stat.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
-    ...(src === dst
-      ? {}
-      : await mutationEffects(deps, principal, {
-          kind: "copy",
-          path: src,
-          target: dst,
-          isDir: stat.kind === "dir",
-        })),
+    url: entry.kind === "dir" ? folderUrl(publicUrl, dst) : fileUrl(publicUrl, dst),
   };
 }
 
-function requireTrash(deps: McpToolDeps, principal: Principal) {
+/** Moves `rawPath` to Trash, as the web's delete does. */
+export async function trashPath(deps: McpToolDeps, principal: TokenPrincipal, rawPath: string) {
   requireMode(principal, "full");
-  const path = trashPathFor(deps, principal);
-  const trash = principal.storage.trash;
-  if (path === null || trash === undefined)
-    throw new Error("Trash is not configured for this login; no file was deleted");
-  return { path, trash };
+  const path = ordinaryPath(principal, rawPath);
+  assertMutablePath(principal, path);
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.trash(actor, path);
+  return { trashed: path, ...warningsOf(done) };
 }
 
-export async function trashPath(deps: McpToolDeps, principal: Principal, rawPath: string) {
-  const configured = requireTrash(deps, principal);
-  const path = ordinaryPath(deps, principal, rawPath);
-  assertMutablePath(principal, path, configured.path);
-  const stat = await principal.storage.stat(path);
-  if (stat.kind === "dir") await principal.storage.deleteDir(path);
-  else await principal.storage.deleteFile(path);
-  return {
-    trashed: path,
-    ...(await mutationEffects(deps, principal, {
-      kind: "trash",
-      path,
-      isDir: stat.kind === "dir",
-    })),
-  };
+/** What Trash holds, for the Trash tools; `file changes are unavailable` without it. */
+function requireTrash(deps: McpToolDeps) {
+  if (deps.trash === undefined) throw new McpToolError("file changes are unavailable");
+  return deps.trash;
 }
 
 export async function listTrash(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { offset?: number | undefined; limit?: number | undefined },
 ) {
-  const { trash } = requireTrash(deps, principal);
-  const listing = await trash.list({ limit: 10_000 });
-  const entries = listing.entries
+  requireMode(principal, "full");
+  const listing = await requireTrash(deps).list(principal.identityId, 10_000);
+  const entries = listing.items
     .filter((entry) => canReadPath(principal, entry.originalPath))
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const offset = args.offset ?? 0;
   const end = offset + (args.limit ?? 100);
   return {
-    entries: entries
-      .slice(offset, end)
-      .map((entry) => ({ ...entry, deletedAt: entry.deletedAt.toISOString() })),
+    entries: entries.slice(offset, end).map((entry) => ({
+      id: entry.id,
+      originalPath: entry.originalPath,
+      name: entry.name,
+      size: entry.size,
+      deletedAt: entry.deletedAt.toISOString(),
+    })),
     partial: listing.truncated,
     ...(end < entries.length ? { next_offset: end } : {}),
   };
@@ -207,42 +171,25 @@ export async function listTrash(
 
 export async function restorePath(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { id: string; target?: string | undefined },
 ) {
-  const { trash, path: trashRoot } = requireTrash(deps, principal);
-  // Ask the provider to decode its own layout; never guess a different original path from an id.
-  const listing = await trash.list({ limit: 10_000 });
-  const candidate = listing.entries.find((entry) => entry.id === args.id);
-  if (candidate === undefined) throw new Error("item is not in the available Trash listing");
-  const original = ordinaryPath(deps, principal, candidate.originalPath);
-  const target = ordinaryPath(deps, principal, args.target ?? original);
+  requireMode(principal, "full");
+  const item = isTrashId(args.id)
+    ? await requireTrash(deps).get(principal.identityId, args.id)
+    : null;
+  if (item === null) throw new McpToolError("not a Trash item id");
+  const original = ordinaryPath(principal, item.originalPath);
+  const target = ordinaryPath(principal, args.target ?? original);
   const publicUrl = await deps.publicUrl();
-  const result = await trash.restore(args.id, { target });
-  let moveMetadata = false;
-  let warnings: string[] = [];
-  if (original !== target) {
-    try {
-      await principal.storage.stat(original);
-    } catch (error) {
-      if (isStorageError(error) && error.kind === "not_found") moveMetadata = true;
-      else warnings = ["Item restored, but original-path metadata could not be checked."];
-    }
-  }
-  const effects = await mutationEffects(deps, principal, {
-    kind: "restore",
-    path: original,
-    target: result.path,
-    eventPath: trashLeafPath(trashRoot, args.id),
-    moveMetadata,
-    isDir: result.kind === "dir",
-  });
-  warnings = [...warnings, ...(effects.warnings ?? [])];
+  const { files, actor } = mcpFiles(deps, principal);
+  const done = await files.restore(actor, args.id, target);
+  const result = done.entry;
   return {
     restored: result.path,
     url:
       result.kind === "dir" ? folderUrl(publicUrl, result.path) : fileUrl(publicUrl, result.path),
-    ...(warnings.length > 0 ? { warnings } : {}),
+    ...warningsOf(done),
   };
 }
 
@@ -253,11 +200,10 @@ function requireMetadata(deps: McpToolDeps) {
 
 export async function fileTags(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   rawPath: string,
   names?: string[],
 ) {
-  requireExplicitAccess(principal);
   if (names !== undefined) requireMode(principal, "organize");
   const info = await liveFileInfo(deps, principal, rawPath);
   const metadata = requireMetadata(deps);
@@ -297,7 +243,7 @@ export async function fileTags(
         name: info.name,
         kind: info.kind,
         size: info.size_bytes,
-        modifiedAt: info.modified ?? new Date(0).toISOString(),
+        modifiedAt: info.modified,
         mime: info.mime,
         ext: extensionOf(info.name),
       },
@@ -309,10 +255,9 @@ export async function fileTags(
 
 export async function setFavorite(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { path: string; favorite: boolean },
 ) {
-  requireExplicitAccess(principal);
   requireMode(principal, "organize");
   const info = await liveFileInfo(deps, principal, args.path);
   const metadata = requireMetadata(deps);
@@ -341,21 +286,18 @@ export async function setFavorite(
 
 export async function searchImages(
   deps: McpToolDeps,
-  principal: Principal,
+  principal: TokenPrincipal,
   args: { query: string; limit?: number | undefined },
 ) {
-  requireExplicitAccess(principal);
   if (deps.imageSearchService === undefined)
     return { query: args.query, hits: [], unavailable: true };
-  const identity = await deps.identities.get(principal.identityId);
-  const verified =
-    identity === null ? null : await deps.scopeResolver.verifiedIndexScopes(identity);
+  const scopes = (await deps.indexed())
+    ? tokenScopes(principal, await deps.scopeResolver.scopesFor(principal.username))
+    : [];
   const response = await deps.imageSearchService.search({
     query: args.query,
     limit: args.limit ?? 20,
-    scopes: verified?.available ? tokenScopes(principal, verified.scopes) : [],
-    authorizer: createReadAuthorizer({ storage: principal.storage }),
-    trashPath: trashPathFor(deps, principal),
+    scopes,
   });
   const publicUrl = await deps.publicUrl();
   return {

@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import { isFilesRoute } from "@/components/shell/app-sidebar";
+import { SIDEBAR_ROW } from "@/components/shell/sidebar-section";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   SidebarMenuButton,
@@ -193,7 +194,7 @@ function FolderTreeRow({
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className="flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
+            className="h-9 flex-1 data-[size=md]:text-[15px] data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
           >
             <span className="truncate">{name}</span>
           </SidebarMenuSubButton>
@@ -207,7 +208,7 @@ function FolderTreeRow({
               )
             : knownChildren !== undefined &&
               knownChildren.length > 0 && (
-                <SidebarMenuSub className="mx-0 border-l-0 pl-3.5">
+                <SidebarMenuSub className="mx-0 gap-0.5 border-l-0 pl-3.5">
                   {knownChildren.map((childPath) => (
                     <FolderTreeRow
                       key={childPath}
@@ -433,7 +434,10 @@ export function FolderTree() {
             onDragOver={handleRootDragOver}
             onDragLeave={handleRootDragLeave}
             onDrop={handleRootDrop}
-            className="flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
+            className={cn(
+              SIDEBAR_ROW,
+              "flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
+            )}
           >
             <FolderIcon />
             <span>Files</span>
@@ -448,7 +452,7 @@ export function FolderTree() {
               )
             : rootChildren !== undefined &&
               rootChildren.length > 0 && (
-                <SidebarMenuSub className="mx-0 mt-0.5 border-l-0 pl-3.5">
+                <SidebarMenuSub className="mx-0 mt-0.5 gap-0.5 border-l-0 pl-3.5">
                   {rootChildren.map((childPath) => (
                     <FolderTreeRow
                       key={childPath}

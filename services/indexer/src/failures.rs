@@ -4,6 +4,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
+
 use crate::db::Db;
 use crate::log::log;
 use crate::promise::{Outcome, Promise};
@@ -170,15 +172,24 @@ pub fn report(db: &Db, root_id: i64, path: &str, feature: &str, report: Report<'
     }
 }
 
-/// Keep unresolved issues, resolve those of deleted files, and keep at most 30 days or
-/// 10,000 resolved records.
+/// After a walk of the whole root that started at `walk_started` and completed: resolve the
+/// issues of paths the index has no row for that the walk did not report again. Their files
+/// are gone, or were never there to index; a file that fails before it gets a row is reported
+/// again by every walk, so it stays. Returns how many it resolved.
+pub fn resolve_gone(db: &Db, root_id: i64, walk_started: DateTime<Utc>) -> anyhow::Result<u64> {
+    db.with(|c| {
+        Ok(c.execute(
+            "UPDATE idx.processing_failures p SET resolved_at = now() \
+             WHERE p.root_id = $1::bigint AND p.resolved_at IS NULL AND p.last_failed_at < $2 \
+             AND NOT EXISTS (SELECT 1 FROM idx.files f WHERE f.root_id = p.root_id AND f.path = p.path)",
+            &[&root_id, &walk_started],
+        )?)
+    })
+}
+
+/// Keep unresolved issues and at most 30 days or 10,000 resolved records.
 pub fn prune(db: &Db) -> anyhow::Result<()> {
     db.with(|c| {
-        c.execute(
-            "UPDATE idx.processing_failures p SET resolved_at = now() FROM idx.files f \
-             WHERE p.root_id = f.root_id AND p.path = f.path AND f.deleted_at IS NOT NULL AND p.resolved_at IS NULL",
-            &[],
-        )?;
         c.execute(
             "DELETE FROM idx.processing_failures WHERE resolved_at < now() - interval '30 days' \
              OR id IN (SELECT id FROM idx.processing_failures WHERE resolved_at IS NOT NULL \

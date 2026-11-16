@@ -1,14 +1,15 @@
 # Installation backups
 
 System → Backups protects one installation, including every account. Only the setup owner,
-using a browser session and fresh storage authentication, can manage or download backups.
+using a browser session and having just confirmed their password, can manage or download
+backups.
 Other administrators and MCP/desktop bearer tokens do not grant backup access.
 
 ## Configure
 
 The deployment Compose file starts a dedicated `backup` worker. Its persistent `fdrive-backups`
-volume holds encrypted configuration attachments and temporary encrypted download archives.
-The worker reads the desktop, OCR originals, retained indexer logs and Office data mounts.
+volume holds temporary encrypted download archives. The worker reads the OCR originals,
+retained indexer logs and Office data mounts; it does not mount the files folder.
 Those source mounts are read-only. The API and worker must use the same database and master
 key and share the backup volume. Upgrade the API, worker and OCR service together.
 
@@ -16,37 +17,31 @@ For a native installation, set `FDRIVE_BACKUP_STATE_DIR` to a private persistent
 Run `node dist/main.js backup worker` alongside the API, or set `FDRIVE_BACKUP_WORKER=true`
 to run the worker inside the API process. Only one worker holds the database worker lock.
 `FDRIVE_BACKUP_SOURCES` is a JSON array of `{ "kind": "ocr" | "logs" | "office", "path": "/absolute/path" }`.
-`FDRIVE_DESKTOP_STATE_DIR` is included automatically. Keep the backup directory outside all
-source directories. Missing or unreadable recovery sources appear as coverage gaps.
+Keep the backup directory outside all source directories. Missing or unreadable recovery sources
+appear as coverage gaps.
 
-1. Open System → Backups and authenticate again.
+1. Open System → Backups and confirm your password.
 2. Create and download a recovery key. Paste the saved key to prove it can decrypt a challenge.
    The private key is generated in the browser; scheduled backups use only its public recipient.
-3. Optionally add an S3/B2 destination or a folder in the files folder. Adding it tests
-   create, read and delete permissions using a uniquely named probe. Use a private bucket or
-   directory and dedicated credentials, and keep those credentials outside fdrive too. A files
-   folder destination signs in as one of fdrive's users and is checked like a sign-in, so a
-   disabled or removed user, or a changed password, stops its copies. It sits on the same host
-   as the installation, so copy it off the host with the rest of the files folder.
+3. Optionally add an S3-compatible bucket (AWS S3, Backblaze B2). It is the only kind of
+   destination: a backup on the installation's own disk is not a backup. Adding it tests
+   create, read and delete permissions using a uniquely named probe. Use a private bucket and
+   dedicated credentials, and keep those credentials outside fdrive too.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
    on its card and recorded in the event log.
-4. Optionally upload named configuration ZIPs exported from external systems. These are opaque
-   attachments: fdrive never unpacks, executes or applies them. Upload a new version when the
-   external configuration changes. Replacing/removing an active attachment does not alter
-   previously captured backups. Limits: 256 MiB per ZIP, 2 GiB total active attachments.
-5. Choose a schedule and retention, then run a backup. A destination can inherit the installation
+4. Choose a schedule and retention, then run a backup. A destination can inherit the installation
    policy or have its own hourly, daily or weekly policy and IANA timezone. Downtime produces
    one catch-up run; it does not replay every missed interval.
 
 S3 supports a custom endpoint, region, bucket, prefix and path-style addressing, including
 Backblaze B2's S3-compatible endpoints. Enter the endpoint and region belonging to your bucket;
-the B2 preset is an editable example. A files folder destination is bound to the storage row
-and the user that signed it in, independent of the current browsing identity. Its archives
-live beneath `<chosen folder>/.fdrive-backups/<installation ID>` in that user's files. fdrive's
-file API hides that namespace and rejects ancestor archive/mutation operations that would
-include it. Host permissions remain the boundary against other tools on the host; encryption
-protects the contents.
+the B2 preset is an editable example.
+
+An earlier release could also copy backups into a folder in the owner's files, beneath
+`<chosen folder>/.fdrive-backups/<installation ID>`. fdrive no longer writes there or hides
+it: such a folder is an ordinary one that the owner sees, can download from, move or delete,
+and that search indexes. Its archives restore with the release that made them.
 
 Copies use one encrypted archive per snapshot. Each transfer is read back in full and checked
 with SHA-256 before a completion marker is published. Multipart failures are aborted; retries
@@ -88,54 +83,69 @@ newest configuration and history are still protected while coverage stays report
 The explicit table registry is in `packages/backup/src/registry.ts`. A capture fails on an
 unclassified application/index table, including tables introduced by a future migration.
 
-- Accounts, identities, providers, local users (password hashes included) and the folders
-  they share with each other, credentials, settings, tags, favorites, folder views, recents,
+- Accounts, logins, local users (password hashes included) and the folders they share with
+  each other, settings (the files folder's id among them, so paired Macs still recognise their
+  locations after a restore), tags, favorites, folder views, recents,
   AI chats (transcripts and references), share metadata (password hashes included, so links
-  restore fully), activity, stable Office/native file IDs and native recovery receipts.
+  restore fully), activity, stable Office/native file IDs and Mac write receipts.
 - Retained index scan/move/event history, OCR rewrite history and processing failures.
-- Exact active configuration ZIP versions, pre-OCR originals and original-file mappings,
-  native local/remote recovery material, retained logs and configured external source mounts.
+- Pre-OCR originals and original-file mappings, retained logs and configured external source
+  mounts.
 - Effective deployment configuration, mount identities, migration hashes and database schema
-  fingerprint. The source master key is inside the independently encrypted archive so stored
-  credential envelopes can be resealed on a replacement installation.
+  fingerprint. The source master key is inside the independently encrypted archive so
+  destination secrets can be resealed on a replacement installation.
 
-Indexes, extracted chunks, thumbnails, embeddings, sessions, provider token caches and WOPI
-locks are omitted. Original user files (the files folder, Trash included), unsaved external
-editor state and device-only edits require their own backups. A configuration ZIP
-protects only the version uploaded.
+Indexes, extracted chunks, thumbnails, embeddings, sessions and WOPI locks are omitted. Original user files (the files folder, Trash included), unsaved external
+editor state and device-only edits require their own backups. Uploads the Mac staged in the files
+folder are transient and never backed up: the Mac sends an unfinished one again, and a restored
+Mac write ends from what the files folder shows, like any interrupted one
+([macOS](MACOS.md#write-configuration-and-recovery)).
 
 Database rows are captured in a repeatable-read transaction, using PostgreSQL text values to
-preserve bigint, bytea, JSON and timestamps exactly. An exclusive advisory checkpoint prevents
-cooperating native/attachment/OCR writes from publishing new recovery bytes during capture.
+preserve bigint, bytea, JSON and timestamps exactly, so a write that commits in one transaction
+is in a snapshot whole or not at all. Two advisory locks make the capture consistent beyond
+that. A write that changes the files folder, or the database in more than one transaction,
+holds the snapshot gate (`SNAPSHOT_GATE`) shared for that section alone (`WriteGate` in the
+API): a file operation from its storage call through what grants access, its history and the
+metadata that follows it; an upload from its publish, once its body has arrived, to its
+history; a Mac write's commit; a link change with its history and a visitor's upload with the
+link's count; a removed user with their tokens; settings saved together. OCR holds the
+recovery files gate (`BACKUP_GATE`) shared while it writes, restores or deletes kept originals.
+A capture takes both exclusively, so its snapshot sees no write or OCR write half done, and lets
+go of the snapshot gate as soon as the snapshot exists: writes then go on, and the snapshot does
+not see them. A capture waits only for writes inside that section, never for a body still
+arriving. A write records its intent in personal history before its section, so a snapshot can
+hold a running operation, such as an upload whose body was arriving; after a restore, history
+maintenance closes it as interrupted, as it does for a write a crash stopped. The capture keeps
+the recovery files gate until it has read every recovery file, so OCR changes none of them
+meanwhile; OCR waits without giving up.
 Local files reject symlinks, inode replacement and mutation during reading; log files capture
-their checkpoint prefix while allowing append. Remote recovery is read through its original
-identity. Independently changing user files and external writers are not a filesystem snapshot.
+their checkpoint prefix while allowing append. Independently changing user files and external
+writers are not a filesystem snapshot.
 
 ## Recovery
 
 Use the same trusted fdrive release that made the backup, a **new empty database**, a new
 32-byte base64 `FDRIVE_MASTER_KEY`, and a private persistent backup directory. Keep the old
 installation stopped during cutover. The archive contains data, not executable migration SQL.
-Restore compares the installed migration hashes and schema before importing anything.
+Restore compares the installed migration hashes and schema before importing anything. A
+database upgraded from v0.7.0-rc.11 records the same history a new install does, the
+baseline and `0001_squash_history`, so a backup restores from either onto the other.
 
 The CLI is available in the API image and built API directory:
 
 ```sh
 chmod 600 recovery-key.txt destination.json review.json
 node dist/main.js backup inspect --file snapshot.fdrive.age --key-file recovery-key.txt
-node dist/main.js backup extract --file snapshot.fdrive.age --key-file recovery-key.txt \
-  --attachment VERSION_UUID --output new-configuration.zip
 ```
 
-`inspect`, `extract`, `list` and `fetch` do not require the application database, master key,
+`inspect`, `list` and `fetch` do not require the application database, master key,
 login or setup. Their key/destination files must be regular private files, at most 64 KiB.
 Existing output files are never overwritten.
 
 An offline S3 destination file contains `type: "s3"`, `endpoint`, `region`, `bucket`, `prefix`,
 `pathStyle`, `accessKeyId` and `secretAccessKey`. Use the **full installation-specific prefix**
-shown in System → Backups. A files folder destination needs no destination file: its archives are plain files under
-`<files folder>/<username>/<prefix>/`, named `<snapshot ID>.fdrive.age`. Copy one from there
-and pass it to `inspect` or `restore` directly.
+shown in System → Backups.
 
 ```sh
 node dist/main.js backup list --destination-file destination.json
@@ -149,13 +159,13 @@ For browser recovery, set `FDRIVE_RESTORE_MODE=true` and a host-generated
 `FDRIVE_SETUP_TOKEN` of at least 24 characters, then open `/restore`. The token expires one
 hour after API startup. Upload the encrypted archive, provide the private recovery key,
 inspect the inventory, and type its snapshot ID to stage the restore. In this mode the API
-does not compose normal providers, auth, feature services, outboxes or backup workers. Deploy
+does not compose storage, auth, feature services, outboxes or backup workers. Deploy
 the web and API behind HTTPS before submitting a recovery key remotely.
 
 Both paths validate every archive entry and checksum before import. Paths from an archive
-are never used as extraction paths. Credentials are resealed under the new master key.
-All providers/features/schedules start disabled, browser sessions are absent, API tokens are
-revoked, unfinished scans become interrupted history, and old native effects remain quarantined.
+are never used as extraction paths. Destination secrets are resealed under the new master key.
+All features and schedules start disabled, browser sessions are absent, API tokens are
+revoked and unfinished scans become interrupted history.
 Captures enforce the same format limits as restore: 4 MiB per database row/header, 100,000 recovery files, 64 MiB manifest and 1 TiB uncompressed archive. Oversized captures fail before publication. Existing archive files are never replaced.
 
 Restoring into a nonempty durable database is refused. A failed import rolls back rows and
@@ -168,14 +178,14 @@ mounts, root names and Office/public URLs. Create a private review file:
 {
   "snapshotId": "SNAPSHOT_UUID",
   "environmentFingerprint": "SHA256_FROM_BACKUP_ENVIRONMENT",
-  "providers": [{ "id": "ORIGINAL_PROVIDER_UUID", "baseUrl": "local" }],
   "ownerIdentityId": "ORIGINAL_OWNER_IDENTITY_UUID",
-  "credential": { "username": "owner", "password": "CURRENT_STORAGE_PASSWORD" },
+  "password": "OWNER_PASSWORD",
   "oldDeploymentStopped": true,
   "pathBindingsReviewed": true
 }
 ```
 
+`password` is the owner's fdrive password, checked against their restored user.
 `pathBindingsReviewed` is the operator's statement that the annotation review below was done.
 Resume refuses a review file without both flags set to `true`.
 
@@ -183,26 +193,24 @@ Resume refuses a review file without both flags set to `true`.
 
 Tags, favourites, folder views and recents are bound to an identity and a path. A snapshot
 cannot prove that a path still names the same file: a files folder that kept changing may have
-deleted, replaced or reused it. While the restore is paused every provider is disabled, so
+deleted, replaced or reused it. While the restore is paused the API serves only recovery, so
 restored annotations are inactive. Before setting `pathBindingsReviewed`:
 
 1. List what was restored per identity, read-only:
 
    ```sql
-   select i.id, i.external_username, p.base_url,
+   select i.id, i.username,
           (select count(*) from app.file_tags t where t.identity_id = i.id) as tags,
           (select count(*) from app.favorites f where f.identity_id = i.id) as favorites,
           (select count(*) from app.folder_views v where v.identity_id = i.id) as folder_views,
           (select count(*) from app.recents r where r.identity_id = i.id) as recents
-   from app.identities i join app.providers p on p.id = i.provider_id;
+   from app.identities i;
    ```
 
 2. Compare the annotated paths (`select path from app.file_tags where identity_id = ...`, and
-   the same for the other three tables) with the current files folder on the host. The
-   restored `idx.events` and `idx.moves` history shows what fdrive last observed at each path;
-   it is evidence, not proof of continuity, and a freshly rebuilt index must not be used to
-   infer it either.
-3. Delete rows whose path is gone or was reused, or leave the provider disabled until the
+   the same for the other three tables) with the current files folder on the host. A freshly
+   rebuilt index must not be used to infer continuity.
+3. Delete rows whose path is gone or was reused, or leave the restore paused until the
    owner decides. Keep the archive: it remains the evidence for any row you remove.
 4. Only then set `pathBindingsReviewed: true`. A checked flag alone does not make an ambiguous
    association correct.
@@ -229,7 +237,7 @@ rehearsed by `apps/api/src/backups/recovery.test.ts` (“rehearses a host cutove
 
 `backup rehearse` takes the same arguments as `backup restore` but restores into a distinct
 installation identity that can never resume the source installation's ownership, contacts no
-provider, and prints a JSON report. Run it monthly against an empty database on a host without
+outside service, and prints a JSON report. Run it monthly against an empty database on a host without
 access to production storage, review the result, then upload the report under
 System → Backups → Restore rehearsal. Uploading records your review; it is not an automatic
 restore-success claim, and routine “Verify bytes” checks cannot decrypt anything without your
@@ -240,18 +248,24 @@ private recovery key.
 Local observations from `packages/backup/test/integration/benchmark.test.ts` on a developer Mac
 with loopback containers; not performance promises.
 
-| Fixture | Encrypted archive | Capture | Writer pause | Peak RSS (capture / restore) | Fresh restore |
-| --- | --- | --- | --- | --- | --- |
-| Empty installation | 3 KiB | 0.06 s | 0.002 s | 209 / 207 MiB | 0.05 s |
-| 60,000 history rows + 64 MiB recovery file | 65 MiB | 3.3 s | 3.2 s | 347 / 471 MiB | 16.8 s |
+| Fixture | Encrypted archive | Capture | Request pause | OCR pause | Peak RSS (capture / restore) | Fresh restore |
+| --- | --- | --- | --- | --- | --- | --- |
+| Empty installation | 5 KiB | 0.09 s | 0.008 s | 0.08 s | 238 / 239 MiB | 0.05 s |
+| 60,000 history rows + 64 MiB recovery file | 65 MiB | 2.9 s | 0.003 s | 2.9 s | 364 / 496 MiB | 15.4 s |
 
-Index regeneration after restore is separate and depends on file volume.
+Request pause is the longest any write waited for the gate while writes ran back to back
+through the capture; 472 of them finished while the large capture was reading. OCR pause is
+how long a recovery file writer waited. Index regeneration after restore is separate and
+depends on file volume.
 
 Limitations these numbers expose:
 
-- Capture holds the exclusive checkpoint for its whole duration, so cooperating writers (native
-  uploads, OCR rewrites, ZIP uploads) wait as long as the capture and give up after 30 seconds.
-  Large recovery collections make captures long; schedule them at quiet hours.
+- A capture starts once the requests and OCR writes already running have finished, and gives up
+  after 30 seconds; requests that arrive meanwhile wait with it. After that, requests wait only
+  for the snapshot.
+- OCR's writes to kept originals wait for the whole capture and do not give up, so large
+  recovery collections hold OCR back for as long as they take to read. Schedule backups at
+  quiet hours.
 - Restore memory grows with history volume (471 MiB for this fixture). Size the recovery host
   accordingly.
 - A real Backblaze B2 bucket has been exercised for probe, delivery with readback, byte
@@ -262,14 +276,12 @@ Limitations these numbers expose:
 node dist/main.js backup resume --review-file review.json
 ```
 
-Resume reauthenticates the original owner even if their saved credential is missing, checks
-the listed provider bindings and saved identities, and publishes verified configuration ZIPs.
+Resume checks the original owner's password against their restored user.
 Restart the API with `FDRIVE_RESTORE_MODE=false`. Review and re-enable features and schedules
 in System; confirm a recovery key before scheduling again. Reconnect native/MCP clients.
 
-Native/OCR/Office recovery bytes remain in the private `restore-UUID` quarantine. Its
-`recovery-manifest.json` maps `blobs-N` files to original kinds, paths, source mount IDs and
-remote identity IDs; the database's `backup.recovery.v1` setting retains the source environment.
+OCR, Office and log recovery bytes remain in the private `restore-UUID` quarantine. Its
+`recovery-manifest.json` maps `blobs-N` files to original kinds, paths and source mount IDs; the
+database's `backup.recovery.v1` setting retains the source environment.
 Reconcile those bytes against the current files folder before applying them. Subsequent backups
-also preserve this quarantine. External configuration ZIPs are restored with their external
-system's own tools. fdrive never replays old remote writes automatically.
+also preserve this quarantine. fdrive never applies quarantined bytes automatically.

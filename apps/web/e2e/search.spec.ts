@@ -208,8 +208,8 @@ test("a long folder name and file path in a result row never spill past the sear
 
   const meResponse = await page.request.get("/api/v1/auth/me");
   expect(meResponse.ok()).toBe(true);
-  const me = (await meResponse.json()) as { account: { id: string }; activeIdentityId: string };
-  const storageKey = `fdrive.recent:${JSON.stringify([me.account.id, me.activeIdentityId])}`;
+  const me = (await meResponse.json()) as { account: { id: string }; identity: { id: string } };
+  const storageKey = `fdrive.recent:${JSON.stringify([me.account.id, me.identity.id])}`;
   const recentItem = {
     path: `/${folderName}/Course Notes.md`,
     name: "Course Notes.md",
@@ -345,24 +345,12 @@ test("search panel presents visible File type label in filter bar", async ({ pag
 });
 
 test("a startup-unavailable query recovers without reloading the page", async ({ page }) => {
-  let statusCalls = 0;
   let searchCalls = 0;
   await page.route("**/api/v1/search/status", async (route) => {
-    statusCalls += 1;
-    const starting = statusCalls === 1;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify(
-        starting
-          ? {
-              available: false,
-              semantic: false,
-              images: false,
-              reason: "indexer_unreachable",
-            }
-          : { available: true, semantic: true, images: false },
-      ),
+      body: JSON.stringify({ available: true, semantic: true, images: false }),
     });
   });
   await page.route(/\/api\/v1\/search(?:\?.*)?$/, async (route) => {
@@ -413,9 +401,8 @@ test("a startup-unavailable query recovers without reloading the page", async ({
   const dialog = page.getByRole("dialog");
   await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("recovered");
 
-  await expect(dialog.getByText("Search is starting… Retrying automatically.")).toBeVisible();
+  await expect(dialog.getByText("Search is not available.")).toBeVisible();
   await expect(dialog.getByText("recovered.md", { exact: true })).toBeVisible({ timeout: 8_000 });
-  expect(statusCalls).toBeGreaterThanOrEqual(2);
   expect(searchCalls).toBeGreaterThanOrEqual(2);
 });
 
@@ -516,6 +503,42 @@ test("concurrent search displays text and visual matches without manual toggle, 
   await expect(dialog.getByText("Visual matches")).toBeHidden();
 });
 
+test("a saved search reopens from the sidebar with its filter and is removed from its menu", async ({
+  page,
+}) => {
+  const name = uniqueName("readme docs");
+  await page.goto("/files");
+  await openSearch(page);
+  const dialog = page.getByRole("dialog");
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+  await dialog.getByRole("button", { name: "Documents" }).click();
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+
+  await dialog.getByRole("button", { name: "Save search" }).click();
+  const nameInput = page.getByRole("textbox", { name: "Name" });
+  await expect(nameInput).toHaveValue("readme");
+  await nameInput.fill(name);
+  await nameInput.press("Enter");
+  await expect(nameInput).toBeHidden();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  const saved = page.getByRole("button", { name, exact: true });
+  await saved.click();
+  await expect(page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER)).toHaveValue("readme");
+  await expect(dialog.getByRole("button", { name: "Documents" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  await saved.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Remove" }).click();
+  await expect(saved).toBeHidden();
+});
+
 test.describe("scoping", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -529,7 +552,7 @@ test.describe("scoping", () => {
     // so pressing the shortcut immediately after login can race that
     // hydration. Waiting for the button to render and become enabled first
     // guarantees the listener is already attached.
-    await expect(page.getByRole("button", { name: "Search" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toBeEnabled();
 
     await openSearch(page);
     const dialog = page.getByRole("dialog");

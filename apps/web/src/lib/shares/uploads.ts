@@ -1,4 +1,4 @@
-import { ApiError, ShareId } from "@fdrive/contracts";
+import { ApiError, ShareId, ShareUploadResponse } from "@fdrive/contracts";
 import { uploadWithProgress, type XhrLike } from "@/lib/upload/xhr";
 import { publicUploadUrl } from "./client";
 import { publicUploadPath } from "./paths";
@@ -9,6 +9,8 @@ export interface ShareUploadItem {
   readonly status: "queued" | "uploading" | "done" | "error" | "cancelled";
   readonly progress: number;
   readonly error: string | null;
+  /** The name the file was stored under: its own, or the next free numbered one. */
+  readonly savedAs: string | null;
 }
 export interface ShareUploadDeps {
   readonly createXhr?: () => XhrLike;
@@ -21,6 +23,16 @@ export function validatePublicUploadFiles(files: readonly File[]): void {
     if (file.webkitRelativePath)
       throw new Error("Choose files individually. Folder uploads are not supported.");
     publicUploadPath(file.name);
+  }
+}
+
+/** The name a finished upload was stored under, from the API's answer. */
+export function publicUploadName(body: string): string | null {
+  try {
+    const parsed = ShareUploadResponse.safeParse(JSON.parse(body));
+    return parsed.success ? parsed.data.name : null;
+  } catch {
+    return null;
   }
 }
 
@@ -93,7 +105,7 @@ export function createShareUploadQueue(id: string, deps: ShareUploadDeps = {}) {
       .then((result) => {
         if (!active()) return;
         if (result.status >= 200 && result.status < 300)
-          patch(item.id, { status: "done", progress: 100 });
+          patch(item.id, { status: "done", progress: 100, savedAs: publicUploadName(result.body) });
         else
           patch(item.id, { status: "error", error: publicUploadError(result.body, result.status) });
       })
@@ -135,6 +147,7 @@ export function createShareUploadQueue(id: string, deps: ShareUploadDeps = {}) {
             status: "queued",
             progress: 0,
             error: null,
+            savedAs: null,
           }),
         ),
       ]);

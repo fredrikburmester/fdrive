@@ -1,57 +1,47 @@
 # macOS write beta: remaining work
 
-Updated 2026-11-12. Apache DAV native writes merged in PR #21. The pinned SFTPGo
-integration merged in PR #22 and was later removed together with its `fdrive-local-v1` mode,
-and SFTPGo itself has since been replaced by fdrive's local folder, which writes under fdrive's
-optimistic contract. WebDAV, its Apache DAV locks and S3 were removed on 2026-11-13.
-Full beta qualification remains open.
-Current behavior: [macOS](../MACOS.md#write-configuration-and-recovery).
-Search remains excluded.
+Full beta qualification of Mac writes remains open. Current behavior:
+[macOS](../MACOS.md#write-configuration-and-recovery). Search remains excluded.
 
 ## Safety boundary
 
-The user first chose **storage-side enforcement** (the leased Apache DAV mode, gone with
-WebDAV), and later accepted the weaker optimistic contract, the default since 2026-09-18 and
-now the only one; see [STOCK-SFTPGO-WRITES.md](STOCK-SFTPGO-WRITES.md) for the design record.
+Mac writes use fdrive's optimistic contract: the file stamp proves the destination right before
+the rename that publishes, with no lock and no fence at the storage against other writers.
 
-Keep explicit v2 write grants, staged uploads, retained originals, durable server receipts
-and native pending copies. Publication followed by a crash before the receipt remains
-uncertain until reconciled; never blindly replay it. No claim of exactly-once behavior
-across HTTP, filesystem and PostgreSQL. A server item ID cannot prove every unobserved
-external delete/recreate, particularly with identical bytes.
+Keep explicit v2 write grants, uploads staged in the files folder, durable server receipts and
+native pending copies. A commit records what it publishes before publishing it, so its outcome is
+always read from disk and never replayed blindly. No claim of exactly-once behavior across HTTP,
+filesystem and PostgreSQL. A server item ID cannot prove every unobserved external
+delete/recreate, particularly with identical bytes.
 
 ## Implementation still required
 
-- **Retention and recovery administration.** Define retained receipt and backup lifetimes,
-  inspect/export/reconcile uncertain operations, and reclaim only unreferenced acknowledged
-  data. Protect active uploads and expired-operation retries. The current 64 GiB reservation
-  ceiling refuses new writes; acknowledgements free incoming bytes but do not purge originals.
 - **Deployment qualification.** Inventory every writer before enabling native writes. Keep
   configuration, logs, databases, backups and temporary directories outside user homes.
   Qualify restart, upgrade and rollback against disposable data before production use.
-  Server spool must be persistent and shared or durably routed in multi-process API setups.
 
 ## Product and release qualification
 
-- Broader editor temporary-file cleanup. Recoverable Finder Trash and the app's **Restore
-  from Trash** work; restoration targets the location's top level. Finder Put Back and
-  permanent purge remain unavailable. Prove supported safe-save editors can operate with
-  permanent-delete callbacks rejected; publish specific compatibility limits.
+- Broader editor temporary-file cleanup. Finder's Trash is fdrive's Trash, and an app's
+  delete moves the file there, so a safe-save editor's temporary files can collect in Trash
+  until Days in Trash deletes them; measure with real editors and publish specific
+  compatibility limits. Finder Put Back remains unavailable; the app's **Restore from Trash**
+  targets the location's top level.
 - Reboot, extension/API crash, low disk, large transfer and cross-domain cases below.
   Cross-domain copies can download then upload; advertise no atomic cross-domain move.
   Prove source preservation when the destination upload fails.
-- Pending-aware Disconnect under callback races, expired credentials and revoked providers.
+- Pending-aware Remove under callback races, expired credentials and disabled users.
   Preserve/export unsynchronized content before removing a domain; never infer an empty
   journal from the framework's bounded pending-set enumeration alone.
 - Upgrade the installed read-only app and existing catalogs without duplicate domains,
   identity changes or lost pending content. Explicit write permission upgrade, old/new
   protocol combinations and refusal to open newer schemas all need release rehearsal.
 - Second-Mac installation, signing/notarization and distribution remain separate in
-  [native beta qualification](MACOS-APP.md). Keep Actions disabled per the current handoff.
+  [native beta qualification](MACOS-APP.md).
 
 Deferred: delta/chunk-resumable uploads, remote search, automatic text merging, POSIX ACL
 sync, general extended attributes/resource forks, synced Finder tags, symlinks/special files,
-package-wide atomic commits, native permanent purge and optimized cross-domain transfers.
+package-wide atomic commits and optimized cross-domain transfers.
 Do not promise support for arbitrary package documents or live databases.
 
 ## Acceptance and verification
@@ -60,14 +50,15 @@ Do not promise support for arbitrary package documents or live databases.
   drag a nested folder, save repeatedly in TextEdit and a safe-save editor, rename while
   saving, move a folder with downloaded children, conflict on destination, and restore from
   Trash.
-- Use two independent clients plus the web app and an external storage writer: concurrent
+- Use two independent clients plus the web app and a writer outside fdrive: concurrent
   saves; same-size/same-mtime replacement; content edit versus rename/delete; changed parent;
+  Finder delete, Delete Immediately and Empty Trash versus the web's Trash and its retention;
   directory deletion versus new descendants. Preserve every unacknowledged local edit.
-- Interrupt before/during upload, before commit, after upstream commit, after DB receipt and
+- Interrupt before/during upload, before commit, after the storage commit, after DB receipt and
   before native completion. Retry after extension/API restart and token rotation. No duplicate
   creates, wrong-target mutation, partial original or unverified destructive replay.
 - Offline save/new-file/new-folder chains, network flapping, quota/low disk, denied parent,
-  token expiry/revocation, provider disable, reconnect and Disconnect with pending work. Other
+  token expiry/revocation, a disabled user, reconnect and Remove with pending work. Other
   locations continue working; failures explain how to recover.
 - Upload a representative multi-gigabyte file; verify full-byte hash, bounded memory, progress,
   cancellation and staging cleanup. Refresh racing an upload never replaces its base or loses

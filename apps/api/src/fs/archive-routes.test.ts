@@ -3,20 +3,22 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gzipSync } from "node:zlib";
-import type { ArchiveEntriesResponse, FsEvent, JobStatus } from "@fdrive/contracts";
+import type { ArchiveEntriesResponse, JobStatus } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import * as tar from "tar-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations } from "../../test/file-operations.js";
 import { createApp } from "../app.js";
 import { isZstdSupported } from "../archive/stream-utils.js";
 import type { Principal } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
-import { createEventBus, type EventBus } from "../events/bus.js";
-import { registerEventRoutes } from "../events/routes.js";
+import { createEventBus } from "../events/bus.js";
+import { type EventRoutesDeps, registerEventRoutes } from "../events/routes.js";
 import { createJobRunner } from "../jobs/runner.js";
 import { registerFsRoutes } from "./routes.js";
 
@@ -29,12 +31,10 @@ import { registerFsRoutes } from "./routes.js";
 function fakeFolderSizeDeps() {
   return {
     indexQueries: {
-      rootIdsByName: async () => ({}),
       subtreeSize: async () => ({ bytes: 0, files: 0 }),
     },
-    resolver: {
-      verifiedIndexScopes: async () => ({ available: false as const, reason: "no_roots" as const }),
-    },
+    resolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     identities: { get: async () => null },
   };
 }
@@ -80,6 +80,7 @@ const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
@@ -111,13 +112,17 @@ const SEED: Seed = {
 
 interface Harness {
   readonly app: ReturnType<typeof createApp>;
-  readonly bus: EventBus;
-  readonly fsEvents: FsEvent[];
-  readonly tmpDir: string;
   readonly activity: ReturnType<typeof activityFixture>;
   readonly storage: StorageProvider;
   readonly jobRunner: ReturnType<typeof createJobRunner>;
 }
+
+/** A change journal with nothing in it: `GET /events` here only carries job events. */
+const NO_JOURNAL: EventRoutesDeps["journal"] = {
+  epoch: () => "0",
+  position: () => 0,
+  replay: async () => true,
+};
 
 const tempDirs: string[] = [];
 
@@ -148,19 +153,9 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-test-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
 
@@ -171,22 +166,20 @@ async function buildHarness(seed: Seed = SEED, username = "alice", jobMaxBytes =
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
+        files: testFileOperations({ activity: activity.service }),
         jobRunner,
-        tmpDir,
         jobMaxBytes,
         folderSize: fakeFolderSizeDeps(),
       });
-      registerEventRoutes(groups, { bus, clock });
+      registerEventRoutes(groups, { bus, journal: NO_JOURNAL, clock });
     },
   });
 
-  const harness: Harness = { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  const harness: Harness = { app, activity, storage, jobRunner };
   return harness;
 }
 
@@ -209,27 +202,15 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-peek-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
   const fsRoutesDeps = {
     activity: activity.service,
-    bus,
-    clock,
+    files: testFileOperations({ activity: activity.service }),
     jobRunner,
-    tmpDir,
     jobMaxBytes: 10 * 1024 * 1024,
     archivePeekMaxBytes,
     folderSize: fakeFolderSizeDeps(),
@@ -241,11 +222,11 @@ async function buildHarnessWithArchivePeekMaxBytes(archivePeekMaxBytes: number):
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerFsRoutes(groups, fsRoutesDeps),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  return { app, activity, storage, jobRunner };
 }
 
 /** Builds a harness around an arbitrary `StorageProvider`, for exercising error-mapping branches. */
@@ -259,19 +240,9 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
   };
 
   const bus = createEventBus();
-  const fsEvents: FsEvent[] = [];
-  bus.subscribe({ identityId: ALICE_IDENTITY_ID }, (event) => {
-    if (event.type === "fs") {
-      fsEvents.push(event);
-    }
-  });
-
   const clock = () => new Date();
   const activity = activityFixture(clock);
   const jobRunner = createJobRunner({ clock, bus });
-  const tmpDir = join(tmpdir(), `fdrive-archive-routes-stub-${Date.now()}-${Math.random()}`);
-  await mkdir(tmpDir, { recursive: true });
-  tempDirs.push(tmpDir);
 
   const config = loadConfig(REQUIRED_ENV);
   const app = createApp({
@@ -281,20 +252,18 @@ async function buildHarnessWithStorage(storage: StorageProvider): Promise<Harnes
     startedAt: new Date(),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerFsRoutes(groups, {
         activity: activity.service,
-        bus,
-        clock,
+        files: testFileOperations({ activity: activity.service }),
         jobRunner,
-        tmpDir,
         jobMaxBytes: 10 * 1024 * 1024,
         folderSize: fakeFolderSizeDeps(),
       }),
   });
 
-  return { app, bus, fsEvents, tmpDir, activity, storage, jobRunner };
+  return { app, activity, storage, jobRunner };
 }
 
 afterEach(async () => {
@@ -364,44 +333,20 @@ async function waitForJobDone(
   }
 }
 
-function notImplemented(): never {
-  throw new Error("not implemented in this stub");
-}
-
+/** Memory storage with `overrides` in place of its own methods. */
 function makeStubStorage(overrides: Partial<StorageProvider>): StorageProvider {
-  return {
-    list: notImplemented,
-    stat: notImplemented,
-    statFile: notImplemented,
-    download: notImplemented,
-    upload: notImplemented,
-    mkdir: notImplemented,
-    move: notImplemented,
-    copy: notImplemented,
-    deleteFile: notImplemented,
-    deleteDir: notImplemented,
-    setModifiedAt: notImplemented,
-    zip: notImplemented,
-    ...overrides,
-  } as StorageProvider;
+  return { ...createMemoryStorage(), ...overrides };
 }
 
 describe("POST /fs/duplicate", () => {
-  it("copies the file next to itself with a unique name and publishes a copy event", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("copies the file next to itself with a unique name", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
 
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toMatchObject({ path: "/hello copy.txt", name: "hello copy.txt" });
-    expect(fsEvents).toEqual([
-      expect.objectContaining({
-        op: "copy",
-        paths: ["/hello.txt"],
-        targetPaths: ["/hello copy.txt"],
-      }),
-    ]);
   });
 
   it("records the duplicate as a copy of the chosen source, with its own target", async () => {
@@ -420,6 +365,23 @@ describe("POST /fs/duplicate", () => {
     });
   });
 
+  it("refuses a copy name taken after it was chosen, keeping that file", async () => {
+    const h = await buildHarness();
+    const list = h.storage.list.bind(h.storage);
+    vi.spyOn(h.storage, "list").mockImplementationOnce(async (path) => {
+      const entries = await list(path);
+      await h.storage.upload("/hello copy.txt", Buffer.from("someone else's"));
+      return entries;
+    });
+
+    const res = await h.app.request("/api/v1/fs/duplicate", jsonPost({ path: "/hello.txt" }));
+
+    expect(res.status).toBe(409);
+    expect(await new Response((await h.storage.open("/hello copy.txt")).stream()).text()).toBe(
+      "someone else's",
+    );
+  });
+
   it("numbers the second duplicate", async () => {
     const { app } = await buildHarness();
 
@@ -434,10 +396,12 @@ describe("POST /fs/duplicate", () => {
 describe("POST /fs/compress and the resulting job", () => {
   it("records a job that fails on an externally created target and keeps those bytes", async () => {
     const h = await buildHarness();
-    const download = h.storage.download.bind(h.storage);
-    vi.spyOn(h.storage, "download").mockImplementationOnce(async (...args) => {
-      await h.storage.upload("/dir.zip", Buffer.from("external bytes"));
-      return download(...args);
+    const storage = h.storage as Required<StorageProvider>;
+    const zip = storage.zip.bind(storage);
+    // The name is taken after the request was admitted, while the job reads.
+    vi.spyOn(storage, "zip").mockImplementationOnce(async (...args) => {
+      await storage.upload("/dir.zip", Buffer.from("external bytes"));
+      return zip(...args);
     });
     const accepted = await h.app.request(
       "/api/v1/fs/compress",
@@ -449,7 +413,7 @@ describe("POST /fs/compress and the resulting job", () => {
       action: "archive.compress",
       outcome: "failed",
     });
-    expect(await new Response((await h.storage.download("/dir.zip")).body).text()).toBe(
+    expect(await new Response((await h.storage.open("/dir.zip")).stream()).text()).toBe(
       "external bytes",
     );
   });
@@ -581,8 +545,8 @@ describe("POST /fs/compress and the resulting job", () => {
     expect((await h.app.request("/api/v1/fs/stat?path=/dir.zip")).status).toBe(404);
   });
 
-  it("compresses a folder to zip, completes, and publishes an fs create event", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("compresses a folder to zip and completes", async () => {
+    const { app } = await buildHarness();
 
     const res = await app.request(
       "/api/v1/fs/compress",
@@ -594,7 +558,6 @@ describe("POST /fs/compress and the resulting job", () => {
     const final = await waitForJobDone(app, jobId);
     expect(final.state).toBe("done");
     expect(final.result?.path).toBe("/dir.zip");
-    expect(fsEvents.some((e) => e.op === "create" && e.paths.includes("/dir.zip"))).toBe(true);
 
     const listRes = await app.request("/api/v1/fs/list?path=/");
     const listing = (await listRes.json()) as { entries: { name: string }[] };
@@ -805,9 +768,6 @@ describe("POST /fs/compress and the resulting job", () => {
     };
     const jobRunner = createJobRunner({ clock: () => new Date(), bus, maxJobs: 0 });
     const activity = activityFixture(() => new Date());
-    const tmpDir = join(tmpdir(), `fdrive-archive-routes-fullqueue-${Date.now()}`);
-    await mkdir(tmpDir, { recursive: true });
-    tempDirs.push(tmpDir);
     const config = loadConfig(REQUIRED_ENV);
     const app = createApp({
       config,
@@ -816,14 +776,12 @@ describe("POST /fs/compress and the resulting job", () => {
       startedAt: new Date(),
       clock: () => new Date(),
       principalResolver: async () => principal,
-      connectionStatus: async () => ({ required: false, providers: [] }),
+      setupRequired: async () => false,
       registerRoutes: (groups) =>
         registerFsRoutes(groups, {
           activity: activity.service,
-          bus,
-          clock: () => new Date(),
+          files: testFileOperations({ activity: activity.service }),
           jobRunner,
-          tmpDir,
           jobMaxBytes: 1000,
           folderSize: fakeFolderSizeDeps(),
         }),
@@ -861,8 +819,8 @@ describe("POST /fs/extract and the resulting job", () => {
     await waitForJobDone(app, jobId);
   }
 
-  it("extracts into the default destination (archive name without extension) and publishes fs create", async () => {
-    const { app, fsEvents } = await buildHarness();
+  it("extracts into the default destination (archive name without extension)", async () => {
+    const { app } = await buildHarness();
     await compressDirToZip(app);
 
     const res = await app.request("/api/v1/fs/extract", jsonPost({ path: "/dir.zip" }));
@@ -872,7 +830,6 @@ describe("POST /fs/extract and the resulting job", () => {
     const final = await waitForJobDone(app, jobId);
     expect(final.state).toBe("done");
     expect(final.result?.path).toBe("/dir");
-    expect(fsEvents.some((e) => e.op === "create" && e.paths.includes("/dir"))).toBe(true);
   });
 
   it("extracts into an explicit destination", async () => {
@@ -893,7 +850,7 @@ describe("POST /fs/extract and the resulting job", () => {
   });
 
   it("fails the job when a compressed archive expands beyond jobMaxBytes", async () => {
-    const { app, fsEvents } = await buildHarness(SEED, "alice", 1000);
+    const { app } = await buildHarness(SEED, "alice", 1000);
     const zipBytes = await buildZipBuffer((zipfile) => {
       zipfile.addBuffer(Buffer.from("x".repeat(20_000)), "large.txt");
     });
@@ -907,9 +864,6 @@ describe("POST /fs/extract and the resulting job", () => {
 
     expect(final.state).toBe("failed");
     expect(final.error).toBe("exceeded the maximum of 1000 bytes allowed for this job");
-    expect(fsEvents.some((event) => event.op === "create" && event.paths.includes("/bomb"))).toBe(
-      false,
-    );
   });
 
   it("rejects an archive path with no recognized extension", async () => {
@@ -1047,8 +1001,11 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
     const { app } = await buildHarness();
     const other = await buildHarness(SEED, "bob");
 
-    await app.request("/api/v1/fs/compress", jsonPost({ paths: ["/dir"], format: "zip" }));
-    await other.app.request(
+    const mine = await app.request(
+      "/api/v1/fs/compress",
+      jsonPost({ paths: ["/dir"], format: "zip" }),
+    );
+    const theirs = await other.app.request(
       "/api/v1/fs/compress",
       jsonPost({ paths: ["/note.txt"], format: "zip" }),
     );
@@ -1056,6 +1013,9 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
     const res = await app.request("/api/v1/fs/jobs");
     const body = (await res.json()) as { jobs: JobStatus[] };
     expect(body.jobs).toHaveLength(1);
+    // Each job writes into its user's folder, which the test then removes.
+    await waitForJobDone(app, ((await mine.json()) as { jobId: string }).jobId);
+    await waitForJobDone(other.app, ((await theirs.json()) as { jobId: string }).jobId);
   });
 
   it("returns not_found for a job that does not exist", async () => {
@@ -1096,7 +1056,7 @@ describe("GET /fs/jobs, GET /fs/jobs/:id, POST /fs/jobs/:id/cancel", () => {
 });
 
 describe("unmapped storage errors pass through unchanged", () => {
-  const dirStat = { kind: "dir", size: 0, modifiedAt: null, contentType: null } as const;
+  const dirStat = entryStat("/somewhere", { kind: "dir" });
 
   it("maps a non-not_found StorageError from the destination check", async () => {
     const storage = makeStubStorage({
@@ -1198,5 +1158,6 @@ describe("SSE integration: job events over GET /events", () => {
     expect(sawJobEvent).toBe(true);
     controller.abort();
     await reader.cancel();
+    await waitForJobDone(app, jobId);
   });
 });

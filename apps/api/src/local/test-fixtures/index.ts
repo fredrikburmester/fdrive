@@ -1,12 +1,11 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ProviderModule } from "@fdrive/core";
-import type { Repos } from "@fdrive/db";
-import { createLocalModule, type LocalUsers } from "@fdrive/local";
+import type { Identity, Repos } from "@fdrive/db";
+import { createFilesFolder, type FilesFolder } from "@fdrive/local";
 import { onTestFinished } from "vitest";
 import { createScryptSharePasswords, type SharePasswords } from "../../shares/passwords.js";
-import { createLocalUserStore } from "../users.js";
+import { createLocalUserStore, type LocalUserStore } from "../users.js";
 
 /** scrypt at a cost tests can afford; the hashes are real and verify like production ones. */
 export const FAST_PASSWORDS: SharePasswords = createScryptSharePasswords({
@@ -49,33 +48,42 @@ export interface SeedLocalUser {
   readonly disabled?: boolean;
 }
 
-/** Adds `users` to `app.local_users` with real (cheap) password hashes. */
+/**
+ * Creates `users`, each with their account and login, with real (cheap)
+ * password hashes. Resolves to the logins.
+ */
 export async function seedLocalUsers(
-  repos: Pick<Repos, "localUsers">,
+  repos: Pick<Repos, "localUsers" | "logins">,
   users: readonly SeedLocalUser[],
   passwords: SharePasswords = FAST_PASSWORDS,
-): Promise<void> {
+): Promise<Identity[]> {
+  const logins: Identity[] = [];
   for (const user of users) {
-    await repos.localUsers.create({
-      username: user.username,
-      passwordHash: await passwords.hash(user.password),
-    });
+    logins.push(
+      await repos.logins.createUser({
+        username: user.username,
+        passwordHash: await passwords.hash(user.password),
+        isAdmin: false,
+        at: new Date(),
+      }),
+    );
     if (user.disabled === true) await repos.localUsers.update(user.username, { disabled: true });
   }
+  return logins;
 }
 
-export interface LocalModuleFixture {
+export interface FilesFolderFixture {
   readonly root: string;
-  /** The store the module asks; spy on its methods to shape what the module sees. */
-  readonly users: LocalUsers;
-  readonly module: ProviderModule;
+  /** The store the folder and the password check ask; spy on its methods to shape what they see. */
+  readonly users: LocalUserStore;
+  readonly folder: FilesFolder;
 }
 
-/** The local module over `root` (a fresh temporary folder by default) and the repos' users. */
-export function localModuleFixture(
+/** The files folder over `root` (a fresh temporary folder by default) and the repos' users. */
+export function filesFolderFixture(
   repos: Pick<Repos, "localUsers" | "localGrants">,
-  options: { root?: string; indexRoot?: string | null; passwords?: SharePasswords } = {},
-): LocalModuleFixture {
+  options: { root?: string; passwords?: SharePasswords } = {},
+): FilesFolderFixture {
   const root = options.root ?? temporaryStorageRoot();
   const users = createLocalUserStore({
     repo: repos.localUsers,
@@ -85,6 +93,6 @@ export function localModuleFixture(
   return {
     root,
     users,
-    module: createLocalModule({ root, users, indexRoot: options.indexRoot ?? null }),
+    folder: createFilesFolder({ root, users }),
   };
 }

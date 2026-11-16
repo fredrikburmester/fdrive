@@ -41,7 +41,7 @@ export function streamOf(chunks: readonly string[], failWith?: Error): ReadableS
 }
 
 export async function read(storage: StorageProvider, path: string): Promise<string> {
-  return new Response((await storage.download(path)).body).text();
+  return new Response((await storage.open(path)).stream()).text();
 }
 
 /** The `StorageError` kind a promise rejects with, `null` when it resolves. */

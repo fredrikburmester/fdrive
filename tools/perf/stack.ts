@@ -10,7 +10,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { composeApp } from "@fdrive/api/composition";
 import { loadConfig } from "@fdrive/api/config";
-import { createDb, createRepos, migrate } from "@fdrive/db";
+import { FEATURES_SETTINGS_KEY, type FeatureConfiguration } from "@fdrive/contracts";
+import { createDb, createRepos, INDEX_ROOT_ID, migrate } from "@fdrive/db";
 import { startPostgres } from "@fdrive/testkit";
 import { serve } from "@hono/node-server";
 import pino from "pino";
@@ -23,8 +24,31 @@ import { command, container, ready } from "./runtime.js";
 import { SEARCH_FILE_COUNT, searchDocument, TOPICS, validateVector } from "./search-fixture.js";
 import { FORBIDDEN_USER, PERF_USER } from "./seed-plan.js";
 import { buildStackEnv } from "./stack-env.js";
-import { ensureTeiImage, selectTeiRuntime, type TeiRuntimeConfig } from "./tei-runtime.js";
 export const BIG_FILE_BYTES = 512 * 1024 * 1024;
+/**
+ * The ml image the stack runs, from main. Its text unit embeds the fixture and
+ * every search query with `EMBED_MODEL`.
+ */
+export const ML_IMAGE = "ghcr.io/fredrikburmester/fdrive-ml:main";
+export const EMBED_MODEL = "intfloat/multilingual-e5-small";
+/**
+ * Search answers only while the owner has turned it on. Hybrid search needs
+ * full-text and semantic search; everything else stays off, and the
+ * walkthrough counts as done so it never opens over a measured page.
+ */
+const SEARCH_FEATURES: FeatureConfiguration = {
+  version: 1,
+  revision: 1,
+  values: {
+    thumbnails: false,
+    textSearch: true,
+    searchOcr: false,
+    semanticSearch: true,
+    imageSearch: false,
+    pdfOcr: false,
+  },
+  walkthroughComplete: true,
+};
 export interface PerfStack {
   readonly apiBaseUrl: string;
   /** Plain HTTP over the same file, the baseline the API download is measured against. */
@@ -32,7 +56,8 @@ export interface PerfStack {
   readonly cookie: string;
   readonly forbiddenCookie: string;
   readonly embedUrl: string;
-  readonly teiRuntime: TeiRuntimeConfig;
+  /** `ML_IMAGE` as pulled, by digest. */
+  readonly mlImage: string;
   readonly dataDir: string;
   readonly rootDir: string;
   stop(): Promise<void>;
@@ -86,8 +111,7 @@ export async function startPerfStack(): Promise<PerfStack> {
   try {
     const temp = await mkdtemp(join(tmpdir(), "fdrive-perf-"));
     cleanup.add(() => rm(temp, { recursive: true, force: true }));
-    // The api serves this folder itself as its local storage, one home per
-    // user, and the indexer reads it through a read-only bind mount.
+    // The api serves this folder itself as its local storage, one home per user.
     const dataDir = join(temp, "data");
     await mkdir(dataDir);
     await chmod(dataDir, 0o755);
@@ -142,7 +166,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       createWriteStream(join(dataDir, "perf", "big", "large.bin")),
     );
     const directBaseUrl = await serveDirect(join(dataDir, "perf", "big", "large.bin"), cleanup);
-    console.log("[perf] starting real Postgres and multilingual-e5-small TEI CPU");
+    console.log(`[perf] starting real Postgres and the ml server's ${EMBED_MODEL} text unit`);
     const postgres = await startPostgres();
     cleanup.add(() => postgres.stop());
     const db = createDb(postgres.connectionString);
@@ -155,22 +179,33 @@ export async function startPerfStack(): Promise<PerfStack> {
       await Promise.all(ended);
     });
     await migrate(db.db);
-    await seedLocalUsers(createRepos(db.db).localUsers, [PERF_USER, FORBIDDEN_USER]);
-    const teiRuntime = selectTeiRuntime();
-    await ensureTeiImage(teiRuntime, command);
-    const embedUrl = await container(
+    const repos = createRepos(db.db);
+    // The settings layout check opens admin-only System pages; admin status gates
+    // nothing on the measured listing, search, download and upload paths.
+    await seedLocalUsers(repos, [{ ...PERF_USER, isAdmin: true }, FORBIDDEN_USER]);
+    await repos.settings.set(FEATURES_SETTINGS_KEY, SEARCH_FEATURES);
+    await command("docker", ["pull", ML_IMAGE]);
+    const mlImage = await command("docker", [
+      "image",
+      "inspect",
+      "--format",
+      "{{index .RepoDigests 0}}",
+      ML_IMAGE,
+    ]);
+    // Only the text unit, on with no feature document. The volume keeps the
+    // downloaded model (about 490 MB) for the next run.
+    const mlUrl = await container(
       cleanup,
       [
-        "--platform",
-        teiRuntime.platform,
+        "--env",
+        "FDRIVE_ML_STATIC_UNITS=text",
         "--volume",
-        "fdrive-perf-models:/data",
-        teiRuntime.image,
-        "--model-id",
-        teiRuntime.model,
+        "fdrive-perf-ml-models:/models",
+        mlImage,
       ],
-      80,
+      8080,
     );
+    const embedUrl = `${mlUrl}/text`;
     await ready(`${embedUrl}/health`, 1200000);
     const embeddings: number[][] = [];
     for (let i = 0; i < TOPICS.length; i++) {
@@ -184,16 +219,12 @@ export async function startPerfStack(): Promise<PerfStack> {
         }),
         signal: AbortSignal.timeout(120000),
       });
-      if (!res.ok) throw Error(`TEI seed failed: ${res.status}`);
+      if (!res.ok) throw Error(`Embedding the fixture failed: ${res.status}`);
       const raw: unknown = await res.json();
-      if (!Array.isArray(raw)) throw Error("TEI seed invalid");
+      if (!Array.isArray(raw)) throw Error("Fixture embedding invalid");
       embeddings.push(validateVector(raw[0]));
     }
-    const root = await db.pool.query<{ id: number }>(
-      "insert into idx.roots(name) values ('files') returning id",
-    );
-    const rootId = root.rows[0]?.id;
-    if (!rootId) throw Error("Fixture root missing");
+    const rootId = INDEX_ROOT_ID;
     for (let i = 0; i < TOPICS.length; i++) {
       const doc = searchDocument(i);
       const key = doc.name.split("-")[0];
@@ -215,48 +246,13 @@ export async function startPerfStack(): Promise<PerfStack> {
       );
     }
     await db.pool.query("ANALYZE idx.files; ANALYZE idx.chunks");
-    const image = `fdrive-perf-indexer:${process.pid}`;
-    await command("docker", ["build", "--tag", image, join(rootDir, "services/indexer")]);
-    cleanup.add(async () => {
-      await command("docker", ["image", "rm", image]);
-    });
-    const pgUrl = new URL(postgres.connectionString);
-    pgUrl.hostname = "host.docker.internal";
-    const indexerUrl = await container(
-      cleanup,
-      [
-        "--mount",
-        `type=bind,source=${dataDir},target=/data,readonly`,
-        "--mount",
-        `type=bind,source=${join(rootDir, "tools/perf/directory_server.py")},target=/fixture.py,readonly`,
-        "--env",
-        `DATABASE_URL=${pgUrl}`,
-        "--env",
-        "INDEX_ROOTS=files=/data",
-        "--env",
-        `EMBED_URL=${embedUrl.replace("127.0.0.1", "host.docker.internal")}`,
-        "--entrypoint",
-        "python",
-        image,
-        "/fixture.py",
-      ],
-      8010,
-    );
-    await ready(`${indexerUrl}/directory?root=files&path=/perf`);
     const config = loadConfig({
       ...buildStackEnv({
         databaseUrl: postgres.connectionString,
         storageRoot: dataDir,
         masterKeyBase64: randomBytes(32).toString("base64"),
       }),
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: dataDir, indexerPath: "/data" },
-      ]),
-      FDRIVE_EMBED_URL: embedUrl,
-      FDRIVE_INDEXER_URL: indexerUrl,
-      // The settings layout check opens admin-only System pages; admin status gates
-      // nothing on the measured listing, search, download and upload paths.
-      FDRIVE_ADMIN_USERS: PERF_USER.username,
+      FDRIVE_ML_URL: mlUrl,
     });
     const composed = await composeApp(config, pino({ level: "silent" }));
     cleanup.add(() => composed.close());
@@ -288,7 +284,7 @@ export async function startPerfStack(): Promise<PerfStack> {
       cookie,
       forbiddenCookie,
       embedUrl,
-      teiRuntime,
+      mlImage,
       dataDir,
       rootDir,
       stop: () => cleanup.close(),

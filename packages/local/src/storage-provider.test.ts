@@ -1,17 +1,23 @@
 import { execFileSync } from "node:child_process";
+import { createReadStream, type ReadStream } from "node:fs";
 import {
+  appendFile,
+  chmod,
   lstat,
   mkdir,
+  mkdtemp,
   readdir,
   readFile,
   rm,
   stat,
   symlink,
   truncate,
+  utimes,
   writeFile,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   bytes,
   type Fixture,
@@ -21,6 +27,32 @@ import {
   streamOf,
   zipEntries,
 } from "../test/helpers.js";
+import { createLocalStorage, removeStaleParts } from "./storage-provider.js";
+
+function text(bytes: Uint8Array): string {
+  return new TextDecoder().decode(bytes);
+}
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, createReadStream: vi.fn(actual.createReadStream) };
+});
+
+/** Whether the temporary folder's disk ignores case, as a Mac's does by default. */
+async function ignoresCase(): Promise<boolean> {
+  const dir = await mkdtemp(join(tmpdir(), "fdrive-case-"));
+  try {
+    await writeFile(join(dir, "probe"), "");
+    return await stat(join(dir, "PROBE")).then(
+      () => true,
+      () => false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const IGNORES_CASE = await ignoresCase();
 
 let f: Fixture;
 
@@ -32,9 +64,7 @@ afterEach(async () => {
   await f.cleanup();
 });
 
-/** The storage's zip, which local storage always has. */
-function zip(paths: readonly string[], opts?: { signal?: AbortSignal }) {
-  if (f.storage.zip === undefined) throw new Error("local storage has no zip");
+function zip(paths: readonly string[], opts?: Parameters<typeof f.storage.zip>[1]) {
   return f.storage.zip(paths, opts);
 }
 
@@ -84,51 +114,51 @@ describe("symlinks", () => {
     await symlink(outside, join(await home(), "out"));
   });
 
-  it("lists a link that leaves the home as a symlink and refuses to follow it", async () => {
+  it("lists a link as what it is and refuses to follow it", async () => {
     expect(await f.storage.list("/")).toMatchObject([{ name: "out", kind: "symlink", size: 0 }]);
     expect(await kindOf(f.storage.list("/out"))).toBe("forbidden");
     expect(await kindOf(f.storage.stat("/out"))).toBe("forbidden");
-    expect(await kindOf(f.storage.download("/out/secret.txt"))).toBe("forbidden");
+    expect(await kindOf(f.storage.open("/out/secret.txt"))).toBe("forbidden");
     expect(await kindOf(f.storage.upload("/out/new.txt", bytes("x")))).toBe("forbidden");
     expect(await kindOf(f.storage.mkdir("/out/dir"))).toBe("forbidden");
     expect(await readdir(outside)).toEqual(["secret.txt"]);
   });
 
-  it("refuses a file link that leaves the home", async () => {
-    await symlink(join(outside, "secret.txt"), join(f.home, "secret.txt"));
-    expect(await kindOf(f.storage.download("/secret.txt"))).toBe("forbidden");
-  });
-
-  it("deletes a link itself, never what it points at", async () => {
-    await f.storage.deleteFile("/out");
-    expect(await f.storage.list("/")).toEqual([]);
+  it("refuses to delete a link, keeping it and what it points at", async () => {
+    expect(await kindOf(f.storage.deleteFile("/out"))).toBe("forbidden");
+    expect(await kindOf(f.storage.deleteDir("/out"))).toBe("forbidden");
+    expect((await lstat(join(f.home, "out"))).isSymbolicLink()).toBe(true);
     expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("secret");
   });
 
-  it("follows links that stay inside the home", async () => {
+  it("refuses a link that stays inside the home just the same", async () => {
     await f.storage.upload("/real/a.txt", bytes("a"), { mkdirParents: true });
     await symlink(join(f.home, "real"), join(f.home, "alias"));
     await symlink(join(f.home, "real", "a.txt"), join(f.home, "a-link.txt"));
     const entries = await f.storage.list("/");
-    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({ kind: "dir" });
+    expect(entries.find((entry) => entry.name === "alias")).toMatchObject({ kind: "symlink" });
     expect(entries.find((entry) => entry.name === "a-link.txt")).toMatchObject({
-      kind: "file",
-      size: 1,
+      kind: "symlink",
+      size: 0,
     });
-    expect(await read(f.storage, "/alias/a.txt")).toBe("a");
-    expect(await read(f.storage, "/a-link.txt")).toBe("a");
-    expect(await f.storage.list("/alias")).toMatchObject([{ path: "/alias/a.txt" }]);
-    // A path through links is spelled as asked: the link's own name, not its target's.
-    expect(await f.storage.stat("/alias/a.txt")).not.toHaveProperty("path");
-    expect(await f.storage.stat("/a-link.txt")).not.toHaveProperty("path");
-    expect(await f.storage.stat("/real/a.txt")).not.toHaveProperty("path");
+    expect(await kindOf(f.storage.stat("/alias/a.txt"))).toBe("forbidden");
+    expect(await kindOf(f.storage.list("/alias"))).toBe("forbidden");
+    expect(await kindOf(f.storage.open("/a-link.txt"))).toBe("forbidden");
+    expect(await read(f.storage, "/real/a.txt")).toBe("a");
+    expect(await f.storage.stat("/real/a.txt")).toMatchObject({ path: "/real/a.txt" });
   });
 
-  it("lists a dangling link as a symlink and reports it missing", async () => {
+  it("refuses a link that leads nowhere, and writing over it", async () => {
     await symlink(join(f.root, "nowhere"), join(f.home, "dangling"));
     const entries = await f.storage.list("/");
     expect(entries.find((entry) => entry.name === "dangling")).toMatchObject({ kind: "symlink" });
-    expect(await kindOf(f.storage.stat("/dangling"))).toBe("not_found");
+    expect(await kindOf(f.storage.stat("/dangling"))).toBe("forbidden");
+    expect(await kindOf(f.storage.upload("/dangling", bytes("x"), { overwrite: true }))).toBe(
+      "forbidden",
+    );
+    expect(await kindOf(f.storage.mkdir("/dangling/dir", { parents: true }))).toBe("forbidden");
+    expect((await lstat(join(f.home, "dangling"))).isSymbolicLink()).toBe(true);
+    expect(await readdir(f.root)).toEqual(expect.not.arrayContaining(["nowhere"]));
   });
 });
 
@@ -159,7 +189,7 @@ describe("upload", () => {
     });
     await f.storage.upload("/b.txt", bytes("b"), { signal });
     expect(await read(f.storage, "/s.txt")).toBe("hello");
-    expect((await f.storage.statFile("/s.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect((await f.storage.statFile("/s.txt")).modifiedAt.getTime()).toBe(at.getTime());
   });
 
   it("stops on an aborted signal and leaves nothing behind", async () => {
@@ -193,19 +223,25 @@ describe("upload", () => {
 
   it("creates only when the name is free, even under a race", async () => {
     await f.storage.upload("/taken.txt", bytes("old"));
+    expect(await kindOf(f.storage.upload("/taken.txt", bytes("new")))).toBe("conflict");
     expect(await kindOf(f.storage.upload("/taken.txt", bytes("new"), { overwrite: false }))).toBe(
       "conflict",
     );
     expect(await read(f.storage, "/taken.txt")).toBe("old");
 
     const results = await Promise.allSettled(
-      ["one", "two", "three"].map((value) =>
-        f.storage.upload("/race.txt", bytes(value), { overwrite: false }),
-      ),
+      ["one", "two", "three"].map((value) => f.storage.upload("/race.txt", bytes(value))),
     );
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(["one", "two", "three"]).toContain(await read(f.storage, "/race.txt"));
     expect((await readdir(f.home)).sort()).toEqual(["race.txt", "taken.txt"]);
+  });
+
+  it("replaces a file only when asked to overwrite", async () => {
+    await f.storage.upload("/f.txt", bytes("old"));
+    await f.storage.upload("/f.txt", streamOf(["n", "ew"]), { overwrite: true });
+    expect(await read(f.storage, "/f.txt")).toBe("new");
+    expect(await readdir(f.home)).toEqual(["f.txt"]);
   });
 
   it("refuses a folder or the home as a target", async () => {
@@ -225,55 +261,133 @@ describe("upload", () => {
   });
 });
 
-describe("download", () => {
+describe("upload in pieces", () => {
+  const id = "0123456789abcdef";
+  const piece = (offset: number) => ({ part: { id, offset } });
+
+  it("keeps the pieces at the top of the home until the last one publishes them", async () => {
+    await f.storage.mkdir("/docs");
+    await f.storage.uploadPart("/docs/f.txt", bytes("hel"), piece(0));
+    await f.storage.uploadPart("/docs/f.txt", streamOf(["lo", " WORLD!"]), {
+      ...piece(3),
+      signal: new AbortController().signal,
+    });
+    expect((await readdir(f.home)).sort()).toEqual([`.fdrive-partial-${id}`, "docs"]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([]);
+
+    const at = new Date("2019-03-04T05:06:07Z");
+    const published = await f.storage.upload("/docs/f.txt", streamOf([" world"]), {
+      ...piece(5),
+      contentLength: 6,
+      modifiedAt: at,
+    });
+    expect(published).toMatchObject({ path: "/docs/f.txt", size: 11, modifiedAt: at });
+    expect(await read(f.storage, "/docs/f.txt")).toBe("hello world");
+    expect(await readdir(f.home)).toEqual(["docs"]);
+  });
+
+  it("refuses a gap, a part that is not there and a malformed id", async () => {
+    await f.storage.uploadPart("/f.txt", bytes("abc"), piece(0));
+    expect(await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), piece(9)))).toBe("bad_request");
+    expect(
+      await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), { ...piece(3), contentLength: 2 })),
+    ).toBe("bad_request");
+    const other = { part: { id: "fedcba9876543210", offset: 3 } };
+    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), other))).toBe("not_found");
+    const malformed = { part: { id: "../../x", offset: 0 } };
+    expect(await kindOf(f.storage.upload("/f.txt", bytes("x"), malformed))).toBe("bad_request");
+    expect(await kindOf(f.storage.uploadPart("/f.txt", bytes("x"), malformed))).toBe("bad_request");
+    expect(await readdir(f.home)).toEqual([`.fdrive-partial-${id}`]);
+  });
+
+  it("keeps a shared folder's part in its owner's home and replaces a file when asked", async () => {
+    const owner = join(f.root, "bob");
+    await mkdir(join(owner, "shared"), { recursive: true });
+    await writeFile(join(owner, "shared", "f.txt"), "old");
+    const shared = createLocalStorage({ home: join(owner, "shared"), within: owner });
+    await shared.uploadPart("/f.txt", bytes("ne"), { ...piece(0), overwrite: true });
+    expect((await readdir(owner)).sort()).toEqual([`.fdrive-partial-${id}`, "shared"]);
+    await shared.upload("/f.txt", bytes("w"), { ...piece(2), overwrite: true });
+    expect(await readFile(join(owner, "shared", "f.txt"), "utf8")).toBe("new");
+    expect(await readdir(owner)).toEqual(["shared"]);
+  });
+});
+
+describe("removeStaleParts", () => {
+  it("removes parts at the top of homes that stopped changing before the cutoff", async () => {
+    const old = new Date("2020-01-01T00:00:00Z");
+    const name = (n: number) => `.fdrive-partial-000000000000000${n}`;
+    await mkdir(join(await home(), "docs"));
+    await mkdir(join(f.home, name(4)));
+    for (const at of [name(1), name(2), join("docs", name(3)), "notes.txt"]) {
+      await writeFile(join(f.home, at), "x");
+    }
+    for (const at of [name(1), join("docs", name(3)), name(4)]) {
+      await utimes(join(f.home, at), old, old);
+    }
+    await writeFile(join(f.root, ".fdrive-files"), "");
+
+    expect(await removeStaleParts(f.root, new Date("2021-01-01T00:00:00Z"))).toBe(1);
+    expect((await readdir(f.home)).sort()).toEqual([name(2), name(4), "docs", "notes.txt"]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([name(3)]);
+  });
+});
+
+describe("open", () => {
   beforeEach(async () => {
     await f.storage.upload("/d.txt", bytes("hello world"));
   });
 
-  it("sends the whole file for a range it cannot satisfy", async () => {
-    const past = await f.storage.download("/d.txt", { range: { start: 50 } });
-    expect(past.status).toBe(200);
-    const inverted = await f.storage.download("/d.txt", { range: { start: 5, end: 2 } });
-    expect(inverted.status).toBe(200);
-    expect(await new Response(inverted.body).text()).toBe("hello world");
+  it("streams a slice and reads by position, never past the end", async () => {
+    const file = await f.storage.open("/d.txt");
+    expect(file.size).toBe(11);
+    expect(await text(await file.read(6, 100))).toBe("world");
+    expect(await file.read(50, 10)).toHaveLength(0);
+    expect(await new Response(file.stream(6, 50)).text()).toBe("world");
+    const inverted = await f.storage.open("/d.txt");
+    expect(await new Response(inverted.stream(5, 2)).text()).toBe("");
   });
 
-  it("applies a range only while If-Range names the current version", async () => {
-    const mtime = (await f.storage.statFile("/d.txt")).modifiedAt as Date;
-    const range = { start: 6 };
-    const same = await f.storage.download("/d.txt", { range, ifRange: mtime.toUTCString() });
-    expect(same.status).toBe(206);
-    expect(await new Response(same.body).text()).toBe("world");
-    for (const ifRange of ["Mon, 01 Jan 2001 00:00:00 GMT", '"etag"', 'W/"etag"', "garbage"]) {
-      expect((await f.storage.download("/d.txt", { range, ifRange })).status).toBe(200);
-    }
+  it("reads the file as it was opened, though it grows meanwhile", async () => {
+    const file = await f.storage.open("/d.txt");
+    await appendFile(join(f.home, "d.txt"), "!!!");
+    expect(await text(await file.read(0, 100))).toBe("hello world");
+    expect(await new Response(file.stream()).text()).toBe("hello world");
   });
 
-  it("sends an empty file", async () => {
+  it("closes the file once its stream ends or is cancelled, and closes once", async () => {
+    const ended = await f.storage.open("/d.txt");
+    await new Response(ended.stream()).text();
+    expect(await kindOf(ended.read(0, 1))).toBe("internal");
+    await f.storage.upload("/big.bin", new Uint8Array(4 * 1024 * 1024));
+    const cancelled = await f.storage.open("/big.bin");
+    const reader = cancelled.stream().getReader();
+    expect((await reader.read()).done).toBe(false);
+    await reader.cancel();
+    expect(await kindOf(cancelled.read(0, 1))).toBe("internal");
+    const closed = await f.storage.open("/d.txt");
+    await closed.close();
+    await closed.close();
+    expect(await kindOf(closed.read(0, 1))).toBe("internal");
+  });
+
+  it("opens an empty file", async () => {
     await f.storage.upload("/empty", bytes(""));
-    const result = await f.storage.download("/empty", { range: { start: 0 } });
-    expect(result).toMatchObject({ status: 200, contentLength: 0 });
-    expect(await new Response(result.body).text()).toBe("");
+    const file = await f.storage.open("/empty");
+    expect(file.size).toBe(0);
+    expect(await new Response(file.stream()).text()).toBe("");
   });
 
   it("refuses folders and special files without hanging", async () => {
     await f.storage.mkdir("/dir");
     execFileSync("mkfifo", [join(f.home, "pipe")]);
-    expect(await kindOf(f.storage.download("/dir"))).toBe("bad_request");
-    expect(await kindOf(f.storage.download("/pipe"))).toBe("bad_request");
+    expect(await kindOf(f.storage.open("/dir"))).toBe("bad_request");
+    expect(await kindOf(f.storage.open("/pipe"))).toBe("bad_request");
     expect(await f.storage.stat("/pipe")).toMatchObject({ kind: "other", size: 0 });
     expect((await f.storage.list("/")).find((entry) => entry.name === "pipe")).toMatchObject({
       kind: "other",
     });
     expect(await kindOf(f.storage.statFile("/pipe"))).toBe("bad_request");
-  });
-
-  it("stops the body when the signal aborts", async () => {
-    await f.storage.upload("/big.bin", new Uint8Array(4 * 1024 * 1024));
-    const controller = new AbortController();
-    const result = await f.storage.download("/big.bin", { signal: controller.signal });
-    controller.abort();
-    await expect(new Response(result.body).arrayBuffer()).rejects.toThrow();
   });
 });
 
@@ -305,6 +419,31 @@ describe("move", () => {
     expect(await kindOf(f.storage.stat("/new.txt"))).toBe("not_found");
   });
 
+  it("refuses a taken file or folder unless asked to overwrite", async () => {
+    await f.storage.upload("/a.txt", bytes("a"));
+    await f.storage.upload("/b.txt", bytes("b"));
+    await f.storage.mkdir("/dir");
+    expect(await kindOf(f.storage.move("/a.txt", "/b.txt"))).toBe("conflict");
+    expect(await kindOf(f.storage.move("/a.txt", "/dir"))).toBe("conflict");
+    expect(await kindOf(f.storage.move("/dir", "/b.txt", { overwrite: false }))).toBe("conflict");
+    expect(await read(f.storage, "/a.txt")).toBe("a");
+    expect(await read(f.storage, "/b.txt")).toBe("b");
+  });
+
+  // Only a disk that ignores case has "A.txt" and "a.txt" as one name; on
+  // any other (Linux CI) they are two names and nothing is taken.
+  it.skipIf(!IGNORES_CASE)(
+    "renames a file to another case on a disk that ignores case",
+    async () => {
+      await f.storage.upload("/notes/a.txt", bytes("a"), { mkdirParents: true });
+      await f.storage.move("/notes", "/Notes");
+      await f.storage.move("/Notes/a.txt", "/Notes/A.txt");
+      expect(await readdir(f.home)).toEqual(["Notes"]);
+      expect(await readdir(join(f.home, "Notes"))).toEqual(["A.txt"]);
+      expect(await read(f.storage, "/Notes/A.txt")).toBe("a");
+    },
+  );
+
   it("refuses moving a folder into itself or the home anywhere", async () => {
     await f.storage.mkdir("/a");
     expect(await kindOf(f.storage.move("/a", "/a/b/c"))).toBe("bad_request");
@@ -321,12 +460,23 @@ describe("move", () => {
 });
 
 describe("copy", () => {
-  it("keeps the modification time and refuses a taken name when asked", async () => {
+  it("keeps the modification time and refuses a taken name", async () => {
     const at = new Date("2018-01-01T00:00:00Z");
     await f.storage.upload("/a.txt", bytes("a"), { modifiedAt: at });
     await f.storage.copy("/a.txt", "/b.txt");
-    expect((await f.storage.statFile("/b.txt")).modifiedAt?.getTime()).toBe(at.getTime());
+    expect((await f.storage.statFile("/b.txt")).modifiedAt.getTime()).toBe(at.getTime());
+    expect(await kindOf(f.storage.copy("/a.txt", "/b.txt"))).toBe("conflict");
     expect(await kindOf(f.storage.copy("/a.txt", "/b.txt", { overwrite: false }))).toBe("conflict");
+  });
+
+  it("creates a file only while the name is free, even under a race", async () => {
+    for (const name of ["one", "two", "three"]) await f.storage.upload(`/${name}`, bytes(name));
+    const results = await Promise.allSettled(
+      ["one", "two", "three"].map((name) => f.storage.copy(`/${name}`, "/race.txt")),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(["one", "two", "three"]).toContain(await read(f.storage, "/race.txt"));
+    expect((await readdir(f.home)).sort()).toEqual(["one", "race.txt", "three", "two"]);
   });
 
   it("refuses the home, a copy onto itself and a folder into itself", async () => {
@@ -336,23 +486,32 @@ describe("copy", () => {
     expect(await kindOf(f.storage.copy("/d", "/d/inner"))).toBe("bad_request");
   });
 
-  it("replaces a target of the other kind", async () => {
+  it("replaces a target of the other kind when asked to overwrite", async () => {
     await f.storage.upload("/file.txt", bytes("file"));
     await f.storage.upload("/dir/inner.txt", bytes("inner"), { mkdirParents: true });
     await f.storage.mkdir("/as-dir");
     await f.storage.upload("/as-file", bytes("x"));
-    await f.storage.copy("/file.txt", "/as-dir");
-    await f.storage.copy("/dir", "/as-file");
+    expect(await kindOf(f.storage.copy("/file.txt", "/as-dir"))).toBe("conflict");
+    expect(await kindOf(f.storage.copy("/dir", "/as-file"))).toBe("conflict");
+    await f.storage.copy("/file.txt", "/as-dir", { overwrite: true });
+    await f.storage.copy("/dir", "/as-file", { overwrite: true });
     expect(await read(f.storage, "/as-dir")).toBe("file");
     expect(await read(f.storage, "/as-file/inner.txt")).toBe("inner");
   });
 
-  it("merges into an existing folder and skips unfinished uploads", async () => {
+  it("merges into an existing folder when asked to overwrite and skips unfinished uploads", async () => {
     await f.storage.upload("/src/a.txt", bytes("a"), { mkdirParents: true });
     await writeFile(join(f.home, "src", ".fdrive-partial-0123456789abcdef"), "half");
     await f.storage.upload("/dst/b.txt", bytes("b"), { mkdirParents: true });
-    await f.storage.copy("/src", "/dst");
+    await f.storage.copy("/src", "/dst", { overwrite: true });
     expect((await readdir(join(f.home, "dst"))).sort()).toEqual(["a.txt", "b.txt"]);
+  });
+
+  it("copies a file nobody may write to a new name", async () => {
+    await f.storage.upload("/locked.txt", bytes("locked"));
+    await chmod(join(f.home, "locked.txt"), 0o444);
+    await f.storage.copy("/locked.txt", "/copy.txt");
+    expect(await read(f.storage, "/copy.txt")).toBe("locked");
   });
 
   it("refuses a special file", async () => {
@@ -375,23 +534,23 @@ describe("delete", () => {
     await f.storage.deleteDir("/");
     expect(await readdir(f.home)).toEqual([]);
   });
+
+  it("removes an empty folder but never the home, a file or a folder with anything in it", async () => {
+    await f.storage.mkdir("/empty");
+    await f.storage.upload("/full/.hidden", bytes("h"), { mkdirParents: true });
+    expect(await kindOf(f.storage.deleteEmptyDir("/full"))).toBe("conflict");
+    expect(await kindOf(f.storage.deleteEmptyDir("/full/.hidden"))).toBe("bad_request");
+    expect(await kindOf(f.storage.deleteEmptyDir("/"))).toBe("bad_request");
+    await f.storage.deleteEmptyDir("/empty");
+    expect(await kindOf(f.storage.deleteEmptyDir("/empty"))).toBe("not_found");
+    expect((await readdir(f.home)).sort()).toEqual(["full"]);
+  });
 });
 
 describe("probeDirectoryRead", () => {
   it("refuses a file", async () => {
     await f.storage.upload("/f.txt", bytes("f"));
-    expect(await kindOf(f.storage.probeDirectoryRead?.("/f.txt") ?? Promise.resolve())).toBe(
-      "bad_request",
-    );
-  });
-});
-
-describe("setModifiedAt", () => {
-  it("sets a folder's time too", async () => {
-    await f.storage.mkdir("/dir");
-    const at = new Date("2017-07-07T07:07:07Z");
-    await f.storage.setModifiedAt?.("/dir", at);
-    expect((await lstat(join(f.home, "dir"))).mtime.getTime()).toBe(at.getTime());
+    expect(await kindOf(f.storage.probeDirectoryRead("/f.txt"))).toBe("bad_request");
   });
 });
 
@@ -452,5 +611,82 @@ describe("zip", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     await truncate(join(f.home, "big.jpg"), 0);
     await expect(new Response(body).arrayBuffer()).rejects.toThrow();
+  });
+
+  it("reports files and bytes read, out of every file it counted first", async () => {
+    await f.storage.upload("/album/a.txt", bytes("aaa"), { mkdirParents: true });
+    await f.storage.upload("/album/b.txt", bytes("bb"));
+    await f.storage.mkdir("/album/empty");
+    const progress: { processed: number; total: number; bytes: number }[] = [];
+    const body = await zip(["/album"], { onProgress: (step) => progress.push(step) });
+    expect(progress).toEqual([{ processed: 0, total: 2, bytes: 0 }]);
+    await new Response(body).arrayBuffer();
+    expect(progress.at(-1)).toEqual({ processed: 2, total: 2, bytes: 5 });
+  });
+
+  it("names a file that vanished before it was read by its place in the zip", async () => {
+    // Stored, not deflated, so backpressure holds the zip on the first file.
+    await f.storage.upload("/big.jpg", new Uint8Array(4 * 1024 * 1024));
+    await f.storage.upload("/notes/gone.txt", bytes("gone"), { mkdirParents: true });
+    const body = await zip(["/big.jpg", "/notes"]);
+    await rm(join(f.home, "notes", "gone.txt"));
+    await expect(new Response(body).arrayBuffer()).rejects.toMatchObject({
+      kind: "not_found",
+      message: "not found: notes/gone.txt",
+    });
+  });
+
+  it("closes the file it was reading when its reader cancels", async () => {
+    vi.mocked(createReadStream).mockClear();
+    // Stored, not deflated, so backpressure stops the read long before the end.
+    await f.storage.upload("/big.jpg", new Uint8Array(4 * 1024 * 1024));
+    const reader = (await zip(["/big.jpg"])).getReader();
+    await reader.read();
+    const [opened] = vi.mocked(createReadStream).mock.results;
+    const file = opened?.value as ReadStream;
+    expect(file.closed).toBe(false);
+    await reader.cancel();
+    await vi.waitFor(() => expect(file.closed).toBe(true));
+  });
+});
+
+describe("createLocalStorage: Trash", () => {
+  const ID = "0d9f8a52-6c1e-4f53-9a7b-2e4c6d8f0a1b";
+
+  it("moves an item into a folder of its own in /.trash, and back", async () => {
+    await f.storage.upload("/docs/a.txt", bytes("a"), { mkdirParents: true });
+    expect(await f.storage.trash.put("/docs/a.txt", ID)).toEqual({
+      leaf: `/.trash/${ID}/a.txt`,
+      kind: "file",
+    });
+    expect(await readFile(join(f.home, ".trash", ID, "a.txt"), "utf8")).toBe("a");
+    await f.storage.trash.restore(ID, "a.txt", "/docs/a.txt");
+    expect(await readFile(join(f.home, "docs", "a.txt"), "utf8")).toBe("a");
+    expect(await readdir(join(f.home, ".trash"))).toEqual([]);
+  });
+
+  it("trashes and restores an item whose path is near the system's limit", async () => {
+    // Absolute paths longer than this fail with ENAMETOOLONG: 1024 bytes on a Mac, 4096 on Linux.
+    const limit = process.platform === "darwin" ? 1024 : 4096;
+    const segment = "s".repeat(200);
+    const segments: string[] = [];
+    while (join(await home(), ...segments, segment, "file.txt").length < limit - 64)
+      segments.push(segment);
+    const path = `/${[...segments, "file.txt"].join("/")}`;
+    expect(join(f.home, path).length).toBeGreaterThan(limit - 300);
+    await f.storage.upload(path, bytes("deep"), { mkdirParents: true });
+
+    const { leaf } = await f.storage.trash.put(path, ID);
+    expect(leaf).toBe(`/.trash/${ID}/file.txt`);
+    await f.storage.trash.restore(ID, "file.txt", path);
+    expect(await readFile(join(f.home, path), "utf8")).toBe("deep");
+  });
+
+  it("purges an item with its folder", async () => {
+    await f.storage.upload("/docs/2026/b.txt", bytes("b"), { mkdirParents: true });
+    await f.storage.trash.put("/docs/2026", ID);
+    await f.storage.trash.purge(ID);
+    expect(await readdir(join(f.home, ".trash"))).toEqual([]);
+    expect(await readdir(join(f.home, "docs"))).toEqual([]);
   });
 });

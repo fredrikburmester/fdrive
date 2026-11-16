@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client";
+import type { CreateSavedSearchRequest } from "./metadata";
 
 const VALID_UUID = "123e4567-e89b-12d3-a456-426614174000";
 
@@ -38,7 +39,6 @@ describe("feature client", () => {
       configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
       source: "default",
       statuses: [],
-      roots: [],
     };
     const fetchMock = vi.fn(async () => Response.json(response));
     const client = createApiClient({ fetch: fetchMock });
@@ -72,13 +72,10 @@ describe("Office settings client", () => {
         revision: 0,
         enabled: false,
         editingEnabled: false,
-        editingProviderId: null,
         editorUsernames: [],
       },
       product: "onlyoffice" as const,
       status: "off" as const,
-      activeProviderId: "123e4567-e89b-42d3-a456-426614174000",
-      activeProviderLabel: "Primary",
     };
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(response));
     const client = createApiClient({ fetch: fetchMock });
@@ -93,23 +90,16 @@ describe("Office settings client", () => {
 });
 
 describe("Trash settings client", () => {
-  it("reads and updates provider-bound settings", async () => {
-    const settings = {
-      providerId: "123e4567-e89b-42d3-a456-426614174000",
-      revision: 0,
-      enabled: false,
-      path: "/.trash",
-      retentionHours: null,
-      strategy: "move",
-    } as const;
+  it("reads and updates how long Trash keeps an item", async () => {
+    const settings = { retentionDays: 30 } as const;
     const fetchMock = vi.fn<typeof fetch>(async () => Response.json(settings));
     const client = createApiClient({ fetch: fetchMock });
 
-    expect(await client.systemTrash(settings.providerId)).toEqual(settings);
+    expect(await client.trashSettings()).toEqual(settings);
     expect(await client.systemUpdateTrash(settings)).toEqual(settings);
     expect(fetchMock.mock.calls.map(([, init]) => init?.method)).toEqual(["GET", "PUT"]);
     expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-      `/api/v1/system/trash?providerId=${settings.providerId}`,
+      "/api/v1/trash/settings",
       "/api/v1/system/trash",
     ]);
   });
@@ -118,27 +108,13 @@ const AT = "2026-01-01T00:00:00.000Z";
 
 const VALID_ME = {
   account: { id: VALID_UUID, displayName: "Alice" },
-  identities: [
-    {
-      id: VALID_UUID,
-      username: "alice",
-      providerId: VALID_UUID,
-      providerType: "local",
-      providerLabel: "Home",
-      capabilities: {
-        zip: true,
-        setModifiedAt: true,
-        atomicMove: true,
-        trash: false,
-        shares: true,
-        office: true,
-        index: true,
-        shareWithPeople: false,
-      },
-    },
-  ],
-  activeIdentityId: VALID_UUID,
+  identity: {
+    id: VALID_UUID,
+    username: "alice",
+  },
   isAdmin: false,
+  storageName: "Home",
+  index: true,
 };
 
 const VALID_ENTRY = {
@@ -153,8 +129,8 @@ const VALID_ENTRY = {
 
 const VALID_LIST = { path: "/photos", entries: [VALID_ENTRY] };
 const VALID_ABOUT = {
-  version: "1.0.0",
-  providers: [{ type: "local", label: "Local folder" }],
+  version: "development",
+  uptimeSeconds: 2,
   setupRequired: false,
 };
 
@@ -222,11 +198,11 @@ describe("buildRequestUrl", () => {
 });
 
 describe("createApiClient: login", () => {
-  it("posts credentials and returns MeResponse", async () => {
+  it("posts the username and password and returns MeResponse", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
     const client = createApiClient({ baseUrl: "https://api.test", fetch: fetchStub });
 
-    const result = await client.login({ credential: { username: "alice", password: "hunter2" } });
+    const result = await client.login({ username: "alice", password: "hunter2" });
 
     expect(result).toEqual(VALID_ME);
     expect(calls).toHaveLength(1);
@@ -235,27 +211,7 @@ describe("createApiClient: login", () => {
     expect(calls[0]?.init.credentials).toBe("include");
     expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
     expect(headerValue(calls[0]?.init ?? {}, "content-type")).toBe("application/json");
-    expect(calls[0]?.init.body).toBe(
-      JSON.stringify({ credential: { username: "alice", password: "hunter2" } }),
-    );
-  });
-
-  it("sends the identity header when configured", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
-    const client = createApiClient({ fetch: fetchStub, identityId: "identity-1" });
-
-    await client.login({ credential: { username: "alice", password: "hunter2" } });
-
-    expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBe("identity-1");
-  });
-
-  it("does not send the identity header when not configured", async () => {
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, VALID_ME)]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    await client.login({ credential: { username: "alice", password: "hunter2" } });
-
-    expect(headerValue(calls[0]?.init ?? {}, "x-identity-id")).toBeNull();
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ username: "alice", password: "hunter2" }));
   });
 });
 
@@ -413,6 +369,18 @@ describe("createApiClient: downloadUrl", () => {
   it("omits inline when explicitly false", () => {
     const client = createApiClient({});
     expect(client.downloadUrl("/a", { inline: false })).toBe("/api/v1/fs/download?path=%2Fa");
+  });
+});
+
+describe("createApiClient: video urls", () => {
+  it("builds transcode and subtitle urls", () => {
+    const client = createApiClient({ baseUrl: "https://api.test" });
+    expect(client.transcodeUrl("/a/b.mkv")).toBe(
+      "https://api.test/api/v1/fs/transcode?path=%2Fa%2Fb.mkv",
+    );
+    expect(client.subtitlesUrl("/a/b.en.srt")).toBe(
+      "https://api.test/api/v1/fs/subtitles?path=%2Fa%2Fb.en.srt",
+    );
   });
 });
 
@@ -575,6 +543,24 @@ describe("createApiClient: folderSize", () => {
 
     expect(result).toEqual(payload);
     expect(calls[0]?.url).toBe("/api/v1/fs/folder-size?path=%2Fphotos");
+  });
+});
+
+describe("createApiClient: storageUsage", () => {
+  it("gets the signed-in login's storage", async () => {
+    const payload = {
+      indexed: true,
+      used: 2048,
+      limit: null,
+      kinds: [{ kind: "images", bytes: 2048 }],
+      largest: [{ path: "/a.jpg", size: 2048, modifiedAt: "2026-11-14T10:00:00.000Z" }],
+      duplicates: [{ size: 2048, paths: ["/a.jpg", "/b.jpg"] }],
+    };
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, payload)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.storageUsage()).toEqual(payload);
+    expect(calls[0]?.url).toBe("/api/v1/storage");
   });
 });
 
@@ -742,6 +728,50 @@ describe("createApiClient: shareThumbUrl", () => {
   });
 });
 
+describe("createApiClient: photos", () => {
+  const page = {
+    photos: [
+      {
+        path: "/a.jpg",
+        name: "a.jpg",
+        size: 10,
+        modifiedAt: "2024-05-02T10:00:00.000Z",
+        takenAt: "2024-05-01T14:03:09",
+      },
+    ],
+    nextCursor: "next",
+  };
+  const details = {
+    takenAt: null,
+    camera: "Apple iPhone 15 Pro",
+    width: 4032,
+    height: 3024,
+    latitude: 59.5,
+    longitude: -18,
+  };
+
+  it("gets the first page, then the page after a cursor", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, page),
+      jsonResponse(200, { photos: [], nextCursor: null }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photos()).toEqual(page);
+    await client.photos("next");
+
+    expect(calls.map((call) => call.url)).toEqual(["/api/v1/photos", "/api/v1/photos?cursor=next"]);
+  });
+
+  it("gets one photo's details by path", async () => {
+    const { fetchStub, calls } = createStubFetch([jsonResponse(200, details)]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.photoDetails("/a.jpg")).toEqual(details);
+    expect(calls[0]?.url).toBe("/api/v1/photos/details?path=%2Fa.jpg");
+  });
+});
+
 describe("createApiClient: thumbUrl", () => {
   it("builds a thumbnail URL with path and size", () => {
     const client = createApiClient({ baseUrl: "https://api.test" });
@@ -762,7 +792,7 @@ describe("createApiClient: thumbUrl", () => {
 
 describe("createApiClient: setup", () => {
   it("gets setup/status", async () => {
-    const status = { required: true, storageConfigured: true };
+    const status = { required: true };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, status)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -782,65 +812,22 @@ describe("createApiClient: setup", () => {
   });
 });
 
-describe("createApiClient: providers", () => {
-  const FIELD = { name: "username", label: "Username", kind: "text", required: true };
-  const CAPABILITIES = {
-    zip: true,
-    setModifiedAt: true,
-    atomicMove: true,
-    trash: true,
-    shares: true,
-    office: true,
-    index: true,
-    shareWithPeople: false,
-  };
-  const PROVIDER = {
-    id: VALID_UUID,
-    type: "local",
-    label: "Home",
-    baseUrl: "",
-    config: {},
-    enabled: true,
-    managedByEnv: true,
-    capabilities: CAPABILITIES,
-    identityCount: 1,
-    reachable: true,
-    checkedAt: AT,
-    createdAt: AT,
-  };
+describe("createApiClient: storage", () => {
+  const STORAGE = { name: "Home", healthy: true, detail: "ok" };
 
-  it("gets the public provider list", async () => {
-    const body = {
-      providers: [
-        {
-          id: VALID_UUID,
-          type: "local",
-          label: "Home",
-          credentialFields: [FIELD],
-          capabilities: CAPABILITIES,
-        },
-      ],
-    };
-    const { fetchStub, calls } = createStubFetch([jsonResponse(200, body)]);
-    const client = createApiClient({ fetch: fetchStub });
-    expect(await client.providers()).toEqual(body);
-    expect(calls[0]?.url).toBe("/api/v1/providers");
-  });
-
-  it("gets and renames admin providers", async () => {
-    const list = { providers: [PROVIDER] };
+  it("gets and renames the storage", async () => {
     const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, list),
-      jsonResponse(200, PROVIDER),
+      jsonResponse(200, STORAGE),
+      jsonResponse(200, STORAGE),
     ]);
     const client = createApiClient({ fetch: fetchStub });
-    expect(await client.adminProviders()).toEqual(list);
-    expect(await client.adminUpdateProvider(VALID_UUID, { label: "Home" })).toEqual(PROVIDER);
+    expect(await client.systemStorage()).toEqual(STORAGE);
+    expect(await client.systemUpdateStorage({ name: "Home" })).toEqual(STORAGE);
     expect(calls.map((call) => `${call.init.method ?? "GET"} ${call.url}`)).toEqual([
-      "GET /api/v1/admin/providers",
-      `PATCH /api/v1/admin/providers/${VALID_UUID}`,
+      "GET /api/v1/system/storage",
+      "PATCH /api/v1/system/storage",
     ]);
-    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ label: "Home" });
+    expect(JSON.parse(String(calls[1]?.init.body))).toEqual({ name: "Home" });
   });
 });
 
@@ -850,13 +837,14 @@ describe("createApiClient: local users", () => {
     disabled: false,
     isAdmin: false,
     isYou: false,
-    adminByDeployment: false,
     createdAt: AT,
     lastLoginAt: null,
+    storageUsed: 0,
+    storageLimit: null,
   };
 
   it("lists, adds, updates and removes users", async () => {
-    const list = { available: true, users: [USER] };
+    const list = { users: [USER] };
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(200, list),
       jsonResponse(201, USER),
@@ -888,7 +876,7 @@ describe("createApiClient: local users", () => {
 
   it("rejects a user list that breaks the contract", async () => {
     const { fetchStub } = createStubFetch([
-      jsonResponse(200, { available: true, users: [{ ...USER, createdAt: "yesterday" }] }),
+      jsonResponse(200, { users: [{ ...USER, createdAt: "yesterday" }] }),
     ]);
     const client = createApiClient({ fetch: fetchStub });
     await expect(client.adminUsers()).rejects.toBeInstanceOf(ApiClientError);
@@ -923,7 +911,7 @@ describe("createApiClient: folder shares between users", () => {
   };
 
   it("lists, creates, updates and removes shares and lists people", async () => {
-    const grants = { available: true, owned: [OWNED], received: [RECEIVED] };
+    const grants = { owned: [OWNED], received: [RECEIVED] };
     const people = { usernames: ["bob", "carol"] };
     const { fetchStub, calls } = createStubFetch([
       jsonResponse(200, grants),
@@ -990,12 +978,18 @@ describe("createApiClient: system", () => {
     reachable: true,
     health: {
       ok: true,
-      roots: ["files"],
-      watcher: { files: true },
+      watcher: true,
       embedOk: true,
-      schemaVersion: 1,
     },
-    stats: { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] },
+    stats: {
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+    },
     settings: INDEXER_SETTINGS,
   };
 
@@ -1053,21 +1047,21 @@ describe("createApiClient: system", () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual(patch);
   });
 
-  it("posts system/indexer/reindex with the root and optional path", async () => {
+  it("posts system/indexer/reindex with an optional path", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(await client.systemReindex({ root: "files", path: "folder" })).toEqual({ marked: 3 });
+    expect(await client.systemReindex({ path: "folder" })).toEqual({ marked: 3 });
     expect(calls[0]?.url).toBe("/api/v1/system/indexer/reindex");
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", path: "folder" });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ path: "folder" });
   });
 
   it("posts system/indexer/reindex with thumbnails: true", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { marked: 3 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    await client.systemReindex({ root: "files", thumbnails: true });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ root: "files", thumbnails: true });
+    await client.systemReindex({ thumbnails: true });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ thumbnails: true });
   });
 
   it("posts system/indexer/thumbnails/rebuild with an empty body by default", async () => {
@@ -1078,25 +1072,21 @@ describe("createApiClient: system", () => {
     expect(JSON.parse(String(calls[0]?.init.body))).toEqual({});
   });
 
-  it("posts system/indexer/thumbnails/rebuild scoped to a root, path, and force", async () => {
+  it("posts system/indexer/thumbnails/rebuild scoped to a path, and force", async () => {
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, { started: true, total: 4 })]);
     const client = createApiClient({ fetch: fetchStub });
 
-    expect(
-      await client.systemRebuildIndexerThumbnails({ root: "files", path: "folder", force: true }),
-    ).toEqual({ started: true, total: 4 });
-    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({
-      root: "files",
-      path: "folder",
-      force: true,
+    expect(await client.systemRebuildIndexerThumbnails({ path: "folder", force: true })).toEqual({
+      started: true,
+      total: 4,
     });
+    expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ path: "folder", force: true });
   });
 
   it("gets system/search", async () => {
     const result = {
       configured: true,
       semantic: { configured: true, healthy: true },
-      roots: ["files"],
       index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
     };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
@@ -1107,7 +1097,7 @@ describe("createApiClient: system", () => {
   });
 
   it("posts system/search/reembed", async () => {
-    const result = { marked: 7, roots: ["files"] };
+    const result = { marked: 7 };
     const { fetchStub, calls } = createStubFetch([jsonResponse(200, result)]);
     const client = createApiClient({ fetch: fetchStub });
 
@@ -1241,10 +1231,10 @@ describe("createApiClient: account tokens", () => {
   const VALID_TOKEN_SUMMARY = {
     id: VALID_UUID,
     name: "Claude",
-    identityId: VALID_UUID,
     createdAt: AT,
     lastUsedAt: null,
     expiresAt: null,
+    access: { mode: "read", paths: ["/"] },
   };
 
   it("gets account/tokens and unwraps items", async () => {
@@ -1340,6 +1330,35 @@ describe("createApiClient: tags", () => {
   });
 });
 
+describe("createApiClient: saved searches", () => {
+  const request: CreateSavedSearchRequest = {
+    name: "Invoices",
+    query: "invoice",
+    type: "documents",
+    folder: null,
+  };
+  const SAVED = { id: "s/1", ...request };
+
+  it("lists, creates and deletes saved searches", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { searches: [SAVED] }),
+      jsonResponse(201, SAVED),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.listSavedSearches()).toEqual({ searches: [SAVED] });
+    expect(await client.createSavedSearch(request)).toEqual(SAVED);
+    expect(await client.deleteSavedSearch(SAVED.id)).toEqual({ ok: true });
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", "/api/v1/saved-searches"],
+      ["POST", "/api/v1/saved-searches"],
+      ["DELETE", "/api/v1/saved-searches/s%2F1"],
+    ]);
+    expect(calls[1]?.init.body).toBe(JSON.stringify(request));
+  });
+});
+
 describe("createApiClient: favorites", () => {
   const VALID_FAVORITE = { path: "/a.txt", kind: "file", addedAt: AT };
 
@@ -1430,21 +1449,6 @@ describe("createApiClient: trash", () => {
     size: 7,
     deletedAt: AT,
   };
-
-  it("gets trash/status", async () => {
-    const { fetchStub, calls } = createStubFetch([
-      jsonResponse(200, { available: true, path: "/.trash", retentionHours: null }),
-    ]);
-    const client = createApiClient({ fetch: fetchStub });
-
-    expect(await client.trashStatus()).toEqual({
-      available: true,
-      path: "/.trash",
-      retentionHours: null,
-    });
-    expect(calls[0]?.url).toBe("/api/v1/trash/status");
-    expect(calls[0]?.init.method).toBe("GET");
-  });
 
   it("gets trash and returns entries and truncated", async () => {
     const { fetchStub, calls } = createStubFetch([
@@ -1644,7 +1648,7 @@ describe("createApiClient: clear jobs", () => {
 });
 
 describe("office client", () => {
-  it("uses pinned routes, request payloads, CSRF and identity headers", async () => {
+  it("uses pinned routes, request payloads and CSRF headers", async () => {
     const status = {
       available: true,
       product: "onlyoffice",
@@ -1666,7 +1670,7 @@ describe("office client", () => {
       jsonResponse(200, opened),
       jsonResponse(201, created),
     ]);
-    const client = createApiClient({ fetch: fetchStub, identityId: VALID_UUID });
+    const client = createApiClient({ fetch: fetchStub });
     expect(await client.officeStatus()).toEqual(status);
     expect(await client.officeOpen({ path: "/a.docx", mode: "edit" })).toEqual(opened);
     expect(await client.officeCreateDocument({ parent: "/", name: "a.docx" })).toEqual(created);
@@ -1678,54 +1682,15 @@ describe("office client", () => {
     expect(calls[1]?.init.body).toBe(JSON.stringify({ path: "/a.docx", mode: "edit" }));
     for (const call of calls.slice(1)) {
       expect(headerValue(call.init, "x-requested-with")).toBe("fdrive");
-      expect(headerValue(call.init, "x-identity-id")).toBe(VALID_UUID);
     }
   });
 });
 
-it("includes scoped identity in native download links without losing inline/path", () => {
-  const client = createApiClient({ identityId: VALID_UUID });
+it("keeps the path and inline flag in native download links", () => {
+  const client = createApiClient();
   const url = new URL(client.downloadUrl("/å.docx", { inline: true }), "https://app");
-  expect(url.searchParams.get("identity")).toBe(VALID_UUID);
   expect(url.searchParams.get("path")).toBe("/å.docx");
   expect(url.searchParams.get("inline")).toBe("1");
-});
-
-it("calls account identity and cross-identity view routes with typed responses", async () => {
-  const favorites = { items: [], unavailableIdentityIds: [] };
-  const { fetchStub, calls } = createStubFetch([
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, VALID_ME),
-    jsonResponse(200, favorites),
-  ]);
-  const client = createApiClient({ fetch: fetchStub });
-  expect(
-    await client.linkIdentity({
-      credential: { username: "alice", password: "secret", otp: "123456" },
-      currentCredential: { password: "mine" },
-    }),
-  ).toEqual(VALID_ME);
-  expect(
-    await client.unlinkIdentity(VALID_UUID, { currentCredential: { password: "mine" } }),
-  ).toEqual(VALID_ME);
-  expect(await client.switchIdentity(VALID_UUID)).toEqual(VALID_ME);
-  expect(await client.accountFavorites()).toEqual(favorites);
-  expect(calls.map((call) => call.url)).toEqual([
-    "/api/v1/account/identities",
-    `/api/v1/account/identities/${VALID_UUID}`,
-    "/api/v1/account/active-identity",
-    "/api/v1/account/favorites",
-  ]);
-  expect(calls[0]?.init.body).toBe(
-    JSON.stringify({
-      credential: { username: "alice", password: "secret", otp: "123456" },
-      currentCredential: { password: "mine" },
-    }),
-  );
-  expect(calls[1]?.init.method).toBe("DELETE");
-  expect(calls[2]?.init.body).toBe(JSON.stringify({ identityId: VALID_UUID }));
-  expect(headerValue(calls[0]?.init ?? {}, "x-requested-with")).toBe("fdrive");
 });
 
 describe("system logs client", () => {
@@ -1781,7 +1746,6 @@ it("reads the typed public health route", async () => {
         "ocr",
         "thumbnails",
         "office",
-        "trash",
         "shares",
         "network",
       ].map((name) => [name, { status: "configured", missing: [] }]),

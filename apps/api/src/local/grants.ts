@@ -5,9 +5,15 @@ import type {
   OwnedGrant,
   UpdateGrantRequest,
 } from "@fdrive/contracts";
-import { isStorageError, normalizePath, splitSegments } from "@fdrive/core";
+import {
+  isReservedPath,
+  isStorageError,
+  joinPath,
+  normalizePath,
+  splitSegments,
+} from "@fdrive/core";
 import type { Identity, LocalGrant, Repos } from "@fdrive/db";
-import { namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
+import { closedToShares, namedSharedGrants, SHARED_WITH_ME } from "@fdrive/local";
 import type { IdentityStorageFactory } from "../auth/storage-factory.js";
 import { ApiHttpError } from "../errors.js";
 
@@ -27,26 +33,41 @@ export interface LocalGrantService {
   update(identityId: string, id: string, request: UpdateGrantRequest): Promise<OwnedGrant>;
   /** The owner stops sharing, or the person it is shared with leaves. */
   remove(identityId: string, id: string): Promise<void>;
-  /** What is shared with a local login, for search and thumbnails; empty for any other login. */
-  received(identity: Pick<Identity, "providerId" | "externalUsername">): Promise<ReceivedFolder[]>;
+  /** What is shared with the login named `username`, for its index scopes. */
+  received(username: string): Promise<ReceivedFolder[]>;
   /** True when `path` (the login's own path) is inside a folder shared with it to view only. */
-  isReadOnly(
-    identity: Pick<Identity, "providerId" | "externalUsername">,
-    path: string,
-  ): Promise<boolean>;
-  /** The owner moved a folder in fdrive: its shares follow. */
-  onMoved(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
-  /** The owner deleted a folder for good: its shares end. */
-  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
+  isReadOnly(identity: Pick<Identity, "username">, path: string): Promise<boolean>;
+  /**
+   * Where `path` (the login's own path) lies in its owner's files: a path in
+   * a folder shared with the login is the owner's login and the owner's
+   * path; any other is the login's own.
+   */
+  ownerPath(identityId: string, path: string): Promise<{ identityId: string; path: string }>;
+  /**
+   * The reverse of `ownerPath`: where `owned` (an owner's login and the
+   * owner's path) lies in `identityId`'s files, under `Shared with me` for a
+   * login it is shared with, or `null` when that login cannot reach it. The
+   * owner cannot reach a path of their own in `Shared with me` either: the
+   * name is reserved, and a real folder of that name stays out of sight.
+   */
+  pathFor(identityId: string, owned: { identityId: string; path: string }): Promise<string | null>;
+  /**
+   * What a Mac write's move does to the owner's shares, as data its receipt
+   * applies in its own transaction: the owner's username and the move, or
+   * `null` when no share can follow (a file, or a login that is gone). Every
+   * other move follows through `files/access.ts`.
+   */
+  grantMove(
+    identityId: string,
+    from: string,
+    to: string,
+    isDir: boolean,
+  ): Promise<{ owner: string; from: string; to: string } | null>;
 }
 
 export interface LocalGrantServiceDeps {
   readonly repos: Pick<Repos, "localGrants" | "localUsers" | "identities">;
-  /** The local folder's provider row id, or `null` when the deployment serves none. */
-  readonly providerId: () => Promise<string | null>;
   readonly storageFor: IdentityStorageFactory;
-  /** The owner's Trash folder while Trash is on, which is never shared. */
-  readonly trashPathFor?: (identityId: string) => Promise<string | null>;
 }
 
 const SHELF_PATH = `/${SHARED_WITH_ME}`;
@@ -66,53 +87,56 @@ function under(path: string, folder: string): boolean {
 }
 
 /**
- * Folders local users share with each other. Only the local folder can do
- * this: fdrive keeps both the users and the files, so a share is a row
- * here and the person it is shared with reaches the owner's folder through
- * their own storage (`Shared with me`), confined to that folder.
+ * Folders users share with each other. fdrive keeps both the users and the
+ * files, so a share is a row here and the person it is shared with reaches
+ * the owner's folder through their own storage (`Shared with me`), confined
+ * to that folder.
  */
 export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrantService {
   const { repos } = deps;
 
-  /** The identity when it is a login on the local folder; `null` for any other. */
-  async function localLogin(identityId: string): Promise<Identity | null> {
-    const providerId = await deps.providerId();
-    if (providerId === null) return null;
+  async function grantMove(identityId: string, from: string, to: string, isDir: boolean) {
+    if (!isDir || from === to) return null;
     const identity = await repos.identities.get(identityId);
-    return identity?.providerId === providerId ? identity : null;
+    return identity === null ? null : { owner: identity.username, from, to };
   }
 
   async function requireLogin(identityId: string): Promise<Identity> {
-    const identity = await localLogin(identityId);
-    if (identity === null) {
-      throw new ApiHttpError(
-        "unsupported",
-        "folders can only be shared with people on the local folder",
-        { capability: "grants" },
-      );
-    }
+    const identity = await repos.identities.get(identityId);
+    if (identity === null) throw new ApiHttpError("unauthorized", "sign in again");
     return identity;
   }
 
   async function requireOwned(identity: Identity, id: string): Promise<LocalGrant> {
     const grant = await repos.localGrants.get(id);
-    if (grant === null || grant.ownerUsername !== identity.externalUsername) {
+    if (grant === null || grant.ownerUsername !== identity.username) {
       throw new ApiHttpError("not_found", "share not found");
     }
     return grant;
   }
 
-  async function received(username: string): Promise<ReceivedFolder[]> {
+  /**
+   * What is shared with `username`, named as their storage names it: the
+   * shares their storage refuses (`closedToShares`, a folder in its owner's
+   * Trash say) are left out first, so they never take a name.
+   */
+  async function reachable(username: string) {
     const grants = await repos.localGrants.listReceived(username);
     return namedSharedGrants(
       username,
-      grants.map((grant) => ({
-        owner: grant.ownerUsername,
-        path: grant.path,
-        writable: grant.access === "write",
-        grant,
-      })),
-    ).map(({ grant, name }) => ({
+      grants
+        .filter((grant) => !closedToShares(grant.path))
+        .map((grant) => ({
+          owner: grant.ownerUsername,
+          path: grant.path,
+          writable: grant.access === "write",
+          grant,
+        })),
+    );
+  }
+
+  async function received(username: string): Promise<ReceivedFolder[]> {
+    return (await reachable(username)).map(({ grant, name }) => ({
       name,
       owner: grant.owner,
       path: grant.path,
@@ -120,31 +144,12 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     }));
   }
 
-  async function receivedFor(
-    identity: Pick<Identity, "providerId" | "externalUsername">,
-  ): Promise<ReceivedFolder[]> {
-    const providerId = await deps.providerId();
-    if (providerId === null || identity.providerId !== providerId) return [];
-    return received(identity.externalUsername);
-  }
-
   return {
     async list(identityId) {
-      const identity = await localLogin(identityId);
-      if (identity === null) return { available: false, owned: [], received: [] };
-      const username = identity.externalUsername;
-      const grants = await repos.localGrants.listReceived(username);
-      const named = namedSharedGrants(
-        username,
-        grants.map((grant) => ({
-          owner: grant.ownerUsername,
-          path: grant.path,
-          writable: grant.access === "write",
-          grant,
-        })),
-      );
+      const identity = await requireLogin(identityId);
+      const username = identity.username;
+      const named = await reachable(username);
       return {
-        available: true,
         owned: (await repos.localGrants.listOwned(username)).map(ownedView),
         received: named.map(({ grant: { grant }, name }) => ({
           id: grant.id,
@@ -162,14 +167,14 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       const users = await repos.localUsers.list();
       return {
         usernames: users
-          .filter((user) => !user.disabled && user.username !== identity.externalUsername)
+          .filter((user) => !user.disabled && user.username !== identity.username)
           .map((user) => user.username),
       };
     },
 
     async create(identityId, request) {
       const identity = await requireLogin(identityId);
-      const owner = identity.externalUsername;
+      const owner = identity.username;
       const path = normalizePath(request.path);
       if (path === "/") {
         throw new ApiHttpError("bad_request", "share a folder, not all of your files");
@@ -177,9 +182,8 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       if (splitSegments(path)[0] === SHARED_WITH_ME) {
         throw new ApiHttpError("bad_request", "a folder shared with you cannot be shared on");
       }
-      const trash = await deps.trashPathFor?.(identityId);
-      if (trash !== null && trash !== undefined && under(path, normalizePath(trash))) {
-        throw new ApiHttpError("bad_request", "Trash cannot be shared");
+      if (isReservedPath(path)) {
+        throw new ApiHttpError("bad_request", "fdrive's own folders, like Trash, cannot be shared");
       }
       const grantee = await repos.localUsers.get(request.username);
       if (grantee === null) throw new ApiHttpError("not_found", "no such user");
@@ -223,7 +227,7 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
     async remove(identityId, id) {
       const identity = await requireLogin(identityId);
       const grant = await repos.localGrants.get(id);
-      const username = identity.externalUsername;
+      const username = identity.username;
       if (
         grant === null ||
         (grant.ownerUsername !== username && grant.granteeUsername !== username)
@@ -233,28 +237,51 @@ export function createLocalGrantService(deps: LocalGrantServiceDeps): LocalGrant
       await repos.localGrants.delete(grant.id);
     },
 
-    received: receivedFor,
+    received,
 
     async isReadOnly(identity, path) {
       const target = normalizePath(path);
-      const folders = await receivedFor(identity);
+      const folders = await received(identity.username);
       return folders.some(
         (folder) => !folder.writable && under(target, `${SHELF_PATH}/${folder.name}`),
       );
     },
 
-    async onMoved(identityId, from, to, isDir) {
-      if (!isDir) return;
-      const identity = await localLogin(identityId);
-      if (identity === null) return;
-      await repos.localGrants.movePrefix(identity.externalUsername, from, to);
+    async ownerPath(identityId, path) {
+      const own = { identityId, path };
+      const segments = splitSegments(path);
+      if (segments[0] !== SHARED_WITH_ME || segments.length < 2) return own;
+      const identity = await repos.identities.get(identityId);
+      if (identity === null) return own;
+      const folder = (await received(identity.username)).find(
+        (candidate) => candidate.name === segments[1],
+      );
+      // No such shared folder: nothing is there.
+      if (folder === undefined) return own;
+      // A grant goes with its owner's user, whose login exists as long as they do.
+      const owner = await repos.identities.findByUsername(folder.owner);
+      if (owner === null) throw new Error("the owner of a shared folder has no login");
+      return { identityId: owner.id, path: joinPath(folder.path, ...segments.slice(2)) };
     },
 
-    async onDeleted(identityId, path, isDir) {
-      if (!isDir) return;
-      const identity = await localLogin(identityId);
-      if (identity === null) return;
-      await repos.localGrants.deletePrefix(identity.externalUsername, path);
+    async pathFor(identityId, owned) {
+      const login = await repos.identities.get(identityId);
+      if (login === null) return null;
+      if (owned.identityId === identityId) {
+        return splitSegments(owned.path)[0] === SHARED_WITH_ME ? null : owned.path;
+      }
+      const owner = await repos.identities.get(owned.identityId);
+      if (owner === null) return null;
+      // The most specific folder, when one inside another is shared too.
+      const folder = (await received(login.username))
+        .filter((candidate) => candidate.owner === owner.username)
+        .filter((candidate) => under(owned.path, candidate.path))
+        .sort((a, b) => b.path.length - a.path.length)[0];
+      if (folder === undefined) return null;
+      const inside = splitSegments(owned.path).slice(splitSegments(folder.path).length);
+      return joinPath(SHELF_PATH, folder.name, ...inside);
     },
+
+    grantMove,
   };
 }

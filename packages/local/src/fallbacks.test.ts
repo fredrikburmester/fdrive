@@ -1,7 +1,19 @@
-import { link, lstat, readdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  link,
+  lstat,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bytes, type Fixture, fixture, kindOf, read } from "../test/helpers.js";
+import { moveEntry } from "./storage-provider.js";
 
 // Failures a test disk cannot produce on demand: filesystems without hard
 // links, a move across devices, permission errors and a racing deletion.
@@ -74,6 +86,40 @@ describe("move across filesystems", () => {
     expect(await kindOf(f.storage.stat("/dir"))).toBe("not_found");
   });
 
+  it("names no stamp for a file it had to copy, which is another inode", async () => {
+    await f.storage.upload("/a.txt", bytes("a"));
+    const names = { path: "/a.txt", target: "/b.txt" };
+    vi.mocked(rename).mockRejectedValueOnce(systemError("EXDEV"));
+    expect(await moveEntry(join(f.home, "a.txt"), join(f.home, "b.txt"), names)).toBeUndefined();
+    expect(await read(f.storage, "/b.txt")).toBe("a");
+    expect(await moveEntry(join(f.home, "b.txt"), join(f.home, "c.txt"), names)).toEqual(
+      expect.objectContaining({ size: 1 }),
+    );
+  });
+
+  it("names no stamp for a file that changed or went between the rename and its stat", async () => {
+    const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+    const names = { path: "/a.txt", target: "/b.txt" };
+    const meddle: ((at: string) => Promise<void>)[] = [
+      (at) => unlink(at),
+      async (at) => {
+        await unlink(at);
+        await writeFile(at, "a");
+      },
+      (at) => appendFile(at, "more"),
+      (at) => utimes(at, new Date(0), new Date(0)),
+    ];
+    for (const after of meddle) {
+      await actual.rm(join(f.home, "b.txt"), { force: true });
+      await f.storage.upload("/a.txt", bytes("a"), { overwrite: true });
+      vi.mocked(rename).mockImplementationOnce(async (from, to) => {
+        await actual.rename(from, to);
+        await after(to.toString());
+      });
+      expect(await moveEntry(join(f.home, "a.txt"), join(f.home, "b.txt"), names)).toBeUndefined();
+    }
+  });
+
   it("reports any other rename failure", async () => {
     await f.storage.upload("/a.txt", bytes("a"));
     vi.mocked(rename).mockRejectedValueOnce(systemError("EIO"));
@@ -86,13 +132,18 @@ describe("filesystem errors while resolving", () => {
   it("refuses a parent it may not resolve", async () => {
     vi.mocked(realpath).mockRejectedValueOnce(systemError("EACCES"));
     expect(await kindOf(f.storage.stat("/a/b"))).toBe("forbidden");
+    vi.mocked(realpath).mockRejectedValueOnce(new Error("no code"));
+    expect(await kindOf(f.storage.stat("/a/b"))).toBe("internal");
   });
 
   it("refuses an entry it may not inspect", async () => {
+    // Whether the missing name is a link.
     vi.mocked(lstat).mockRejectedValueOnce(systemError("EACCES"));
     expect(await kindOf(f.storage.stat("/a"))).toBe("forbidden");
+    // What an upload would replace.
+    await f.storage.upload("/a", bytes("a"));
     vi.mocked(lstat).mockRejectedValueOnce(systemError("EACCES"));
-    expect(await kindOf(f.storage.upload("/a", bytes("a")))).toBe("forbidden");
+    expect(await kindOf(f.storage.upload("/a", bytes("b"), { overwrite: true }))).toBe("forbidden");
   });
 
   it("skips an entry deleted between reading the folder and describing it", async () => {

@@ -9,12 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from conftest import index_pdfs
 from psycopg.types.json import Json
 from starlette.testclient import TestClient
 
 from fdrive_ocr import db, runner, server
 from fdrive_ocr.features import FEATURES_KEY
-from fdrive_ocr.runner import RootTarget
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME, RootTarget
 from fdrive_ocr.settings import Settings
 
 FIXED_NOW = datetime(2026, 1, 1, 1, 0, tzinfo=UTC)
@@ -44,25 +45,29 @@ def _set_pdf_ocr(state: server.ServerState) -> None:
 def _make_state(
     postgres_dsn: str,
     tmp_path: Path,
-    schema_ready: bool = True,
-    targets: list[RootTarget] | None = None,
+    root: Path | None = None,
     include_globs: tuple[str, ...] = (),
 ) -> server.ServerState:
-    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
-    resolved_targets = targets if targets is not None else [RootTarget(name="files", root_id=root_id, abs_path=str(tmp_path))]
     return server.ServerState(
         conn_factory=lambda: db.connect(postgres_dsn),
-        targets=resolved_targets,
+        target=RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(root or tmp_path)),
         state_dir=str(tmp_path / "state"),
         default_settings=DEFAULT_SETTINGS,
         timeout_seconds=30,
         jobs=2,
         run_lock=server.RunLock(),
         now=lambda: FIXED_NOW,
-        schema_ready=lambda: schema_ready,
         log=lambda _msg: None,
         include_globs=include_globs,
     )
+
+
+def _index(state: server.ServerState) -> None:
+    conn = state.conn_factory()
+    try:
+        index_pdfs(conn, state.target.root_id, state.target.abs_path)
+    finally:
+        conn.close()
 
 
 def _wait_until(predicate: object, timeout: float = 5.0, interval: float = 0.02) -> bool:
@@ -98,24 +103,12 @@ def test_health_ok_and_not_running(postgres_dsn: str, tmp_path: Path) -> None:
     assert resp.json()["ok"] is True
     assert resp.json()["running"] is False
     assert resp.json()["features"]["revision"] == 0
+    assert resp.json()["storage"] == {"readable": True, "writable": True}
 
 
-def test_health_not_ok_when_schema_not_ready(postgres_dsn: str, tmp_path: Path) -> None:
-    state = _make_state(postgres_dsn, tmp_path, schema_ready=False)
-    client = TestClient(server.create_app(state))
-    resp = client.get("/health")
-    assert resp.json()["ok"] is False
-
-
-def test_storage_diagnostics_reports_missing_or_readable_roots(tmp_path: Path) -> None:
-    diagnostics = server.storage_diagnostics(
-        [
-            RootTarget(name="mounted", root_id=1, abs_path=str(tmp_path)),
-            RootTarget(name="missing", root_id=2, abs_path=str(tmp_path / "missing")),
-        ]
-    )
-    assert diagnostics["mounted"]["readable"] is True
-    assert diagnostics["missing"] == {"readable": False, "writable": False}
+def test_storage_diagnostics_reports_a_missing_or_readable_folder(tmp_path: Path) -> None:
+    assert server.storage_diagnostics(str(tmp_path))["readable"] is True
+    assert server.storage_diagnostics(str(tmp_path / "missing")) == {"readable": False, "writable": False}
 
 
 def test_health_reports_running(postgres_dsn: str, tmp_path: Path) -> None:
@@ -206,6 +199,7 @@ def test_run_starts_a_pass_and_stats_reflects_it(postgres_dsn: str, tmp_path: Pa
 
     (tmp_path / "a.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path)
+    _index(state)
     _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
@@ -228,6 +222,7 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     (tmp_path / "alice").mkdir()
     (tmp_path / "alice" / "out-of-scope.pdf").write_bytes(b"HASTEXT\n")
     state = _make_state(postgres_dsn, tmp_path, include_globs=("files/fredrik/**",))
+    _index(state)
     _set_pdf_ocr(state)
     client = TestClient(server.create_app(state))
 
@@ -238,12 +233,11 @@ def test_run_applies_the_state_include_globs(postgres_dsn: str, tmp_path: Path) 
     conn = state.conn_factory()
     try:
         with conn.cursor() as cur:
-            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (state.targets[0].root_id,))
+            cur.execute('SELECT path, status FROM "idx"."ocr_log" WHERE root_id = %s', (state.target.root_id,))
             statuses = dict(cur.fetchall())
     finally:
         conn.close()
-    assert statuses[str(Path("alice") / "out-of-scope.pdf")] == "excluded"
-    assert statuses[str(Path("fredrik") / "in-scope.pdf")] == "has_text"
+    assert statuses == {"fredrik/in-scope.pdf": "has_text"}
 
 
 def test_run_returns_409_when_already_running(postgres_dsn: str, tmp_path: Path) -> None:
@@ -325,9 +319,7 @@ def _keep_original(state: server.ServerState, root: Path, rel_path: str = "docs/
     info = source.stat()
     rewritten = root / "rewritten.pdf"
     rewritten.write_bytes(b"OK-OCRED-OUTPUT\n")
-    runner.apply_rewrite(
-        str(source), str(rewritten), state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns, True
-    )
+    runner.apply_rewrite(str(source), str(rewritten), state.state_dir, "files", rel_path, info, True)
     state.originals.invalidate()
     return os.path.basename(runner.originals_dest(state.state_dir, "files", rel_path, info.st_size, info.st_mtime_ns))
 
@@ -465,13 +457,63 @@ def test_original_mutation_does_not_block_health(
         assert mutation.result(timeout=5).status_code == 200
 
 
+@pytest.mark.parametrize("operation", ["restore", "delete"])
+def test_original_mutations_hold_at_most_their_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    lock, release = threading.Lock(), threading.Event()
+    open_now, most = 0, 0
+
+    class Connection:
+        def close(self) -> None:
+            nonlocal open_now
+            with lock:
+                open_now -= 1
+
+    def connect() -> Connection:
+        nonlocal open_now, most
+        with lock:
+            open_now += 1
+            most = max(most, open_now)
+        return Connection()
+
+    def held(*_args: object) -> object:
+        assert release.wait(10)
+        return True if operation == "delete" else server.RestoreOutcome(ok=True, state="kept", root="files", path="/a.pdf")
+
+    monkeypatch.setattr(server, f"{operation}_original", held)
+    state = server.ServerState(
+        conn_factory=connect,  # type: ignore[arg-type]
+        target=RootTarget(name=FILES_ROOT_NAME, root_id=FILES_ROOT_ID, abs_path=str(tmp_path)),
+        state_dir=str(tmp_path / "state"),
+        default_settings=DEFAULT_SETTINGS,
+        timeout_seconds=30,
+        jobs=2,
+        run_lock=server.RunLock(),
+        now=lambda: FIXED_NOW,
+        log=lambda _msg: None,
+    )
+    asked = server.ORIGINALS_AT_ONCE + 3
+    with TestClient(server.create_app(state)) as client, ThreadPoolExecutor(max_workers=asked) as pool:
+        calls = [pool.submit(client.post, f"/originals/{operation}", json={"id": f"{i}.pdf"}) for i in range(asked)]
+        try:
+            deadline = time.monotonic() + 5
+            while most < server.ORIGINALS_AT_ONCE and time.monotonic() < deadline:
+                time.sleep(0.01)
+            time.sleep(0.2)  # The rest wait for a slot without a connection.
+            assert most == server.ORIGINALS_AT_ONCE
+        finally:
+            release.set()
+        assert [call.result(timeout=5).status_code for call in calls] == [200] * asked
+    assert (most, open_now) == (server.ORIGINALS_AT_ONCE, 0)
+
+
 def test_a_manual_run_prunes_aged_originals(postgres_dsn: str, tmp_path: Path) -> None:
     # The root is a subdirectory so the pass does not walk into the state
     # directory and treat the kept originals themselves as candidate PDFs.
     root = tmp_path / "root"
     root.mkdir()
-    root_id = db.upsert_root(db.connect(postgres_dsn), "files")
-    state = _make_state(postgres_dsn, tmp_path, targets=[RootTarget(name="files", root_id=root_id, abs_path=str(root))])
+    state = _make_state(postgres_dsn, tmp_path, root=root)
     _set_pdf_ocr(state)
     original_id = _keep_original(state, root)
     conn = state.conn_factory()

@@ -1,14 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -35,6 +33,8 @@ describe("ROUTES", () => {
       list: "/api/v1/fs/list",
       stat: "/api/v1/fs/stat",
       download: "/api/v1/fs/download",
+      transcode: "/api/v1/fs/transcode",
+      subtitles: "/api/v1/fs/subtitles",
       zip: "/api/v1/fs/zip",
       upload: "/api/v1/fs/upload",
       mkdir: "/api/v1/fs/mkdir",
@@ -83,8 +83,19 @@ describe("ROUTES", () => {
     });
   });
 
+  it("defines the storage route", () => {
+    expect(ROUTES.storage).toBe("/api/v1/storage");
+  });
+
   it("defines the thumb route", () => {
     expect(ROUTES.thumb).toBe("/api/v1/thumb");
+  });
+
+  it("defines the photos routes", () => {
+    expect(ROUTES.photos).toEqual({
+      list: "/api/v1/photos",
+      details: "/api/v1/photos/details",
+    });
   });
 
   it("defines events and about routes", () => {
@@ -94,7 +105,7 @@ describe("ROUTES", () => {
 
   it("defines every trash route", () => {
     expect(ROUTES.trash).toEqual({
-      status: "/api/v1/trash/status",
+      settings: "/api/v1/trash/settings",
       list: "/api/v1/trash",
       restore: "/api/v1/trash/restore",
       purge: "/api/v1/trash/purge",
@@ -106,7 +117,6 @@ describe("ROUTES", () => {
     expect(ROUTES.activity).toEqual({
       feed: "/api/v1/activity",
       clientEvents: "/api/v1/activity/client-events",
-      locations: "/api/v1/activity/locations",
       resolveFile: "/api/v1/activity/files/resolve",
       files: "/api/v1/activity/files",
       batches: "/api/v1/activity/batches",
@@ -124,12 +134,8 @@ describe("ROUTES", () => {
   });
 
   it("defines every admin route under /api/v1/admin", () => {
-    expect(ROUTES.admin).toEqual({
-      providers: "/api/v1/admin/providers",
-      users: "/api/v1/admin/users",
-    });
-    expect(ROUTES.providers).toBe("/api/v1/providers");
-    expect(adminProviderRoute("a b")).toBe("/api/v1/admin/providers/a%20b");
+    expect(ROUTES.admin).toEqual({ users: "/api/v1/admin/users" });
+    expect(ROUTES.system.storage).toBe("/api/v1/system/storage");
     expect(adminUserRoute("al ice")).toBe("/api/v1/admin/users/al%20ice");
   });
 
@@ -157,6 +163,7 @@ describe("ROUTES", () => {
       indexerThumbnailsRebuild: "/api/v1/system/indexer/thumbnails/rebuild",
       search: "/api/v1/system/search",
       searchReembed: "/api/v1/system/search/reembed",
+      storage: "/api/v1/system/storage",
       imageSearch: "/api/v1/system/image-search",
       imageSearchRebuild: "/api/v1/system/image-search/rebuild",
       imageSearchClear: "/api/v1/system/image-search/clear",
@@ -176,9 +183,6 @@ describe("ROUTES", () => {
   it("defines the account tokens route", () => {
     expect(ROUTES.account).toEqual({
       tokens: "/api/v1/account/tokens",
-      identities: "/api/v1/account/identities",
-      activeIdentity: "/api/v1/account/active-identity",
-      favorites: "/api/v1/account/favorites",
     });
   });
 });
@@ -245,10 +249,6 @@ describe("tagFilesRoute", () => {
 });
 
 describe("headers", () => {
-  it("IDENTITY_HEADER is x-identity-id", () => {
-    expect(IDENTITY_HEADER).toBe("x-identity-id");
-  });
-
   it("MODIFIED_AT_HEADER is x-modified-at", () => {
     expect(MODIFIED_AT_HEADER).toBe("x-modified-at");
   });

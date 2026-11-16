@@ -1,28 +1,54 @@
-import { mkdir, readdir, rm } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { gzipSync, zstdCompressSync } from "node:zlib";
-import type { StorageProvider } from "@fdrive/core";
+import type { OpenFile, StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/testkit";
 import * as tar from "tar-stream";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ZipFile } from "yazl";
 import { buildRawZip } from "../../test/fixtures/build-zip.js";
 import type { JobProgressPatch } from "../jobs/types.js";
 import { ArchiveEntryCapExceededError, extractArchive } from "./extract.js";
 import { ByteCapExceededError, JobAbortedError } from "./stream-utils.js";
 
-const tempPaths: string[] = [];
+/** What extracting once copied a zip into before reading it. */
+const isSpool = (name: string) => name.startsWith("fdrive-extract-") && name.endsWith(".zip");
 
-afterEach(async () => {
-  await Promise.all(tempPaths.splice(0).map((path) => rm(path, { force: true, recursive: true })));
-});
+/** Follows what `storage.open` hands out: how it is read, and whether it is closed. */
+function watchOpens(storage: StorageProvider) {
+  const seen = { streamed: false, bytesRead: 0, closed: false };
+  const open = storage.open.bind(storage);
+  vi.spyOn(storage, "open").mockImplementation(async (path) => {
+    const file = await open(path);
+    return {
+      ...file,
+      stream: (start, end) => {
+        seen.streamed = true;
+        return file.stream(start, end);
+      },
+      read: async (position, length) => {
+        const bytes = await file.read(position, length);
+        seen.bytesRead += bytes.length;
+        return bytes;
+      },
+      close: async () => {
+        seen.closed = true;
+        await file.close();
+      },
+    };
+  });
+  return seen;
+}
 
-async function tmpDirFor(name: string): Promise<string> {
-  const dir = join(tmpdir(), `fdrive-extract-test-${name}-${Date.now()}-${Math.random()}`);
-  await mkdir(dir, { recursive: true });
-  tempPaths.push(dir);
-  return dir;
+/** An open archive whose bytes are `body`, for a stand-in storage. */
+function openBody(size: number, body: ReadableStream<Uint8Array>): OpenFile {
+  return {
+    size,
+    modifiedAt: new Date(0),
+    stream: () => body,
+    read: async () => new Uint8Array(),
+    close: async () => {},
+  };
 }
 
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
@@ -92,14 +118,12 @@ describe("extractArchive: zip", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/docs.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-basic");
     const { report, calls } = collectingReport();
 
     const result = await extractArchive({
       storage,
       archivePath: "/docs.zip",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report,
       maxBytes: DEFAULT_MAX_BYTES,
@@ -120,13 +144,11 @@ describe("extractArchive: zip", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/a.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-dir-entry");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.zip",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -144,13 +166,11 @@ describe("extractArchive: zip", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/evil.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-slip");
 
     const result = await extractArchive({
       storage,
       archivePath: "/evil.zip",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -171,14 +191,12 @@ describe("extractArchive: zip", () => {
     const zipBytes = buildRawZip([{ name: "/etc/passwd", content: Buffer.from("root") }]);
     const storage = createMemoryStorage();
     await storage.upload("/all-evil.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-all-evil");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/all-evil.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -190,14 +208,12 @@ describe("extractArchive: zip", () => {
     const zipBytes = buildRawZip([]);
     const storage = createMemoryStorage();
     await storage.upload("/empty.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-empty");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/empty.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -208,14 +224,12 @@ describe("extractArchive: zip", () => {
   it("rejects a corrupt zip file that yauzl cannot open", async () => {
     const storage = createMemoryStorage();
     await storage.upload("/corrupt.zip", Buffer.from("not a zip file at all"));
-    const tmpDir = await tmpDirFor("zip-corrupt");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/corrupt.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -223,44 +237,55 @@ describe("extractArchive: zip", () => {
     ).rejects.toThrow();
   });
 
-  it("removes the spooled temp file after extracting", async () => {
-    const zipBytes = buildRawZip([{ name: "a.txt", content: Buffer.from("a") }]);
-    const storage = createMemoryStorage();
-    await storage.upload("/a.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-cleanup");
+  it("reads a zip where it lies, by position, and never writes it to temp", async () => {
+    const large = "a".repeat(1024 * 1024);
+    const zipBytes = buildRawZip([
+      { name: "a.txt", content: Buffer.from(large) },
+      { name: "b.txt", content: Buffer.from("b") },
+    ]);
+    const storage = createMemoryStorage({ "/a.zip": zipBytes });
+    const opened = watchOpens(storage);
+    const spooled = () => readdir(tmpdir()).then((names) => names.filter(isSpool));
+    const before = await spooled();
+    const { report, calls } = collectingReport();
 
     await extractArchive({
       storage,
       archivePath: "/a.zip",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
-      report: () => {},
+      report,
       maxBytes: DEFAULT_MAX_BYTES,
     });
 
-    expect(await readdir(tmpDir)).toEqual([]);
+    expect(storage.dump()).toMatchObject({ "/out/a.txt": large, "/out/b.txt": "b" });
+    expect(opened.streamed).toBe(false);
+    // Its end, where yauzl looks for the central directory, and then each entry once.
+    expect(opened.bytesRead).toBeLessThan(zipBytes.length + 70 * 1024);
+    expect(calls.at(-1)).toMatchObject({ processed: 2 });
+    expect(calls.some((patch) => (patch.bytes ?? 0) > 0)).toBe(true);
+    expect(opened.closed).toBe(true);
+    expect(await spooled()).toEqual(before);
   });
 
-  it("enforces the byte cap while spooling and cleans up the temp file", async () => {
+  it("refuses a zip larger than the byte cap before reading it", async () => {
     const zipBytes = buildRawZip([{ name: "a.txt", content: Buffer.from("a".repeat(1000)) }]);
-    const storage = createMemoryStorage();
-    await storage.upload("/big.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-cap");
+    const storage = createMemoryStorage({ "/big.zip": zipBytes });
+    const opened = watchOpens(storage);
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/big.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 10,
       }),
     ).rejects.toThrow(ByteCapExceededError);
 
-    expect(await readdir(tmpDir)).toEqual([]);
+    expect(opened.bytesRead).toBe(0);
+    expect(opened.closed).toBe(true);
   });
 
   it("rejects a compressed zip whose cumulative expanded bytes exceed the cap", async () => {
@@ -270,7 +295,6 @@ describe("extractArchive: zip", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/bomb.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-expanded-cap");
     expect(zipBytes.length).toBeLessThan(1000);
 
     await expect(
@@ -278,7 +302,6 @@ describe("extractArchive: zip", () => {
         storage,
         archivePath: "/bomb.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 1000,
@@ -287,7 +310,6 @@ describe("extractArchive: zip", () => {
 
     expect(storage.dump()["/out/one.txt"]).toBe("x".repeat(600));
     expect(storage.dump()["/out/two.txt"]).toBeUndefined();
-    expect(await readdir(tmpDir)).toEqual([]);
   });
 
   it("caps the number of entries inspected", async () => {
@@ -297,14 +319,12 @@ describe("extractArchive: zip", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/many.zip", zipBytes);
-    const tmpDir = await tmpDirFor("zip-entry-cap");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/many.zip",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -319,13 +339,11 @@ describe("extractArchive: tar", () => {
     const tarBuffer = await buildTar([{ name: "a.txt", content: "alpha" }]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar", tarBuffer);
-    const tmpDir = await tmpDirFor("tar-basic");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.tar",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -342,13 +360,11 @@ describe("extractArchive: tar", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar", tarBuffer);
-    const tmpDir = await tmpDirFor("tar-symlink");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.tar",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -366,13 +382,11 @@ describe("extractArchive: tar", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar", tarBuffer);
-    const tmpDir = await tmpDirFor("tar-slip");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.tar",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -387,13 +401,11 @@ describe("extractArchive: tar", () => {
     const tarBuffer = await buildTar([{ name: "a.txt", content: "alpha" }]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar.gz", gzipSync(tarBuffer));
-    const tmpDir = await tmpDirFor("targz-basic");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.tar.gz",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -408,7 +420,6 @@ describe("extractArchive: tar", () => {
     const archive = gzipSync(tarBuffer);
     const storage = createMemoryStorage();
     await storage.upload("/bomb.tar.gz", archive);
-    const tmpDir = await tmpDirFor("targz-expanded-cap");
     expect(archive.length).toBeLessThan(1000);
 
     await expect(
@@ -416,7 +427,6 @@ describe("extractArchive: tar", () => {
         storage,
         archivePath: "/bomb.tar.gz",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 1000,
@@ -446,16 +456,8 @@ describe("extractArchive: tar", () => {
     });
     const storage: StorageProvider = {
       ...memory,
-      download: async () => ({
-        status: 200,
-        body,
-        contentLength: archive.length,
-        contentRange: null,
-        contentType: null,
-        lastModified: null,
-      }),
+      open: async () => openBody(archive.length, body),
     };
-    const tmpDir = await tmpDirFor("targz-pax-cap");
     expect(archive.length).toBeLessThan(1000);
     expect(tarBuffer.length).toBeGreaterThan(1000);
 
@@ -464,7 +466,6 @@ describe("extractArchive: tar", () => {
         storage,
         archivePath: "/pax-bomb.tar.gz",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 1000,
@@ -479,13 +480,11 @@ describe("extractArchive: tar", () => {
     const tarBuffer = await buildTar([{ name: "a.txt", content: "alpha" }]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar.zst", zstdCompressSync(tarBuffer));
-    const tmpDir = await tmpDirFor("tarzst-basic");
 
     const result = await extractArchive({
       storage,
       archivePath: "/a.tar.zst",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -499,14 +498,12 @@ describe("extractArchive: tar", () => {
     const tarBuffer = await buildTar([{ name: "a.txt", content: "alpha" }]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar.zst", zstdCompressSync(tarBuffer));
-    const tmpDir = await tmpDirFor("tarzst-unsupported");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/a.tar.zst",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -519,14 +516,12 @@ describe("extractArchive: tar", () => {
     const tarBuffer = await buildTar([{ name: "a.txt", content: "a".repeat(5000) }]);
     const storage = createMemoryStorage();
     await storage.upload("/a.tar.gz", gzipSync(tarBuffer));
-    const tmpDir = await tmpDirFor("targz-cap");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/a.tar.gz",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 10,
@@ -541,7 +536,6 @@ describe("extractArchive: tar", () => {
     ]);
     const storage = createMemoryStorage();
     await storage.upload("/two.tar", tarBuffer);
-    const tmpDir = await tmpDirFor("tar-cancel");
     const controller = new AbortController();
 
     await expect(
@@ -549,7 +543,6 @@ describe("extractArchive: tar", () => {
         storage,
         archivePath: "/two.tar",
         destination: "/out",
-        tmpDir,
         signal: controller.signal,
         report: (patch) => {
           if (patch.processed === 1) {
@@ -566,13 +559,11 @@ describe("extractArchive: bare .gz", () => {
   it("decompresses into a single file named after the archive without .gz", async () => {
     const storage = createMemoryStorage();
     await storage.upload("/notes.txt.gz", gzipSync(Buffer.from("hello world")));
-    const tmpDir = await tmpDirFor("bare-gz");
 
     const result = await extractArchive({
       storage,
       archivePath: "/notes.txt.gz",
       destination: "/out",
-      tmpDir,
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -586,7 +577,6 @@ describe("extractArchive: bare .gz", () => {
     const storage = createMemoryStorage();
     const archive = gzipSync(Buffer.from("x".repeat(5000)));
     await storage.upload("/big.txt.gz", archive);
-    const tmpDir = await tmpDirFor("bare-gz-cap");
     expect(archive.length).toBeLessThan(100);
 
     await expect(
@@ -594,7 +584,6 @@ describe("extractArchive: bare .gz", () => {
         storage,
         archivePath: "/big.txt.gz",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: 100,
@@ -608,14 +597,12 @@ describe("extractArchive: format detection", () => {
   it("rejects an archive path with no recognized extension", async () => {
     const storage = createMemoryStorage();
     await storage.upload("/mystery.xyz", Buffer.from("data"));
-    const tmpDir = await tmpDirFor("unknown-ext");
 
     await expect(
       extractArchive({
         storage,
         archivePath: "/mystery.xyz",
         destination: "/out",
-        tmpDir,
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
@@ -632,7 +619,6 @@ it("preserves an existing destination instead of silently overwriting edited con
       storage,
       archivePath: "/a.zip",
       destination: "/out",
-      tmpDir: await tmpDirFor("conflict"),
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -659,7 +645,6 @@ it("decodes legacy ZIP names without colliding on replacement characters", async
     storage,
     archivePath: "/a.zip",
     destination: "/out",
-    tmpDir: await tmpDirFor("cp437"),
     signal: new AbortController().signal,
     report: () => {},
     maxBytes: DEFAULT_MAX_BYTES,
@@ -669,59 +654,74 @@ it("decodes legacy ZIP names without colliding on replacement characters", async
 });
 
 it.each(["..gz", "...gz"])(
-  "refuses unsafe stripped gzip name %s before downloading",
+  "refuses unsafe stripped gzip name %s without reading it",
   async (name) => {
     const storage = createMemoryStorage({ [`/${name}`]: gzipSync("bad") });
-    const download = vi.spyOn(storage, "download");
+    const opened = watchOpens(storage);
     await expect(
       extractArchive({
         storage,
         archivePath: `/${name}`,
         destination: "/out",
-        tmpDir: await tmpDirFor("gzip-name"),
         signal: new AbortController().signal,
         report: () => {},
         maxBytes: DEFAULT_MAX_BYTES,
       }),
     ).rejects.toThrow("no entries were extracted");
-    expect(download).not.toHaveBeenCalled();
+    expect(opened).toEqual({ streamed: false, bytesRead: 0, closed: true });
   },
 );
 
-it("cancels the ZIP source and removes its spool when aborted mid-download", async () => {
-  const storage = createMemoryStorage();
-  const controller = new AbortController();
-  let cancelled = false;
-  storage.download = async () => ({
-    status: 200,
-    contentLength: null,
-    contentRange: null,
-    contentType: null,
-    lastModified: null,
-    body: new ReadableStream({
-      start(stream) {
-        stream.enqueue(new Uint8Array(32));
-      },
-      cancel() {
-        cancelled = true;
-      },
-    }),
+it("stops reading a zip once aborted between entries, and closes it", async () => {
+  const storage = createMemoryStorage({
+    "/a.zip": buildRawZip([
+      { name: "a.txt", content: Buffer.from("a") },
+      { name: "b.txt", content: Buffer.from("b") },
+    ]),
   });
-  const dir = await tmpDirFor("spool-abort");
+  const opened = watchOpens(storage);
+  const controller = new AbortController();
   const result = extractArchive({
     storage,
     archivePath: "/a.zip",
     destination: "/out",
-    tmpDir: dir,
     signal: controller.signal,
     report: (progress) => {
-      if ((progress.bytes ?? 0) > 0) controller.abort();
+      if (progress.processed === 1) controller.abort();
     },
     maxBytes: DEFAULT_MAX_BYTES,
   });
-  await expect(result).rejects.toThrow();
-  expect(cancelled).toBe(true);
-  expect(await readdir(dir)).toEqual([]);
+  await expect(result).rejects.toThrow(JobAbortedError);
+  expect(storage.dump()["/out/b.txt"]).toBeUndefined();
+  expect(opened.closed).toBe(true);
+});
+
+it("fails a zip that reads short of what its directory declares, and closes it", async () => {
+  const memory = createMemoryStorage({
+    "/a.zip": buildRawZip([{ name: "a.txt", content: Buffer.from("alpha") }]),
+  });
+  const opened = watchOpens(memory);
+  const storage: StorageProvider = {
+    ...memory,
+    open: async (path) => {
+      const file = await memory.open(path);
+      return {
+        ...file,
+        read: async (position, length) => (await file.read(position, length)).subarray(1),
+      };
+    },
+  };
+  await expect(
+    extractArchive({
+      storage,
+      archivePath: "/a.zip",
+      destination: "/out",
+      signal: new AbortController().signal,
+      report: () => {},
+      maxBytes: DEFAULT_MAX_BYTES,
+    }),
+  ).rejects.toThrow("the archive ended early");
+  expect(opened.closed).toBe(true);
 });
 
 it("refuses existing tar outputs and closes the failed extraction", async () => {
@@ -735,7 +735,6 @@ it("refuses existing tar outputs and closes the failed extraction", async () => 
       storage,
       archivePath: "/docs.tar",
       destination: "/out",
-      tmpDir: await tmpDirFor("tar-conflict"),
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,
@@ -744,27 +743,23 @@ it("refuses existing tar outputs and closes the failed extraction", async () => 
   expect(storage.dump()["/out/a.txt"]).toBe("user edit");
 });
 
-it("propagates a gzip download stream failure and cancels decompression", async () => {
+it("propagates a gzip read failure and cancels decompression", async () => {
   const storage = createMemoryStorage();
   await storage.upload("/file.gz", new Uint8Array());
-  storage.download = async () => ({
-    status: 200,
-    contentLength: null,
-    contentRange: null,
-    contentType: null,
-    lastModified: null,
-    body: new ReadableStream({
-      pull(controller) {
-        controller.error(new Error("upstream disconnected"));
-      },
-    }),
-  });
+  storage.open = async () =>
+    openBody(
+      0,
+      new ReadableStream({
+        pull(controller) {
+          controller.error(new Error("upstream disconnected"));
+        },
+      }),
+    );
   await expect(
     extractArchive({
       storage,
       archivePath: "/file.gz",
       destination: "/out",
-      tmpDir: await tmpDirFor("gzip-failure"),
       signal: new AbortController().signal,
       report: () => {},
       maxBytes: DEFAULT_MAX_BYTES,

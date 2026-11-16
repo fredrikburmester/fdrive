@@ -1,17 +1,11 @@
 import { NAME_MATCH_BOOST, recencyWeight, type Scope } from "@fdrive/core";
 import type { ContentHit, FilenameHit, FolderHit, IndexedFile, IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ReadAuthorizeReason,
-  ReadAuthorizer,
-  ReadAuthorizeTarget,
-} from "../scoping/read-authorizer.ts";
 import type { EmbedClient } from "./embeddings.js";
+import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
 import { createSearchService, type SearchServiceDeps, type SearchServiceInput } from "./service.js";
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 const NOW = new Date("2026-03-01T00:00:00.000Z");
 
 function fail(name: string): never {
@@ -26,9 +20,9 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     folders: overrides.folders ?? (async () => []),
     filesByIds: overrides.filesByIds ?? (async () => fail("filesByIds")),
     fileByPath: overrides.fileByPath ?? (async () => fail("fileByPath")),
+    contentAt: overrides.contentAt ?? (async () => fail("contentAt")),
     listFiles: overrides.listFiles ?? (async () => fail("listFiles")),
     filesBySha256: overrides.filesBySha256 ?? (async () => fail("filesBySha256")),
-    rootIdsByName: overrides.rootIdsByName ?? (async () => fail("rootIdsByName")),
     stats: overrides.stats ?? (async () => fail("stats")),
     statsForFileIds: overrides.statsForFileIds ?? (async () => fail("statsForFileIds")),
     fileTextPrefix: overrides.fileTextPrefix ?? (async () => fail("fileTextPrefix")),
@@ -36,13 +30,13 @@ function fakeIndexQueries(overrides: Partial<IndexQueries> = {}): IndexQueries {
     similar: overrides.similar ?? (async () => fail("similar")),
     recentFiles: overrides.recentFiles ?? (async () => fail("recentFiles")),
     thumbnail: overrides.thumbnail ?? (async () => fail("thumbnail")),
-    recordMove: overrides.recordMove ?? (async () => fail("recordMove")),
-    recentMoves: overrides.recentMoves ?? (async () => fail("recentMoves")),
-    deletedRowSha: overrides.deletedRowSha ?? (async () => fail("deletedRowSha")),
-    liveRowsBySha: overrides.liveRowsBySha ?? (async () => fail("liveRowsBySha")),
+    thumbnailKeys: overrides.thumbnailKeys ?? (async () => fail("thumbnailKeys")),
     searchImages: overrides.searchImages ?? (async () => fail("searchImages")),
     imageEmbeddingStats: overrides.imageEmbeddingStats ?? (async () => fail("imageEmbeddingStats")),
+    photos: overrides.photos ?? (async () => fail("photos")),
+    photoDetails: overrides.photoDetails ?? (async () => fail("photoDetails")),
     subtreeSize: overrides.subtreeSize ?? (async () => fail("subtreeSize")),
+    bytesByExtension: overrides.bytesByExtension ?? (async () => fail("bytesByExtension")),
   };
 }
 
@@ -60,7 +54,6 @@ function makeFile(overrides: Partial<IndexedFile> & { id: number }): IndexedFile
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...overrides,
   };
 }
@@ -80,7 +73,6 @@ function makeFolder(path: string, ageDays = 0, rootId = 1): FolderHit {
 /** Index queries where nothing but `folders` finds anything. */
 function folderOnlyQueries(rows: readonly FolderHit[], overrides: Partial<IndexQueries> = {}) {
   return fakeIndexQueries({
-    rootIdsByName: async () => ({ files: 1 }),
     semantic: async () => [],
     fulltext: async () => [],
     filename: async () => [],
@@ -89,41 +81,28 @@ function folderOnlyQueries(rows: readonly FolderHit[], overrides: Partial<IndexQ
   });
 }
 
-/** An authorizer that allows every target unless `denied`/`unavailable` says otherwise. */
-function fakeAuthorizer(
-  opts: {
-    readonly denied?: ReadonlySet<string>;
-    readonly unavailable?: ReadonlySet<string>;
-    readonly calls?: ReadAuthorizeTarget[];
-  } = {},
-): ReadAuthorizer {
-  return {
-    async authorize(target) {
-      opts.calls?.push(target);
-      const key = `${target.kind}:${target.path}`;
-      if (opts.unavailable?.has(key) === true) {
-        return { allowed: false, reason: "unavailable" satisfies ReadAuthorizeReason };
-      }
-      if (opts.denied?.has(key) === true) {
-        return { allowed: false, reason: "denied" satisfies ReadAuthorizeReason };
-      }
-      return { allowed: true };
-    },
-  };
-}
-
 function buildDeps(overrides: Partial<SearchServiceDeps> = {}): SearchServiceDeps {
   return {
     indexQueries: fakeIndexQueries(),
     embedClient: null,
     thumbsEnabled: false,
-    trashPath: null,
     clock: () => NOW,
     ...overrides,
   };
 }
 
 const NO_FILTERS = { exts: null, folder: null, after: null, before: null };
+
+/** fdrive's own folders in alice's home and her own Shared with me, as every query leaves them out. */
+function reserved() {
+  return {
+    prefixes: [
+      { rootId: 1, fsPrefix: "/alice/.trash" },
+      { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+      { rootId: 1, fsPrefix: "/alice/Shared with me" },
+    ],
+  };
+}
 
 it("stops text search immediately when its runtime feature is disabled", async () => {
   const service = createSearchService(
@@ -140,7 +119,6 @@ it("stops text search immediately when its runtime feature is disabled", async (
 function baseInput(overrides: Partial<SearchServiceInput> = {}): SearchServiceInput {
   return {
     scopes: HOME_SCOPES,
-    authorizer: fakeAuthorizer(),
     query: "readme",
     filters: NO_FILTERS,
     limit: 20,
@@ -162,21 +140,11 @@ describe("createSearchService: search - unavailable", () => {
       tookMs: 0,
     });
   });
-
-  it("is unavailable when none of the scopes' roots have a matching row in the index", async () => {
-    const indexQueries = fakeIndexQueries({ rootIdsByName: async () => ({}) });
-    const service = createSearchService(buildDeps({ indexQueries }));
-
-    const result = await service.search(baseInput());
-
-    expect(result.unavailable).toBe(true);
-  });
 });
 
 describe("createSearchService: search - degraded", () => {
   function depsWithNoMatches(overrides: Partial<SearchServiceDeps> = {}) {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -212,7 +180,6 @@ describe("createSearchService: search - degraded", () => {
   it("is not degraded when the embed client returns a vector", async () => {
     const embedClient: EmbedClient = { embed: async () => [0.1, 0.2] };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -231,7 +198,6 @@ describe("createSearchService: search - degraded", () => {
 
   it("reports partial when the underlying fanout was cut, even with no matches to show", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => Array.from({ length: 60 }, (_, i) => ({ fileId: i, snippet: "x" })),
       filename: async () => [],
@@ -264,7 +230,6 @@ describe("createSearchService: search - query concurrency", () => {
     });
     const semantic = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic,
       fulltext,
       filename,
@@ -309,7 +274,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(0),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 2, snippet: "create a project plan" }],
       fulltext: async () => [{ fileId: 2, snippet: "create a project plan" }],
       filename: async () => [
@@ -339,7 +303,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(3),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [
@@ -362,7 +325,6 @@ describe("createSearchService: search - ranking", () => {
     const old = makeFile({ id: 1, path: "alice/old.md", name: "old.md", mtimeNs: daysAgoNs(2000) });
     const recent = makeFile({ id: 2, path: "alice/new.md", name: "new.md", mtimeNs: daysAgoNs(1) });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [
         { fileId: 1, snippet: "the budget for 2020" },
@@ -394,7 +356,6 @@ describe("createSearchService: search - ranking", () => {
       mtimeNs: daysAgoNs(0),
     });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [{ fileId: 2, snippet: "see the budget" }],
       filename: async () => [{ fileId: 1, hits: 1, similarity: 1 }],
@@ -413,7 +374,6 @@ describe("createSearchService: search - ranking", () => {
     );
     const mention = makeFile({ id: 3, path: "alice/notes.md", name: "notes.md", ext: ".md" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [{ fileId: 3, snippet: "see the budget" }],
       filename: async () => named.map((file) => ({ fileId: file.id, hits: 1, similarity: 1 })),
@@ -431,7 +391,6 @@ describe("createSearchService: search - ranking", () => {
     const fulltext = vi.fn<IndexQueries["fulltext"]>(async () => []);
     const filename = vi.fn<IndexQueries["filename"]>(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       fulltext,
       filename,
     });
@@ -443,9 +402,9 @@ describe("createSearchService: search - ranking", () => {
     expect(fulltext.mock.calls[0]?.[3]).toEqual({
       recency,
       preferTsquery: "annual:*&report:*",
-      exclude: [],
+      exclude: reserved(),
     });
-    expect(filename.mock.calls[0]?.[4]).toEqual({ recency, exclude: [] });
+    expect(filename.mock.calls[0]?.[4]).toEqual({ recency, exclude: reserved() });
   });
 });
 
@@ -453,7 +412,6 @@ describe("createSearchService: search - hits", () => {
   it("maps a filename-only hit to a virtual path, with an empty snippet list", async () => {
     const file = makeFile({ id: 10, path: "alice/report.pdf", name: "report.pdf", ext: ".pdf" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 10, hits: 1, similarity: 0.8 }],
@@ -478,7 +436,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 20, path: "alice/notes.md", name: "notes.md", ext: ".md" });
     const contentHits: ContentHit[] = [{ fileId: 20, snippet: "the readme explains setup" }];
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => contentHits,
       filename: async () => [],
@@ -499,7 +456,6 @@ describe("createSearchService: search - hits", () => {
     const file = makeFile({ id: 30, path: "alice/report.pdf", name: "report.pdf" });
     const embedClient: EmbedClient = { embed: async () => [0.1] };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 30, snippet: "report contents" }],
       fulltext: async () => [],
       filename: async () => [{ fileId: 30, hits: 1, similarity: 0.5 }],
@@ -518,10 +474,9 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files[0]?.score).toBeCloseTo(expectedScore, 10);
   });
 
-  it("drops a file whose root is not in the configured roots map", async () => {
-    const file = makeFile({ id: 40, rootId: 99, path: "alice/x.txt" });
+  it("drops a file outside the caller's scopes", async () => {
+    const file = makeFile({ id: 40, path: "bob/x.txt" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 40, hits: 1, similarity: 0.5 }],
@@ -537,7 +492,6 @@ describe("createSearchService: search - hits", () => {
   it("drops a hit that fails the search filters", async () => {
     const file = makeFile({ id: 50, path: "alice/report.pdf", ext: ".pdf" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 50, hits: 1, similarity: 0.5 }],
@@ -552,56 +506,16 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files).toEqual([]);
   });
 
-  it("drops a hit the authorizer denies, without leaking it via a thumbnail check", async () => {
-    const file = makeFile({ id: 51, path: "alice/secret.pdf", ext: ".pdf", sha256: "abc" });
-    const thumbnail = vi.fn(async () => ({ storagePath: "x" }));
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => [{ fileId: 51, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-      thumbnail,
-    });
-    const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: true }));
-    const authorizer = fakeAuthorizer({ denied: new Set(["file:/secret.pdf"]) });
-
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.files).toEqual([]);
-    expect(thumbnail).not.toHaveBeenCalled();
-    expect(result.partial).toBeUndefined();
-  });
-
-  it("marks the response partial when the live-read check reports unavailable", async () => {
-    const file = makeFile({ id: 52, path: "alice/flaky.pdf", ext: ".pdf" });
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename: async () => [{ fileId: 52, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-    });
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const authorizer = fakeAuthorizer({ unavailable: new Set(["file:/flaky.pdf"]) });
-
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.files).toEqual([]);
-    expect(result.partial).toBe(true);
-  });
-
   it("drops a candidate a shadowing override hides, even though its physical location still exists", async () => {
     // "/shared" shadows "alice"'s physical "/alice/shared" subtree; a row
     // still filed under "alice/shared/x.txt" must never surface through
     // the home scope once the more specific override exists.
     const scopes: readonly Scope[] = [
-      { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-      { rootName: "files", fsPrefix: "/team", virtualPrefix: "/shared" },
+      { fsPrefix: "/alice", virtualPrefix: "/" },
+      { fsPrefix: "/team", virtualPrefix: "/shared" },
     ];
     const file = makeFile({ id: 53, path: "alice/shared/x.txt", name: "x.txt" });
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 53, hits: 1, similarity: 0.5 }],
@@ -614,7 +528,7 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files).toEqual([]);
   });
 
-  it("respects the limit, applied after inaccessible candidates are removed", async () => {
+  it("respects the limit, applied after candidates out of scope are removed", async () => {
     const files = [makeFile({ id: 1 }), makeFile({ id: 2 }), makeFile({ id: 3 })];
     const filenameHits: FilenameHit[] = files.map((f, i) => ({
       fileId: f.id,
@@ -622,7 +536,6 @@ describe("createSearchService: search - hits", () => {
       similarity: 1 - i * 0.1,
     }));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => filenameHits,
@@ -641,7 +554,6 @@ describe("createSearchService: search - hits", () => {
     );
     const contentHits: ContentHit[] = files.map((f) => ({ fileId: f.id, snippet: "readme text" }));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => contentHits,
       filename: async () => [],
@@ -656,58 +568,109 @@ describe("createSearchService: search - hits", () => {
 
   it("checks the thumbnail cache only when thumbnails are enabled and a sha256 is known", async () => {
     const file = makeFile({ id: 60, sha256: "abc123" });
-    const thumbnail = vi.fn(async () => ({ storagePath: "ab/abc123.256.webp" }));
+    const thumbnailKeys = vi.fn(async () => new Set(["abc123"]));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 60, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
-      thumbnail,
+      thumbnailKeys,
     });
     const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: true }));
 
     const result = await service.search(baseInput());
 
-    expect(thumbnail).toHaveBeenCalledWith("abc123", 256);
+    expect(thumbnailKeys).toHaveBeenCalledWith(["abc123"], 256);
     expect(result.sections.files[0]?.hasThumbnail).toBe(true);
+  });
+
+  it("cuts to the limit, then looks thumbnails up once for what it shows", async () => {
+    const files = Array.from({ length: 30 }, (_, i) =>
+      makeFile({
+        id: i + 1,
+        path: `alice/readme ${i}.txt`,
+        name: `readme ${i}.txt`,
+        sha256: `k${i}`,
+      }),
+    );
+    const filesByIds = vi.fn(async () => files);
+    const thumbnailKeys = vi.fn(async () => new Set(["k0", "k2"]));
+    const indexQueries = fakeIndexQueries({
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () =>
+        files.map((f, i) => ({ fileId: f.id, hits: 1, similarity: 1 - i / 100 })),
+      filesByIds,
+      thumbnailKeys,
+    });
+    const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: true }));
+
+    const result = await service.search(baseInput({ limit: 3 }));
+
+    expect(result.sections.files.map((hit) => [hit.name, hit.hasThumbnail])).toEqual([
+      ["readme 0.txt", true],
+      ["readme 1.txt", false],
+      ["readme 2.txt", true],
+    ]);
+    expect(filesByIds).toHaveBeenCalledOnce();
+    expect(thumbnailKeys).toHaveBeenCalledExactlyOnceWith(["k0", "k1", "k2"], 256);
+  });
+
+  it("returns a full page from every candidate in scope, with no live read", async () => {
+    const shown = Array.from({ length: 25 }, (_, i) =>
+      makeFile({ id: i + 1, path: `alice/readme ${i}.txt`, name: `readme ${i}.txt` }),
+    );
+    // A row in another user's home is out of scope however it ranks.
+    const elsewhere = makeFile({ id: 99, path: "bob/readme.txt", name: "readme.txt" });
+    const files = [elsewhere, ...shown];
+    const indexQueries = fakeIndexQueries({
+      semantic: async () => [],
+      fulltext: async () => [],
+      filename: async () =>
+        files.map((f, i) => ({ fileId: f.id, hits: 1, similarity: 1 - i / 100 })),
+      filesByIds: async () => files,
+    });
+    const service = createSearchService(buildDeps({ indexQueries }));
+
+    const result = await service.search(baseInput({ limit: 20 }));
+
+    expect(result.sections.files).toHaveLength(20);
+    expect(result.sections.files.map((hit) => hit.path)).not.toContain("/readme.txt");
   });
 
   it("never checks the thumbnail cache when thumbnails are disabled", async () => {
     const file = makeFile({ id: 61, sha256: "abc123" });
-    const thumbnail = vi.fn(async () => ({ storagePath: "x" }));
+    const thumbnailKeys = vi.fn(async () => new Set(["abc123"]));
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 61, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
-      thumbnail,
+      thumbnailKeys,
     });
     const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: false }));
 
     const result = await service.search(baseInput());
 
-    expect(thumbnail).not.toHaveBeenCalled();
+    expect(thumbnailKeys).not.toHaveBeenCalled();
     expect(result.sections.files[0]?.hasThumbnail).toBe(false);
   });
 
   it("never checks the thumbnail cache when the file has no sha256", async () => {
     const file = makeFile({ id: 62, sha256: null });
-    const thumbnail = vi.fn(async () => ({ storagePath: "x" }));
+    const thumbnailKeys = vi.fn(async () => new Set<string>());
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 62, hits: 1, similarity: 0.5 }],
       filesByIds: async () => [file],
-      thumbnail,
+      thumbnailKeys,
     });
     const service = createSearchService(buildDeps({ indexQueries, thumbsEnabled: true }));
 
     await service.search(baseInput());
 
-    expect(thumbnail).not.toHaveBeenCalled();
+    expect(thumbnailKeys).not.toHaveBeenCalled();
   });
 
   it("finds a folder by its own name, empty or not, when no file matches", async () => {
@@ -739,7 +702,7 @@ describe("createSearchService: search - hits", () => {
       ["microlä"],
       "Microlä",
       50,
-      { recency: { now: NOW, halfLifeDays: 180, floor: 0.4 }, exclude: [] },
+      { recency: { now: NOW, halfLifeDays: 180, floor: 0.4 }, exclude: reserved() },
     );
   });
 
@@ -765,19 +728,18 @@ describe("createSearchService: search - hits", () => {
     ]);
   });
 
-  it("shows at most five folders, skipping ones the authorizer denies", async () => {
+  it("shows at most five folders", async () => {
     const rows = Array.from({ length: 8 }, (_, i) => makeFolder(`alice/plan ${i}`, i));
     const service = createSearchService(buildDeps({ indexQueries: folderOnlyQueries(rows) }));
-    const authorizer = fakeAuthorizer({ denied: new Set(["dir:/plan 0", "dir:/plan 2"]) });
 
-    const result = await service.search(baseInput({ query: "plan", authorizer }));
+    const result = await service.search(baseInput({ query: "plan" }));
 
     expect(result.sections.folders.map((folder) => folder.name)).toEqual([
+      "plan 0",
       "plan 1",
+      "plan 2",
       "plan 3",
       "plan 4",
-      "plan 5",
-      "plan 6",
     ]);
     expect(result.partial).toBeUndefined();
   });
@@ -820,52 +782,7 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.folders.map((folder) => folder.name)).toEqual(["plan new"]);
   });
 
-  it("starts folder authorization before file probes and waits for both", async () => {
-    const file = makeFile({ id: 78, path: "alice/folder/report.pdf", name: "report.pdf" });
-    const indexQueries = folderOnlyQueries([makeFolder("alice/report folder")], {
-      filename: async () => [{ fileId: 78, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-    });
-    let releaseFolder = (): void => fail("releaseFolder");
-    const folderBlocked = new Promise<void>((resolve) => {
-      releaseFolder = resolve;
-    });
-    let releaseFile = (): void => fail("releaseFile");
-    const fileBlocked = new Promise<void>((resolve) => {
-      releaseFile = resolve;
-    });
-    const calls: ReadAuthorizeTarget[] = [];
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        calls.push(target);
-        await (target.kind === "dir" ? folderBlocked : fileBlocked);
-        return { allowed: true };
-      },
-    };
-    const service = createSearchService(buildDeps({ indexQueries }));
-
-    const pending = service.search(baseInput({ query: "report", authorizer }));
-    await vi.waitFor(() => expect(calls).toHaveLength(2));
-    expect(calls).toEqual([
-      { path: "/report folder", kind: "dir" },
-      { path: "/folder/report.pdf", kind: "file" },
-    ]);
-
-    releaseFolder();
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseFile();
-    const result = await pending;
-    expect(result.sections.folders).toHaveLength(1);
-    expect(result.sections.files).toHaveLength(1);
-  });
-
-  it("neither queries nor authorizes folders while a type filter is active", async () => {
+  it("does not query folders while a type filter is active", async () => {
     const file = makeFile({ id: 80, path: "alice/report/x.pdf", name: "report.pdf", ext: ".pdf" });
     const folders = vi.fn(async () => [makeFolder("alice/report")]);
     const indexQueries = folderOnlyQueries([], {
@@ -874,33 +791,15 @@ describe("createSearchService: search - hits", () => {
       filesByIds: async () => [file],
     });
     const service = createSearchService(buildDeps({ indexQueries }));
-    const calls: ReadAuthorizeTarget[] = [];
 
     const result = await service.search(
-      baseInput({
-        query: "report",
-        authorizer: fakeAuthorizer({ calls }),
-        filters: { ...NO_FILTERS, exts: [".pdf"] },
-      }),
+      baseInput({ query: "report", filters: { ...NO_FILTERS, exts: [".pdf"] } }),
     );
 
     expect(folders).not.toHaveBeenCalled();
-    expect(calls.some((call) => call.kind === "dir")).toBe(false);
     expect(result.sections.folders).toEqual([]);
     // The type filter is files-only: the Files section still lists the match.
     expect(result.sections.files).toHaveLength(1);
-  });
-
-  it("marks the response partial when a folder's live-read check reports unavailable", async () => {
-    const service = createSearchService(
-      buildDeps({ indexQueries: folderOnlyQueries([makeFolder("alice/flaky readme")]) }),
-    );
-    const authorizer = fakeAuthorizer({ unavailable: new Set(["dir:/flaky readme"]) });
-
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.folders).toEqual([]);
-    expect(result.partial).toBe(true);
   });
 
   it("marks the response partial when the folder fanout was cut", async () => {
@@ -911,21 +810,6 @@ describe("createSearchService: search - hits", () => {
 
     expect(result.sections.folders).toHaveLength(5);
     expect(result.partial).toBe(true);
-  });
-
-  it("checks folder access with kind dir, distinct from file checks on the same path", async () => {
-    const file = makeFile({ id: 64, path: "alice/readme/readme.txt", name: "readme.txt" });
-    const indexQueries = folderOnlyQueries([makeFolder("alice/readme")], {
-      filename: async () => [{ fileId: 64, hits: 1, similarity: 0.5 }],
-      filesByIds: async () => [file],
-    });
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const calls: ReadAuthorizeTarget[] = [];
-
-    await service.search(baseInput({ authorizer: fakeAuthorizer({ calls }) }));
-
-    expect(calls).toContainEqual({ path: "/readme/readme.txt", kind: "file" });
-    expect(calls).toContainEqual({ path: "/readme", kind: "dir" });
   });
 
   it("no longer lists the folder a matching file is in", async () => {
@@ -942,26 +826,23 @@ describe("createSearchService: search - hits", () => {
     expect(result.sections.files.map((hit) => hit.path)).toEqual(["/microtest/readme.txt"]);
   });
 
-  it("asks every query to leave out the Trash, mapped through the scopes, before its limit", async () => {
+  it("asks every query to leave out fdrive's own folders, mapped through the scopes, before its limit", async () => {
     const semantic = vi.fn(async () => []);
     const fulltext = vi.fn(async () => []);
     const filename = vi.fn(async () => []);
     const folders = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic,
       fulltext,
       filename,
       folders,
     });
     const embedClient: EmbedClient = { embed: async () => [0.1] };
-    const service = createSearchService(
-      buildDeps({ indexQueries, embedClient, trashPath: "/.trash" }),
-    );
+    const service = createSearchService(buildDeps({ indexQueries, embedClient }));
 
     await service.search(baseInput());
 
-    const exclude = [{ rootId: 1, fsPrefix: "/alice/.trash" }];
+    const exclude = reserved();
     expect(semantic).toHaveBeenCalledWith(expect.anything(), [0.1], 60, { exclude });
     expect(fulltext).toHaveBeenCalledWith(
       expect.anything(),
@@ -985,29 +866,8 @@ describe("createSearchService: search - hits", () => {
     );
   });
 
-  it("uses the request's Trash over the default, and leaves nothing out without one", async () => {
-    const filename = vi.fn(async () => []);
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [],
-      filename,
-    });
-
-    await createSearchService(buildDeps({ indexQueries, trashPath: "/.trash" })).search(
-      baseInput({ trashPath: "/Bin" }),
-    );
-    await createSearchService(buildDeps({ indexQueries })).search(baseInput());
-
-    expect(filename.mock.calls.map((call) => (call as unknown[])[4])).toEqual([
-      expect.objectContaining({ exclude: [{ rootId: 1, fsPrefix: "/alice/Bin" }] }),
-      expect.objectContaining({ exclude: [] }),
-    ]);
-  });
-
   it("skips a filename hit whose file id is not returned by filesByIds", async () => {
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [{ fileId: 999, hits: 1, similarity: 0.5 }],
@@ -1027,7 +887,6 @@ describe("createSearchService: search - hits", () => {
     const fulltext = vi.fn(async () => []);
     const filename = vi.fn(async () => []);
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [{ fileId: 80, snippet: "hit" }],
       fulltext,
       filename,
@@ -1052,7 +911,6 @@ describe("createSearchService: search - hits", () => {
       return at;
     };
     const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
       semantic: async () => [],
       fulltext: async () => [],
       filename: async () => [],
@@ -1063,293 +921,161 @@ describe("createSearchService: search - hits", () => {
 
     expect(result.tookMs).toBeGreaterThan(0);
   });
+});
 
-  it("starts content candidate live reads before filename query finishes", async () => {
-    const file = makeFile({ id: 81, path: "alice/content.txt", name: "content.txt" });
-    let releaseFilename = (): void => fail("releaseFilename");
-    const filenameBlocked = new Promise<FilenameHit[]>((resolve) => {
-      releaseFilename = () => resolve([]);
-    });
+describe("createSearchService: search - typos", () => {
+  function nameHit(id: number, path: string, ageDays = 0): NameIndexHit {
+    return { id, rootId: 1, path, mtimeNs: NOW_NS - BigInt(ageDays) * DAY_NS };
+  }
 
-    const calls: ReadAuthorizeTarget[] = [];
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        calls.push(target);
-        return { allowed: true };
-      },
+  function nameIndex(hits: Partial<NameIndexHits> | null) {
+    return {
+      search: vi.fn<NameIndexClient["search"]>(async () =>
+        hits === null ? null : { files: hits.files ?? [], folders: hits.folders ?? [] },
+      ),
     };
+  }
 
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 81, snippet: "content hit" }],
-      filename: async () => filenameBlocked,
-      filesByIds: async () => [file],
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const pending = service.search(baseInput({ authorizer }));
-
-    await vi.waitFor(() => expect(calls).toContainEqual({ path: "/content.txt", kind: "file" }));
-
-    releaseFilename();
-    const result = await pending;
-    expect(result.sections.files).toHaveLength(1);
-    expect(result.sections.files[0]?.path).toBe("/content.txt");
-  });
-
-  it("blocks search completion until early content probe settles", async () => {
-    const file = makeFile({ id: 82, path: "alice/doc.txt", name: "doc.txt" });
-    let releaseAuth = (): void => fail("releaseAuth");
-    const authBlocked = new Promise<void>((resolve) => {
-      releaseAuth = resolve;
-    });
-
-    const authorizer: ReadAuthorizer = {
-      async authorize() {
-        await authBlocked;
-        return { allowed: true };
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 82, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => [file],
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const pending = service.search(baseInput({ authorizer }));
-
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseAuth();
-    const result = await pending;
-    expect(result.sections.files).toHaveLength(1);
-  });
-
-  it("authorizes new path when final metadata differs from primed path without using stale grant", async () => {
-    const primedFile = makeFile({ id: 83, path: "alice/old-path.txt", name: "old-path.txt" });
-    const finalFile = makeFile({
-      id: 83,
-      path: "alice/renamed-path.txt",
-      name: "renamed-path.txt",
-    });
-
-    let filesByIdsCalls = 0;
-    const calls: ReadAuthorizeTarget[] = [];
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        calls.push(target);
-        if (target.path === "/old-path.txt") {
-          return { allowed: true };
-        }
-        return { allowed: false, reason: "denied" };
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 83, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => {
-        filesByIdsCalls++;
-        return [filesByIdsCalls === 1 ? primedFile : finalFile];
-      },
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(calls).toContainEqual({ path: "/old-path.txt", kind: "file" });
-    expect(calls).toContainEqual({ path: "/renamed-path.txt", kind: "file" });
-    expect(result.sections.files).toEqual([]);
-  });
-
-  it("handles early metadata lookup rejection gracefully without unhandled rejection", async () => {
-    const file = makeFile({ id: 84, path: "alice/ok.txt", name: "ok.txt" });
-    let filesByIdsCalls = 0;
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 84, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => {
-        filesByIdsCalls++;
-        if (filesByIdsCalls === 1) {
-          throw new Error("early metadata lookup failed");
-        }
-        return [file];
-      },
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(baseInput());
-
-    expect(result.sections.files).toHaveLength(1);
-    expect(result.sections.files[0]?.path).toBe("/ok.txt");
-  });
-
-  it("propagates authorizer rejection for a final candidate", async () => {
-    const file = makeFile({ id: 85, path: "alice/probe-err.txt", name: "probe-err.txt" });
-
-    const authorizer: ReadAuthorizer = {
-      async authorize() {
-        throw new Error("storage unreachable");
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 85, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => [file],
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    await expect(service.search(baseInput({ authorizer }))).rejects.toThrow("storage unreachable");
-  });
-
-  it("does not set partial flag from an unavailable old-path probe when final metadata points elsewhere and succeeds", async () => {
-    const primedFile = makeFile({ id: 86, path: "alice/old-unavail.txt", name: "old-unavail.txt" });
-    const finalFile = makeFile({ id: 86, path: "alice/new-ok.txt", name: "new-ok.txt" });
-
-    let filesByIdsCalls = 0;
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        if (target.path === "/old-unavail.txt") {
-          return { allowed: false, reason: "unavailable" };
-        }
-        return { allowed: true };
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 86, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => {
-        filesByIdsCalls++;
-        return [filesByIdsCalls === 1 ? primedFile : finalFile];
-      },
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.files).toHaveLength(1);
-    expect(result.sections.files[0]?.path).toBe("/new-ok.txt");
-    expect(result.partial).toBeUndefined();
-  });
-
-  it("does not reject or set partial from an old-path probe rejection when final metadata points elsewhere and succeeds", async () => {
-    const primedFile = makeFile({ id: 87, path: "alice/old-failed.txt", name: "old-failed.txt" });
-    const finalFile = makeFile({ id: 87, path: "alice/new-ok2.txt", name: "new-ok2.txt" });
-
-    let filesByIdsCalls = 0;
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        if (target.path === "/old-failed.txt") {
-          throw new Error("old path disconnected");
-        }
-        return { allowed: true };
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 87, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => {
-        filesByIdsCalls++;
-        return [filesByIdsCalls === 1 ? primedFile : finalFile];
-      },
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.files).toHaveLength(1);
-    expect(result.sections.files[0]?.path).toBe("/new-ok2.txt");
-    expect(result.partial).toBeUndefined();
-  });
-
-  it("ignores extra metadata rows returned by filesByIds during fanout priming", async () => {
-    const fanoutFile = makeFile({ id: 88, path: "alice/expected.txt", name: "expected.txt" });
-    const rogueFile = makeFile({ id: 999, path: "alice/rogue.txt", name: "rogue.txt" });
-
-    const calls: ReadAuthorizeTarget[] = [];
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        calls.push(target);
-        return { allowed: true };
-      },
-    };
-
-    let filesByIdsCalls = 0;
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 88, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => {
-        filesByIdsCalls++;
-        if (filesByIdsCalls === 1) {
-          return [fanoutFile, rogueFile];
-        }
-        return [fanoutFile];
-      },
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(baseInput({ authorizer }));
-
-    expect(result.sections.files).toHaveLength(1);
-    expect(result.sections.files[0]?.path).toBe("/expected.txt");
-    expect(calls).not.toContainEqual({ path: "/rogue.txt", kind: "file" });
-  });
-
-  it("skips fanout candidate priming when candidate does not match search filters", async () => {
-    const textFile = makeFile({ id: 89, path: "alice/notes.txt", name: "notes.txt", ext: ".txt" });
-
-    const calls: ReadAuthorizeTarget[] = [];
-    const authorizer: ReadAuthorizer = {
-      async authorize(target) {
-        calls.push(target);
-        return { allowed: true };
-      },
-    };
-
-    const indexQueries = fakeIndexQueries({
-      rootIdsByName: async () => ({ files: 1 }),
-      semantic: async () => [],
-      fulltext: async () => [{ fileId: 89, snippet: "hit" }],
-      filename: async () => [],
-      filesByIds: async () => [textFile],
-    });
-
-    const service = createSearchService(buildDeps({ indexQueries }));
-    const result = await service.search(
-      baseInput({
-        authorizer,
-        filters: { exts: [".pdf"], folder: null, after: null, before: null },
+  it("lists a folder found with a typo after every folder spelled as typed", async () => {
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([makeFolder("alice/Microlärsätt", 3000)]),
+        nameIndex: nameIndex({
+          folders: [
+            folderHitOf("alice/Mikrolärande", 0),
+            folderHitOf("alice/Microlärsätt", 3000),
+            folderHitOf("alice/Something else", 0),
+          ],
+        }),
       }),
     );
 
-    expect(result.sections.files).toEqual([]);
-    expect(calls).toEqual([]);
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.folders.map((folder) => folder.path)).toEqual([
+      "/Microlärsätt",
+      "/Mikrolärande",
+    ]);
   });
+
+  it("ranks a file found with a typo below names spelled as typed and above content matches", async () => {
+    const typed = makeFile({
+      id: 1,
+      path: "alice/Microlär plan.pdf",
+      name: "Microlär plan.pdf",
+      mtimeNs: daysAgoNs(3000),
+    });
+    const typo = makeFile({
+      id: 2,
+      path: "alice/Mikrolärande.pdf",
+      name: "Mikrolärande.pdf",
+      mtimeNs: daysAgoNs(0),
+    });
+    const content = makeFile({
+      id: 3,
+      path: "alice/notes.txt",
+      name: "notes.txt",
+      mtimeNs: daysAgoNs(0),
+    });
+    const filesByIds = vi.fn(async () => [typed, typo, content]);
+    const indexQueries = fakeIndexQueries({
+      semantic: async () => [],
+      fulltext: async () => [{ fileId: 3, snippet: "microlär" }],
+      filename: async () => [{ fileId: 1, hits: 1, similarity: 0.5 }],
+      filesByIds,
+    });
+    const service = createSearchService(
+      buildDeps({
+        indexQueries,
+        nameIndex: nameIndex({
+          files: [
+            nameHit(1, "alice/Microlär plan.pdf", 3000),
+            nameHit(2, "alice/Mikrolärande.pdf"),
+            nameHit(4, "alice/Unrelated.pdf"),
+          ],
+        }),
+      }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.files.map((hit) => hit.name)).toEqual([
+      "Microlär plan.pdf",
+      "Mikrolärande.pdf",
+      "notes.txt",
+    ]);
+    // A hit fdrive would not call a match is never even loaded.
+    expect(filesByIds).toHaveBeenLastCalledWith(expect.not.arrayContaining([4]));
+  });
+
+  it("asks the name index about the same places with fdrive's own folders left out", async () => {
+    const names = nameIndex({});
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([]),
+        nameIndex: names,
+      }),
+    );
+
+    await service.search(baseInput({ query: "Microlär" }));
+    await service.search(
+      baseInput({ query: "Microlär", filters: { ...NO_FILTERS, exts: [".pdf"] } }),
+    );
+
+    expect(names.search).toHaveBeenNthCalledWith(1, {
+      query: "Microlär",
+      scopes: [{ rootId: 1, fsPrefix: "/alice" }],
+      exclude: reserved(),
+      files: 25,
+      folders: 50,
+    });
+    // A type filter is files-only.
+    expect(names.search).toHaveBeenNthCalledWith(2, expect.objectContaining({ folders: 0 }));
+  });
+
+  it("does not ask the name index about a query with no words", async () => {
+    const names = nameIndex({});
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([]), nameIndex: names }),
+    );
+
+    await service.search(baseInput({ query: " - " }));
+
+    expect(names.search).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["has no answer", nameIndex(null)],
+    ["fails", { search: vi.fn(async () => Promise.reject(new Error("down"))) }],
+  ])("finds names only as typed when the name index %s", async (_, names) => {
+    const service = createSearchService(
+      buildDeps({
+        indexQueries: folderOnlyQueries([makeFolder("alice/Microlärsätt", 1)]),
+        nameIndex: names,
+      }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.sections.folders.map((folder) => folder.path)).toEqual(["/Microlärsätt"]);
+    expect(result.partial).toBeUndefined();
+  });
+
+  it("reports partial when the name index fills its limit", async () => {
+    const folders = Array.from({ length: 50 }, (_, i) => folderHitOf(`alice/Mikrolärande ${i}`, i));
+    const service = createSearchService(
+      buildDeps({ indexQueries: folderOnlyQueries([]), nameIndex: nameIndex({ folders }) }),
+    );
+
+    const result = await service.search(baseInput({ query: "Microlär" }));
+
+    expect(result.partial).toBe(true);
+    expect(result.sections.folders).toHaveLength(5);
+  });
+
+  let nextFolderId = 100;
+  function folderHitOf(path: string, ageDays: number): NameIndexHit {
+    nextFolderId += 1;
+    return nameHit(nextFolderId, path, ageDays);
+  }
 });

@@ -26,7 +26,7 @@ public actor Catalog {
         sqlite3_busy_timeout(connection, 10_000)
         var version: OpaquePointer?
         sqlite3_prepare_v2(connection, "PRAGMA user_version", -1, &version, nil)
-        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 4
+        let supported = sqlite3_step(version) == SQLITE_ROW && sqlite3_column_int(version, 0) <= 5
         sqlite3_finalize(version)
         guard supported else {
             throw DriveError.database("This metadata store requires a newer version of fdrive.")
@@ -48,10 +48,11 @@ public actor Catalog {
         CREATE TABLE IF NOT EXISTS folders (path TEXT PRIMARY KEY);
         CREATE TABLE IF NOT EXISTS listings (path TEXT PRIMARY KEY, token TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS folder_tokens (path TEXT PRIMARY KEY, token TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS change_feed (id INTEGER PRIMARY KEY CHECK (id=1), anchor TEXT NOT NULL, checked_at REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS pending (key TEXT PRIMARY KEY, id TEXT UNIQUE NOT NULL, localId TEXT NOT NULL, value TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
         CREATE TABLE IF NOT EXISTS departures (id TEXT NOT NULL, parent TEXT NOT NULL, revision INTEGER NOT NULL);
         CREATE INDEX IF NOT EXISTS departure_revision ON departures(revision);
-        PRAGMA user_version=4;
+        PRAGMA user_version=5;
         COMMIT;
         """
         guard sqlite3_exec(connection, schema, nil, nil, nil) == SQLITE_OK else {
@@ -117,9 +118,26 @@ public actor Catalog {
     public func hasListing(_ path: String) throws -> Bool { !(try rows("SELECT path FROM folders WHERE path=?", [path])).isEmpty }
     /// The server's token for each folder whose local children still match that listing.
     public func folderTokens() throws -> [String: String] {
-        Dictionary(uniqueKeysWithValues: try rows("SELECT path,token FROM folder_tokens").map { ($0[0], $0[1]) })
+        Dictionary(uniqueKeysWithValues: try rows("SELECT path,token FROM folder_tokens WHERE token<>''").map { ($0[0], $0[1]) })
     }
-    private func forgetToken(_ path: String) throws { try execute("DELETE FROM folder_tokens WHERE path=?", [path]) }
+    /// Folders whose local children still match a listing applied in full, with a token or without
+    /// one (a listing of several pages has none). The change feed names every change after that.
+    public func listedInFull() throws -> Set<String> { Set(try rows("SELECT path FROM folder_tokens").map { $0[0] }) }
+    /// The next refresh lists this folder whatever the server says about it.
+    public func forgetToken(_ path: String) throws { try execute("DELETE FROM folder_tokens WHERE path=?", [path]) }
+    /// Where the change feed got to, and when every browsed folder was last checked; nil until a
+    /// refresh that checked them all stored the anchor it started from.
+    public func changeFeed() throws -> (anchor: String, checkedAt: Date)? {
+        try rows("SELECT anchor,checked_at FROM change_feed").first.flatMap { row in
+            Double(row[1]).map { (row[0], Date(timeIntervalSince1970: $0)) }
+        }
+    }
+    /// Stored only once the refresh that read up to `anchor` applied everything it named.
+    public func saveChangeFeed(anchor: String, checkedAt: Date) throws {
+        try execute("INSERT INTO change_feed VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET anchor=excluded.anchor,checked_at=excluded.checked_at",
+                    [anchor, String(checkedAt.timeIntervalSince1970)])
+    }
+    public func forgetChangeFeed() throws { try execute("DELETE FROM change_feed") }
     public func generation() throws -> String { try rows("SELECT value FROM state WHERE key='generation'")[0][0] }
     public func revision() throws -> Int64 { Int64(try rows("SELECT value FROM state WHERE key='revision'")[0][0]) ?? 0 }
     /// Rename only the domain root's display metadata; preserve the catalog and cached items.
@@ -168,7 +186,8 @@ public actor Catalog {
     }
     /// Only complete listings enter this transaction. A timeout cannot turn a folder empty.
     /// `token` names this exact listing; it is kept only when every entry was applied, so a
-    /// later check that finds the same token proves the folder's children are current.
+    /// later check that finds the same token proves the folder's children are current. A listing
+    /// without one, applied in full, is still recorded as such for the change feed.
     public func reconcile(_ entries: [RemoteEntry], folder: String, listing: String? = nil, token: String? = nil) throws {
         try transaction {
             if let listing, try rows("SELECT token FROM listings WHERE path=?", [folder]).first?.first != listing { return }
@@ -204,10 +223,7 @@ public actor Catalog {
                 if pendingIds.contains(removedItem.id) { skipped = true; continue }
                 for descendant in knownItems where descendant.entry.path == removedItem.entry.path || descendant.entry.path.hasPrefix(removedItem.entry.path + "/") {
                     if pendingIds.contains(descendant.id) { skipped = true; continue }
-                    try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), descendant.id])
-                    try execute("DELETE FROM folders WHERE path=?", [descendant.entry.path])
-                    try execute("DELETE FROM listings WHERE path=?", [descendant.entry.path])
-                    try forgetToken(descendant.entry.path)
+                    try tombstone(descendant)
                 }
             }
             for entry in entries {
@@ -232,10 +248,37 @@ public actor Catalog {
                 }
             }
             try execute("INSERT OR IGNORE INTO folders VALUES (?)", [folder])
-            if let token, !skipped {
-                try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token])
+            if !skipped {
+                try execute("INSERT INTO folder_tokens VALUES (?,?) ON CONFLICT(path) DO UPDATE SET token=excluded.token", [folder, token ?? ""])
             } else { try forgetToken(folder) }
         }
+    }
+    /// An item that is gone: deletion evidence for the working set, and no listing of it.
+    private func tombstone(_ item: CatalogItem) throws {
+        try execute("UPDATE items SET deleted=1,revision=? WHERE id=?", [String(try next()), item.id])
+        try execute("DELETE FROM folders WHERE path=?", [item.entry.path])
+        try execute("DELETE FROM listings WHERE path=?", [item.entry.path])
+        try forgetToken(item.entry.path)
+    }
+    /// The server deleted this item for good: it and everything known inside it go.
+    public func purged(_ id: String) throws {
+        try transaction {
+            let gone = try item(id)
+            for known in try all() where known.entry.path == gone.entry.path || known.entry.path.hasPrefix(gone.entry.path + "/") {
+                try tombstone(known)
+            }
+        }
+    }
+    /// Whether a write this Mac has not finished touches `item` or anything inside it,
+    /// a new item there included.
+    public func hasPendingWrite(within item: CatalogItem) throws -> Bool {
+        try pendingWrites().contains { try $0.result == nil && touches($0, item) }
+    }
+    private func touches(_ pending: PendingWrite, _ item: CatalogItem) throws -> Bool {
+        let inside = { (path: String) in path == item.entry.path || path.hasPrefix(item.entry.path + "/") }
+        if let own = try? self.item(pending.localId), inside(own.entry.path) { return true }
+        guard let parent = try rows(Self.itemByRemoteId, [pending.request.parentId]).first else { return false }
+        return inside(try decode(parent[0]).entry.path)
     }
     public func downloaded(_ id: String, hash: String, size: Int64, expectedVersion: String? = nil) throws -> CatalogItem {
         try transaction {
@@ -339,6 +382,9 @@ public actor Catalog {
                        related.entry.path.hasPrefix(current.entry.path + "/") || current.entry.path.hasPrefix(related.entry.path + "/") {
                         throw DriveError.unavailable
                     }
+                    // A move to Trash takes everything inside along, so it waits for every
+                    // write there, a new item's too.
+                    if pending.request.parentId == "trash", try touches(other, current) { throw DriveError.unavailable }
                 }
             }
             try execute("INSERT INTO pending VALUES (?,?,?,?,0)", [pending.key, pending.id, pending.localId, String(decoding: try JSONEncoder().encode(pending), as: UTF8.self)])
@@ -351,10 +397,10 @@ public actor Catalog {
         var copy = pending; copy.error = error
         try execute("UPDATE pending SET value=? WHERE key=? AND completed=0", [String(decoding: try JSONEncoder().encode(copy), as: UTF8.self), pending.key])
     }
-    /// The person stopped this write and the server took back what it had copied,
-    /// so there is nothing left to recover or replay. The record goes entirely:
-    /// anything short of that leaves it counted as outstanding, which is how the
-    /// app decides a location still has work in flight.
+    /// The server settled this write as cancelled, so it can never publish and there
+    /// is nothing left to recover or replay. The record goes entirely: anything short
+    /// of that leaves it counted as outstanding, which is how the app decides a
+    /// location still has work in flight.
     public func writeCancelled(_ pending: PendingWrite) throws {
         try execute("DELETE FROM pending WHERE key=?", [pending.key])
     }

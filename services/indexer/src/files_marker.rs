@@ -1,7 +1,7 @@
 //! The `.fdrive-files` marker the API writes at the top of the files folder, naming the
 //! installation the folder belongs to. A root without it, or with another installation's, is
 //! a wrong mount (such as Compose's empty default when `FDRIVE_FILES_DIR` is unset): the
-//! indexer neither scans, watches nor applies queued changes there, so it never reads an
+//! indexer neither scans, watches nor applies journaled changes there, so it never reads an
 //! empty folder as every file deleted. The API decides when a folder may be adopted; the
 //! indexer only reads the marker.
 

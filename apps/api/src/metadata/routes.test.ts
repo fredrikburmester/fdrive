@@ -7,6 +7,7 @@ import { createMemoryRepos } from "@fdrive/db/testing";
 import { createLocalStorage } from "@fdrive/local";
 import type { Logger } from "pino";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../test/file-operations.js";
 import { type ActivityAdmissionDeps, createActivityAdmission } from "../activity/admission.js";
 import { createApp } from "../app.js";
 import type { Principal } from "../auth/principal.js";
@@ -20,11 +21,12 @@ import { createMetadataService } from "./service.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 
 /** Setup is complete, so the setup gate lets every route through. */
-const READY = async () => ({ required: false, providers: [] });
+const READY = async () => false;
 
 const ACCOUNT_ID = "00000000-0000-4000-8000-000000000001";
 const ALICE_IDENTITY_ID = "00000000-0000-4000-8000-0000000000a1";
@@ -120,7 +122,6 @@ async function buildHarness(withActivity = false) {
   const repos = createMemoryRepos();
   const metadata = createMetadataService(repos);
   const activity = activityReadsFixture(storage);
-  const bus = createEventBus();
   const config = loadConfig(REQUIRED_ENV);
   const clock = () => new Date(CLOCK_ISO);
 
@@ -131,24 +132,19 @@ async function buildHarness(withActivity = false) {
     startedAt: new Date(CLOCK_ISO),
     clock,
     principalResolver: async () => principal,
-    connectionStatus: READY,
+    setupRequired: READY,
     registerRoutes: (groups) => {
       registerFsRoutes(groups, {
-        bus,
-        clock,
+        files: testFileOperations({ metadata }),
         jobRunner: buildJobRunner(),
-        tmpDir: "/tmp",
         jobMaxBytes: 1_000_000_000,
         metadata,
         folderSize: {
           indexQueries: {
-            rootIdsByName: async () => ({}),
             subtreeSize: async () => ({ bytes: 0, files: 0 }),
           },
-          resolver: {
-            verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-          },
-          identities: { get: async () => null },
+          resolver: { scopesFor: async () => [] },
+          indexed: async () => false,
         },
       });
       registerMetadataRoutes(groups, {
@@ -567,22 +563,17 @@ describe("folder views", () => {
     });
   });
 
-  it("resets pins across every identity linked to the calling account", async () => {
+  it("resets every pin of the calling login and leaves another login's", async () => {
     const { app, repos, metadata } = await buildHarness();
-    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
-    const first = await repos.identities.create({
-      accountId: ACCOUNT_ID,
-      providerId: provider.id,
-      externalUsername: "alice-linked-1",
-    });
-    const second = await repos.identities.create({
-      accountId: ACCOUNT_ID,
-      providerId: provider.id,
-      externalUsername: "alice-linked-2",
+    const other = await repos.accounts.create({ displayName: "bob" });
+    const bob = await repos.identities.create({
+      accountId: other.id,
+      username: "bob",
     });
     await Promise.all([
-      metadata.setFolderView(first.id, "/one", { mode: "grid" }),
-      metadata.setFolderView(second.id, "/two", { mode: "tree" }),
+      metadata.setFolderView(ALICE_IDENTITY_ID, "/one", { mode: "grid" }),
+      metadata.setFolderView(ALICE_IDENTITY_ID, "/two", { mode: "tree" }),
+      metadata.setFolderView(bob.id, "/keep", { mode: "list" }),
     ]);
 
     const reset = await app.request(
@@ -590,8 +581,9 @@ describe("folder views", () => {
       requestedWith({ method: "DELETE" }),
     );
     expect(await reset.json()).toEqual({ ok: true });
-    await expect(metadata.getFolderView(first.id, "/one")).resolves.toBeNull();
-    await expect(metadata.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/one")).resolves.toBeNull();
+    await expect(metadata.getFolderView(ALICE_IDENTITY_ID, "/two")).resolves.toBeNull();
+    await expect(metadata.getFolderView(bob.id, "/keep")).resolves.toMatchObject({ mode: "list" });
   });
 });
 
@@ -622,7 +614,7 @@ describe("tag CRUD: error mapping", () => {
       startedAt: new Date(CLOCK_ISO),
       clock,
       principalResolver: async () => principal,
-      connectionStatus: READY,
+      setupRequired: READY,
       registerRoutes: (groups) => registerMetadataRoutes(groups, { metadata }),
     });
   }
@@ -649,7 +641,6 @@ describe("tag CRUD: error mapping", () => {
       touchRecent: async () => fail("touchRecent"),
       onMoved: async () => fail("onMoved"),
       onDeleted: async () => fail("onDeleted"),
-      onTrashed: async () => fail("onTrashed"),
       onCopied: () => undefined,
     };
     const app = await buildHarnessWithStubMetadata(metadata);

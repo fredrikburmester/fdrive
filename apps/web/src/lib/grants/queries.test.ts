@@ -25,7 +25,6 @@ const {
 } = await import("./queries");
 
 const GRANTS: GrantsResponse = {
-  available: true,
   owned: [
     {
       id: "00000000-0000-4000-8000-0000000000a1",
@@ -69,16 +68,13 @@ describe("reading grants", () => {
     await waitFor(() => expect(received.result.current).toEqual(GRANTS.received));
   });
 
-  it("asks nothing for a login whose storage cannot share, and reports none received", () => {
+  it("reports none received until the grants arrive", () => {
+    api.grants.mockReturnValue(new Promise(() => {}));
     const { wrapper } = setup();
 
-    const received = renderHook(() => useReceivedGrants(false), { wrapper });
-    const people = renderHook(() => useGrantPeople(false), { wrapper });
+    const received = renderHook(() => useReceivedGrants(), { wrapper });
 
     expect(received.result.current).toEqual([]);
-    expect(people.result.current.fetchStatus).toBe("idle");
-    expect(api.grants).not.toHaveBeenCalled();
-    expect(api.grantPeople).not.toHaveBeenCalled();
   });
 
   it("fetches the people a folder can be shared with", async () => {

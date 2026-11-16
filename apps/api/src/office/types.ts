@@ -1,36 +1,22 @@
-import type { Scope, StorageProvider } from "@fdrive/core";
-import type { Identity, Repos, Session, WopiLockRepo } from "@fdrive/db";
+import type { StorageProvider } from "@fdrive/core";
+import type {
+  Identity,
+  OfficeFile,
+  OfficeFileRepo,
+  Repos,
+  Session,
+  WopiLockRepo,
+} from "@fdrive/db";
 import type { PersonalActivityService } from "../activity/service.js";
 import type { Principal } from "../auth/principal.js";
-import type { EventBus } from "../events/bus.js";
+import type { WriteGate } from "../backups/write-gate.js";
+import type { FileOperations } from "../files/operations.js";
+import type { LocalGrantService } from "../local/grants.js";
 import type { MetadataService } from "../metadata/service.js";
 import type { DiscoveryCache } from "./protocol/discovery-cache.ts";
 import type { OfficeTokenCodec } from "./tokens.ts";
 
-export interface OfficeFile {
-  readonly id: string;
-  readonly providerId: string;
-  readonly rootName: string;
-  readonly path: string;
-  readonly createdAt: Date;
-}
-export interface OfficeFileRepo {
-  ensure(input: { providerId: string; rootName: string; path: string }): Promise<OfficeFile>;
-  get(id: string): Promise<OfficeFile | null>;
-  movePrefix(input: {
-    providerId: string;
-    rootName: string;
-    from: string;
-    to: string;
-    at: Date;
-  }): Promise<void>;
-  deletePrefix(input: {
-    providerId: string;
-    rootName: string;
-    path: string;
-    at: Date;
-  }): Promise<void>;
-}
+export type { OfficeFile, OfficeFileLocation, OfficeFileRepo } from "@fdrive/db";
 export interface OfficeConfig {
   readonly product: "onlyoffice" | "collabora";
   readonly serverUrl: string;
@@ -51,43 +37,42 @@ export interface OfficeDeps {
   readonly tokens: OfficeTokenCodec;
   readonly repos: Pick<Repos, "sessions" | "identities" | "accounts">;
   readonly files: OfficeFileRepo;
+  /** On the write scope's pool: lock requests wait for the document locks writes hold. */
   readonly locks: WopiLockRepo;
+  /** One transaction holding the document locks a write takes; see `createOfficeWriteScope`. */
   readonly withWriteScope: <T>(
-    providerId: string,
     callback: (scope: { files: OfficeFileRepo; locks: WopiLockRepo }) => Promise<T>,
   ) => Promise<T>;
   readonly clock: () => Date;
   /**
-   * Resolves `identity`'s trusted scopes (`ScopeResolver.configuredMappings`,
-   * not `verifiedIndexScopes`: Office works whether or not the root is
-   * indexed), or `null` when its storage has no index root or its provider
-   * is gone or disabled.
+   * Where a login's path lies in its owner's files and back
+   * (`LocalGrantService`): documents are keyed by owner and owner's path, so
+   * everyone a folder is shared with opens its documents under one id.
    */
-  readonly location: (
-    identity: Identity,
-  ) => Promise<{ providerId: string; scopes: readonly Scope[] } | null>;
-  readonly storageFactory: (
-    identityId: string,
-    providerId: string,
-  ) => StorageProvider | Promise<StorageProvider>;
-  readonly metadata: MetadataService;
-  readonly bus: EventBus;
+  readonly grants: Pick<LocalGrantService, "ownerPath" | "pathFor">;
+  readonly storageFactory: (identityId: string) => StorageProvider | Promise<StorageProvider>;
+  /** Writes and renames documents the way every change to files is made. */
+  readonly operations: FileOperations;
+  /** Recently opened, which opening a document touches. */
+  readonly metadata: Pick<MetadataService, "touchRecent">;
   /** Optional so office tests and deployments without history keep working.
    * Explicitly `undefined` is allowed so a caller can clear it in a spread. */
   readonly activity?: PersonalActivityService | undefined;
+  /**
+   * The backups' write gate, held while opening a document records it, so a
+   * capture's snapshot holds the recent entry and its history together.
+   */
+  readonly gate?: WriteGate;
 }
 export interface OfficeActor {
   readonly identity: Identity;
   readonly session: Session;
   readonly storage: StorageProvider;
-  /** The identity's configured scope mapping, resolved once when the actor was built. */
-  readonly scopes: readonly Scope[];
 }
 export interface OpenedFile {
   readonly actor: OfficeActor;
   readonly file: OfficeFile;
   readonly path: string;
-  readonly stat: Awaited<ReturnType<StorageProvider["statFile"]>>;
   readonly mode: "view" | "edit";
   readonly editAllowed: boolean;
 }

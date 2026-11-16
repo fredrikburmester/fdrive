@@ -14,10 +14,7 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/files",
 }));
 
-const singleIdentityMe = makeMe({
-  identities: [makeIdentity()],
-  activeIdentityId: "one",
-});
+const singleIdentityMe = makeMe({ identity: makeIdentity() });
 
 function renderButton(me: MeResponse) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -61,7 +58,11 @@ afterEach(() => {
 });
 
 it("stays enabled and opens the panel even when the search index is unavailable", async () => {
-  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({ available: false, semantic: false });
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: false,
+    semantic: false,
+    images: false,
+  });
   renderButton(singleIdentityMe);
   const button = await screen.findByRole("button", { name: "Search" });
   expect(button.hasAttribute("disabled")).toBe(false);
@@ -70,7 +71,11 @@ it("stays enabled and opens the panel even when the search index is unavailable"
 });
 
 it("stays enabled and opens the panel when the index is available", async () => {
-  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({ available: true, semantic: true });
+  vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
+    available: true,
+    semantic: true,
+    images: false,
+  });
   renderButton(singleIdentityMe);
   const button = await screen.findByRole("button", { name: "Search" });
   expect(button.hasAttribute("disabled")).toBe(false);

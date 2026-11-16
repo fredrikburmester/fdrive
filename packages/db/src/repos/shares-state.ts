@@ -4,8 +4,8 @@ export type ShareScope = "read" | "write";
 /** Operator-chosen public page rendering. Mirrors `@fdrive/contracts` `SharePresentation`. */
 export type SharePresentation = "auto" | "list" | "gallery" | "download";
 /**
- * One row of `app.shares`, a link fdrive serves itself. The password hash a
- * row may hold is never part of the record: see `ShareRepo.passwordHash`.
+ * One row of `app.shares`, a link fdrive serves itself, as its owner sees
+ * it: whether it has a password, never the hash (see `ShareRepo.get`).
  */
 export interface ShareRecord {
   readonly id: string;
@@ -14,28 +14,33 @@ export interface ShareRecord {
   readonly description: string;
   readonly scope: ShareScope;
   readonly paths: readonly string[];
+  /** Whether `password_hash` holds a hash. */
   readonly hasPassword: boolean;
   readonly expiresAt: Date | null;
   readonly maxDownloads: number;
   readonly createdAt: Date;
   readonly updatedAt: Date;
-  /** Legacy column name: the downloads (or uploads) counted so far (see `consume`). */
-  readonly views: number;
+  /** The downloads (or uploads) counted so far (see `consume`). */
+  readonly usedDownloads: number;
   readonly presentation: SharePresentation;
 }
 /**
- * A new owned row. `passwordHash` is stored beside the row and sets
- * `hasPassword`; `null` for an open share.
+ * The row a public request works from: the record and the password hash a
+ * visitor is verified against. Server-side only; no response carries it.
  */
+export interface PublicShareRecord extends ShareRecord {
+  readonly passwordHash: string | null;
+}
+/** A new owned row; `passwordHash` is `null` for an open share. */
 export interface ShareInsertInput
-  extends Omit<ShareRecord, "id" | "createdAt" | "updatedAt" | "views" | "hasPassword"> {
+  extends Omit<ShareRecord, "id" | "createdAt" | "updatedAt" | "usedDownloads" | "hasPassword"> {
   readonly passwordHash: string | null;
   readonly at: Date;
 }
 /**
  * A full replacement of an owned row's editable fields, applied at `at`.
  * `passwordHash` omitted keeps the stored password, `null` removes it and
- * a hash replaces it; `hasPassword` follows.
+ * a hash replaces it.
  */
 export interface ShareOwnedUpdate extends Omit<ShareInsertInput, "identityId" | "passwordHash"> {
   readonly passwordHash?: string | null;
@@ -48,20 +53,32 @@ export interface ShareRepo {
   insert(input: ShareInsertInput): Promise<ShareRecord>;
   /** Replaces an owned row's editable fields; `null` for a missing or foreign row. */
   updateOwned(identityId: string, id: string, input: ShareOwnedUpdate): Promise<ShareRecord | null>;
-  /** Internal public-proxy lookup only. Does not authorize access. */
-  get(id: string): Promise<ShareRecord | null>;
+  /**
+   * The one read a public request makes, with the password hash it verifies
+   * a visitor against. Does not authorize access.
+   */
+  get(id: string): Promise<PublicShareRecord | null>;
   getOwned(identityId: string, id: string): Promise<ShareRecord | null>;
   listOwned(identityId: string, options?: ShareListOptions): Promise<ShareRecord[]>;
   /** Removes the row; `false` for a missing or foreign one. */
   removeOwned(identityId: string, id: string): Promise<boolean>;
   /**
-   * The stored password hash of an owned share, for the credential check
-   * only; `null` for an open share or a missing one.
+   * Follows a move in the owner's files: in every share of `identityId`, the
+   * path `from` and (when `isDir`) every path inside it take their place
+   * under `to`, wherever that is; `/a` never matches `/ab`. What a link may
+   * serve there is the public routes' to decide. Leaves `updatedAt` alone,
+   * since the owner changed nothing. See `apps/api/src/shares/moves.ts`.
    */
-  passwordHash(id: string): Promise<string | null>;
+  movePrefix(identityId: string, from: string, to: string, isDir: boolean): Promise<void>;
+  /**
+   * Follows a delete in the owner's files: every share of `identityId` drops
+   * `path` and (when `isDir`) every path inside it, and a share left with no
+   * path is removed, so no link is left where a new item could appear.
+   */
+  deletePrefix(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
    * Spends one download of an owned share, after the download succeeded:
-   * one more `views` only while the limit and the expiry still allow it.
+   * one more `usedDownloads` only while the limit and the expiry still allow it.
    * `null` when the row is missing, expired or exhausted, so a
    * caller that got `null` has been refused, never counted.
    */
@@ -202,13 +219,47 @@ export function compareShareRecords(a: ShareRecord, b: ShareRecord): number {
   if (time !== 0) return time;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
+/** Checks paths `movePrefix` or `deletePrefix` follows: canonical, and never the root itself. */
+export function validateSharePathChange(identityId: string, ...paths: string[]): void {
+  validateShareId(identityId);
+  for (const path of paths) {
+    validateSharePath(path);
+    if (path === "/") throw new TypeError("The root cannot move or go");
+  }
+}
+/**
+ * `paths` once `from` moved to `to`, in order. A path the move lands on a
+ * second time (an overwriting move onto another shared path) is kept once,
+ * where it first stood.
+ */
+export function movedSharePaths(
+  paths: readonly string[],
+  from: string,
+  to: string,
+  isDir: boolean,
+): string[] {
+  const prefix = `${from}/`;
+  const moved = paths.map((path) =>
+    path === from
+      ? to
+      : isDir && path.startsWith(prefix)
+        ? `${to}/${path.slice(prefix.length)}`
+        : path,
+  );
+  return [...new Set(moved)];
+}
+/** Whether `path` is `changed`, or (when `isDir`) inside it. */
+export function sharePathChanged(path: string, changed: string, isDir: boolean): boolean {
+  return path === changed || (isDir && path.startsWith(`${changed}/`));
+}
+
 /** Whether `record` still admits one more download at `now`; the check `consume` makes. */
 export function shareAdmitsDownload(
-  record: Pick<ShareRecord, "expiresAt" | "maxDownloads" | "views">,
+  record: Pick<ShareRecord, "expiresAt" | "maxDownloads" | "usedDownloads">,
   now: Date,
 ): boolean {
   if (record.expiresAt !== null && record.expiresAt.getTime() <= now.getTime()) return false;
-  return record.maxDownloads === 0 || record.views < record.maxDownloads;
+  return record.maxDownloads === 0 || record.usedDownloads < record.maxDownloads;
 }
 
 /** Test adapter. Writes mutate synchronously, so concurrent promises retain one UUID. */
@@ -224,7 +275,7 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
         id: nextId(),
         identityId: input.identityId,
         hasPassword: input.passwordHash !== null,
-        views: 0,
+        usedDownloads: 0,
         createdAt: new Date(input.at),
         updatedAt: new Date(input.at),
       };
@@ -250,7 +301,7 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
     async get(id) {
       validateShareId(id);
       const row = rows.get(id);
-      return row ? cloneShareRecord(row) : null;
+      return row ? { ...cloneShareRecord(row), passwordHash: hashes.get(id) ?? null } : null;
     },
     async getOwned(identityId, id) {
       validateShareOwnership(identityId, id);
@@ -272,9 +323,27 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
       hashes.delete(id);
       return rows.delete(id);
     },
-    async passwordHash(id) {
-      validateShareId(id);
-      return hashes.get(id) ?? null;
+    async movePrefix(identityId, from, to, isDir) {
+      validateSharePathChange(identityId, from, to);
+      if (from === to) return;
+      for (const [id, row] of rows) {
+        if (row.identityId !== identityId) continue;
+        if (!row.paths.some((path) => sharePathChanged(path, from, isDir))) continue;
+        rows.set(id, { ...row, paths: movedSharePaths(row.paths, from, to, isDir) });
+      }
+    },
+    async deletePrefix(identityId, path, isDir) {
+      validateSharePathChange(identityId, path);
+      for (const [id, row] of rows) {
+        if (row.identityId !== identityId) continue;
+        const kept = row.paths.filter((shared) => !sharePathChanged(shared, path, isDir));
+        if (kept.length === row.paths.length) continue;
+        if (kept.length > 0) rows.set(id, { ...row, paths: kept });
+        else {
+          rows.delete(id);
+          hashes.delete(id);
+        }
+      }
     },
     async consume(id, now) {
       validateShareId(id);
@@ -282,7 +351,7 @@ export function createMemoryShareRepo(options: MemoryShareOptions = {}): ShareRe
       const current = rows.get(id);
       if (current === undefined) return null;
       if (!shareAdmitsDownload(current, now)) return null;
-      const record = { ...current, views: current.views + 1 };
+      const record = { ...current, usedDownloads: current.usedDownloads + 1 };
       rows.set(id, record);
       return cloneShareRecord(record);
     },

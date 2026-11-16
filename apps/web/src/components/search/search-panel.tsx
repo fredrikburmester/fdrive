@@ -1,8 +1,15 @@
 "use client";
 
-import type { FsEntry, ImageSearchHit, SearchHit, SearchSnippet } from "@fdrive/contracts";
+import type {
+  CreateSavedSearchRequest,
+  FsEntry,
+  ImageSearchHit,
+  SavedSearch,
+  SearchHit,
+  SearchSnippet,
+} from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
-import { FolderIcon, FolderOpenIcon } from "lucide-react";
+import { BookmarkPlusIcon, FolderIcon, FolderOpenIcon } from "lucide-react";
 import type { Route } from "next";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -26,7 +33,9 @@ import {
   CommandList,
   CommandSeparator,
 } from "@/components/ui/command";
+import { Input } from "@/components/ui/input";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Toggle } from "@/components/ui/toggle";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -59,7 +68,6 @@ import { makeItemValue, parseItemValue } from "@/lib/search/item-value";
 import { searchPanelLayout } from "@/lib/search/panel-layout";
 import {
   isPermanentSearchStatus,
-  isSearchStarting,
   searchUnavailableMessage,
   useImageSearchResults,
   useSearchResults,
@@ -67,6 +75,7 @@ import {
 } from "@/lib/search/queries";
 import { pushRecent, type RecentItem, readRecent } from "@/lib/search/recent";
 import { revealHref } from "@/lib/search/reveal";
+import { useSavedSearchMutations } from "@/lib/search/saved-searches";
 import { filterVisualHits, shouldQueryVisualMatches } from "@/lib/search/visual-matches";
 
 const DEBOUNCE_MS = 150;
@@ -78,6 +87,56 @@ function toRoute(href: string): Route {
 export interface SearchPanelProps {
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** Opens the panel on this saved search's query and filters. */
+  readonly saved?: SavedSearch | null;
+}
+
+/** Saves the panel's query and filters under a name, which defaults to the query. */
+function SaveSearchButton({ search }: { search: Omit<CreateSavedSearchRequest, "name"> | null }) {
+  const { create } = useSavedSearchMutations();
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        render={<Button variant="ghost" size="sm" className="ml-auto" disabled={!search} />}
+      >
+        <BookmarkPlusIcon />
+        Save search
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-64"
+        initialFocus={inputRef as RefObject<HTMLElement | null>}
+      >
+        {search ? (
+          <form
+            className="flex gap-2"
+            onKeyDown={(event) => {
+              // cmdk reads Enter and the arrows on the panel; keep them in this form.
+              if (event.key !== "Escape") event.stopPropagation();
+            }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              const name = inputRef.current?.value.trim() || search.query;
+              create.mutate({ ...search, name }, { onSuccess: () => setOpen(false) });
+            }}
+          >
+            <Input
+              ref={inputRef}
+              aria-label="Name"
+              defaultValue={search.query}
+              maxLength={100}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <Button type="submit" disabled={create.isPending}>
+              Save
+            </Button>
+          </form>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /** A 32px thumbnail for a hit, falling back to the file-kind icon on load error or absence. */
@@ -288,12 +347,14 @@ function RecentRow({ item }: { item: RecentItem }) {
  * Cmd/Ctrl+K to open is wired by `SearchButton`, which owns this
  * component's `open` state.
  */
-export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
+export function SearchPanel({ open, onOpenChange, saved = null }: SearchPanelProps) {
   const [viewMode] = useDefaultView();
   const router = useRouter();
   const pathname = usePathname();
   const { data: me } = useShellMe();
-  const currentFolder = pathFromFilesPathname(pathname) ?? "/";
+  // A saved search keeps the folder it was saved in; otherwise "this folder" is the one in view.
+  const [savedFolder, setSavedFolder] = useState<string | null>(null);
+  const currentFolder = savedFolder ?? pathFromFilesPathname(pathname) ?? "/";
   const isMobile = useIsMobile();
   const mobileLayout = searchPanelLayout(isMobile) === "mobile";
   const inputRef = useRef<HTMLInputElement>(null);
@@ -305,8 +366,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const [selectedValue, setSelectedValue] = useState("");
   const [enterAction, setEnterActionState] = useState<EnterAction>(DEFAULT_ENTER_ACTION);
   const trimmedQuery = committedQuery.trim();
-  const statusRetryActive = open && trimmedQuery.length > 0;
-  const { data: searchStatus } = useSearchStatus({ retryUnavailable: statusRetryActive });
+  const retryActive = open && trimmedQuery.length > 0;
+  const { data: searchStatus } = useSearchStatus();
   const imagesAvailable = searchStatus?.images === true;
 
   const debouncerRef = useRef<Debounced<string> | null>(null);
@@ -323,18 +384,27 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
       setInputValue("");
       setCommittedQuery("");
       setChips(DEFAULT_SEARCH_CHIPS);
+      setSavedFolder(null);
       return;
     }
     setRecent(
       me
         ? readRecent(window.localStorage, {
             accountId: me.account.id,
-            identityId: me.activeIdentityId,
+            identityId: me.identity.id,
           })
         : [],
     );
     setEnterActionState(readEnterAction(window.localStorage));
   }, [open, me]);
+
+  useEffect(() => {
+    if (!open || saved === null) return;
+    setInputValue(saved.query);
+    setCommittedQuery(saved.query);
+    setChips({ type: saved.type, folderOnly: saved.folder !== null });
+    setSavedFolder(saved.folder);
+  }, [open, saved]);
 
   const handleInputChange = useCallback((value: string) => {
     setInputValue(value);
@@ -358,9 +428,8 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     error: searchError,
   } = useSearchResults(committedQuery, chips, currentFolder, {
     enabled: open && trimmedQuery.length > 0 && me !== undefined,
-    retryUnavailable: statusRetryActive && !isPermanentSearchStatus(searchStatus),
+    retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
-    identityId: me?.activeIdentityId,
   });
 
   const {
@@ -369,8 +438,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
     error: imageError,
   } = useImageSearchResults(committedQuery, {
     enabled: queryVisualMatches,
-    identityId: me?.activeIdentityId,
-    retryUnavailable: statusRetryActive && !isPermanentSearchStatus(searchStatus),
+    retryUnavailable: retryActive && !isPermanentSearchStatus(searchStatus),
     status: searchStatus,
   });
 
@@ -388,7 +456,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
         pushRecent(
           window.localStorage,
           { path, name: baseName(path), openedAt: new Date().toISOString() },
-          { accountId: me.account.id, identityId: me.activeIdentityId },
+          { accountId: me.account.id, identityId: me.identity.id },
         );
       onOpenChange(false);
     },
@@ -474,13 +542,6 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
   const showVisualUnavailableNotice =
     visualUnavailable && !(unavailable && !hasVisualResults && !waitingForImages);
   const unavailableMessage = searchUnavailableMessage(searchStatus);
-  const searchIsStarting = isSearchStarting(searchStatus);
-  const textUnavailableMessage = searchIsStarting
-    ? unavailableMessage
-    : "Text search is unavailable.";
-  const visualUnavailableMessage = searchIsStarting
-    ? unavailableMessage
-    : "Visual search is unavailable.";
   const visualFolderNotice = queryVisualMatches && chips.folderOnly && !isImageFetching;
   const textPartial = Boolean(response?.partial);
   const visualPartial = queryVisualMatches && Boolean(imageResponse?.partial);
@@ -563,8 +624,21 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
               setChips((current) => ({ ...current, folderOnly: pressed }))
             }
           >
-            This folder only
+            {savedFolder === null
+              ? "This folder only"
+              : `Only in ${baseName(savedFolder) || "Home"}`}
           </Toggle>
+          <SaveSearchButton
+            search={
+              trimmedQuery
+                ? {
+                    query: trimmedQuery,
+                    type: chips.type,
+                    folder: chips.folderOnly ? currentFolder : null,
+                  }
+                : null
+            }
+          />
         </div>
         {searchError ? (
           <p role="alert" className="px-3 py-2 text-xs text-destructive">
@@ -592,7 +666,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            {textUnavailableMessage}
+            Text search is unavailable.
           </p>
         ) : null}
         {showVisualUnavailableNotice ? (
@@ -600,7 +674,7 @@ export function SearchPanel({ open, onOpenChange }: SearchPanelProps) {
             role="status"
             className="border-b border-border bg-muted/50 px-3 py-1.5 text-xs text-muted-foreground"
           >
-            {visualUnavailableMessage}
+            Visual search is unavailable.
           </p>
         ) : null}
         {visualFolderNotice ? (

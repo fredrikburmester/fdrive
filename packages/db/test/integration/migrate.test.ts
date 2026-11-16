@@ -1,63 +1,179 @@
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { readdir, readFile, rm } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { migrationsThrough, SQUASHED_MIGRATIONS } from "@fdrive/testkit";
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { sql } from "drizzle-orm";
+import { is, sql } from "drizzle-orm";
 import { migrate as runMigrations } from "drizzle-orm/node-postgres/migrator";
+import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDb, type Db, migrate, schema } from "../../src/index.js";
-
-const MIGRATIONS = fileURLToPath(new URL("../../drizzle/", import.meta.url));
-
-/** A copy of the migrations folder that ends at `last`, to leave a database as an older fdrive did. */
-async function migrationsUpTo(last: string): Promise<string> {
-  const journal = JSON.parse(await readFile(join(MIGRATIONS, "meta", "_journal.json"), "utf8")) as {
-    entries: { tag: string }[];
-  };
-  const end = journal.entries.findIndex((entry) => entry.tag === last);
-  if (end < 0) throw new Error(`no migration ${last}`);
-  const entries = journal.entries.slice(0, end + 1);
-  const folder = await mkdtemp(join(tmpdir(), "fdrive-migrations-"));
-  await mkdir(join(folder, "meta"));
-  await writeFile(join(folder, "meta", "_journal.json"), JSON.stringify({ ...journal, entries }));
-  for (const entry of entries) {
-    await copyFile(join(MIGRATIONS, `${entry.tag}.sql`), join(folder, `${entry.tag}.sql`));
-  }
-  return folder;
-}
+import { type CreateDbResult, createDb, type Db, migrate, schema } from "../../src/index.js";
 
 let container: StartedPostgreSqlContainer;
 let db: Db;
 let close: () => Promise<void>;
+const opened: CreateDbResult[] = [];
 
-const EXPECTED_TABLES: ReadonlyArray<{ readonly schema: string; readonly table: string }> = [
-  { schema: "app", table: "providers" },
-  { schema: "app", table: "accounts" },
-  { schema: "app", table: "identities" },
-  { schema: "app", table: "credentials" },
-  { schema: "app", table: "sessions" },
-  { schema: "app", table: "api_tokens" },
-  { schema: "app", table: "tags" },
-  { schema: "app", table: "file_tags" },
-  { schema: "app", table: "favorites" },
-  { schema: "app", table: "folder_views" },
-  { schema: "app", table: "recents" },
-  { schema: "app", table: "thumbnails" },
-  { schema: "app", table: "image_embeddings" },
-  { schema: "app", table: "wopi_locks" },
-  { schema: "app", table: "shares" },
-  { schema: "app", table: "settings" },
-  { schema: "idx", table: "roots" },
-  { schema: "idx", table: "files" },
-  { schema: "idx", table: "chunks" },
-  { schema: "idx", table: "scans" },
-  { schema: "idx", table: "moves" },
-  { schema: "idx", table: "events" },
-  { schema: "idx", table: "work" },
-  { schema: "idx", table: "folders" },
-  { schema: "idx", table: "schema_version" },
-];
+/** Every table the drizzle schema declares, as `schema.table`. */
+const EXPECTED_TABLES = Object.values(schema as Record<string, unknown>)
+  .filter((value): value is PgTable => is(value, PgTable))
+  .map((table) => {
+    const config = getTableConfig(table);
+    return `${config.schema}.${config.name}`;
+  })
+  .sort();
+
+/** The migrations this package ships. */
+const SHIPPED_MIGRATIONS = path.join(path.dirname(fileURLToPath(import.meta.url)), "../../drizzle");
+
+interface JournalEntry {
+  readonly tag: string;
+  readonly when: number;
+}
+
+async function journal(folder: string): Promise<JournalEntry[]> {
+  const parsed = JSON.parse(await readFile(path.join(folder, "meta/_journal.json"), "utf8")) as {
+    entries: JournalEntry[];
+  };
+  return parsed.entries;
+}
+
+/** The history drizzle records for `folder`'s migrations: each one's sha256 and journal date. */
+async function expectedHistory(folder: string) {
+  return Promise.all(
+    (await journal(folder)).map(async (entry) => ({
+      hash: createHash("sha256")
+        .update(await readFile(path.join(folder, `${entry.tag}.sql`)))
+        .digest("hex"),
+      created_at: String(entry.when),
+    })),
+  );
+}
+
+/** A new, empty database named `name` on the test server. */
+async function database(name: string): Promise<Db> {
+  await db.execute(sql.raw(`create database ${name}`));
+  const uri = new URL(container.getConnectionUri());
+  uri.pathname = `/${name}`;
+  const created = createDb(uri.toString());
+  opened.push(created);
+  return created.db;
+}
+
+/** A database named `name` that the migrations in `folder` built through `through`. */
+async function migratedThrough(name: string, folder: string, through: string): Promise<Db> {
+  const target = await database(name);
+  const migrations = await migrationsThrough(folder, through);
+  try {
+    await runMigrations(target, { migrationsFolder: migrations });
+  } finally {
+    await rm(migrations, { recursive: true, force: true });
+  }
+  return target;
+}
+
+/** `pg_dump` of database `name`, from inside the container, without its random `\restrict` key. */
+async function dump(name: string, ...options: string[]): Promise<string> {
+  const result = await container.exec(["pg_dump", "--username", "fdrive", ...options, name]);
+  if (result.exitCode !== 0) throw new Error(`pg_dump ${name}: ${result.stderr}`);
+  return result.stdout
+    .split("\n")
+    .filter((line) => !/^\\(un)?restrict /.test(line))
+    .join("\n");
+}
+
+const schemaOf = (name: string) => dump(name, "--schema-only");
+/** Every row outside drizzle's bookkeeping, sequence positions included. */
+const dataOf = (name: string) => dump(name, "--data-only", "--exclude-schema=drizzle");
+
+async function history(target: Db) {
+  const result = await target.execute<{ hash: string; created_at: string }>(sql`
+    select hash, created_at::text from drizzle.__drizzle_migrations order by created_at, id`);
+  return result.rows;
+}
+
+/** Every row of every `app` and `idx` table, as JSON, in a stable order. */
+async function contents(target: Db): Promise<Record<string, Record<string, unknown>[]>> {
+  const tables = await target.execute<{ name: string }>(sql`
+    select table_schema || '.' || table_name as name from information_schema.tables
+    where table_schema in ('app', 'idx') and table_type = 'BASE TABLE' order by 1`);
+  const result: Record<string, Record<string, unknown>[]> = {};
+  for (const { name } of tables.rows) {
+    const rows = await target.execute<{ rows: Record<string, unknown>[] }>(
+      sql.raw(`select coalesce(jsonb_agg(to_jsonb(t) order by to_jsonb(t)::text), '[]') as rows
+        from ${name} t`),
+    );
+    result[name] = rows.rows[0]?.rows ?? [];
+  }
+  return result;
+}
+
+const ALICE = "00000000-0000-4000-8000-0000000000a1";
+const BOB = "00000000-0000-4000-8000-0000000000b1";
+const ALICE_LOGIN = "00000000-0000-4000-8000-0000000000a2";
+const BOB_LOGIN = "00000000-0000-4000-8000-0000000000b2";
+const WORK_TAG = "00000000-0000-4000-8000-0000000000c1";
+
+/** Rows as v0.7.0-rc.11 stores them, in every kind of table an owner fills. */
+async function seedRows(older: Db): Promise<void> {
+  await older.execute(sql`
+    insert into app.accounts (id, display_name, is_admin) values
+      (${ALICE}, 'Alice', true), (${BOB}, null, false)`);
+  await older.execute(sql`
+    insert into app.identities (id, account_id, username) values
+      (${ALICE_LOGIN}, ${ALICE}, 'alice'), (${BOB_LOGIN}, ${BOB}, 'bob')`);
+  await older.execute(sql`
+    insert into app.local_users (username, password_hash, storage_limit) values
+      ('alice', 'scrypt$16384$8$1$AA$AA', null), ('bob', 'scrypt$16384$8$1$BB$BB', 1000000)`);
+  await older.execute(sql`
+    insert into app.settings (key, value) values
+      ('storage.id', '{"id":"00000000-0000-4000-8000-0000000000d1"}'),
+      ('setup.owner.v1', ${JSON.stringify({ version: 1, state: "complete", accountId: ALICE })})`);
+  await older.execute(sql`
+    insert into app.trash_items (identity_id, original_path, name, kind, size, deleted_at,
+      moving_from) values
+      (${ALICE_LOGIN}, '/docs/report.pdf', 'report.pdf', 'file', 1234, '2026-11-14T10:00:00Z', null),
+      (${ALICE_LOGIN}, '/photos/2024', '2024', 'dir', 0, '2026-11-13T09:00:00Z', null),
+      (${BOB_LOGIN}, '/notes.txt', 'notes.txt', 'file', 12, '2026-11-12T08:00:00Z',
+        '/.trash/.fdrive-move-v1/file/p/notes.txt/v/1')`);
+  await older.execute(sql`
+    insert into app.shares (identity_id, name, scope, paths, password_hash, max_downloads,
+      used_downloads, description) values
+      (${ALICE_LOGIN}, 'Report', 'read', array['/docs/report.pdf'], 'scrypt$1$8$1$AA$AA', 5, 2,
+        'For Bob')`);
+  await older.execute(sql`
+    insert into app.tags (id, account_id, name, color) values (${WORK_TAG}, ${ALICE}, 'Work', 'blue')`);
+  await older.execute(sql`
+    insert into app.file_tags (identity_id, path, tag_id) values
+      (${ALICE_LOGIN}, '/docs/a.txt', ${WORK_TAG})`);
+  await older.execute(sql`
+    insert into app.favorites (identity_id, path) values (${ALICE_LOGIN}, '/docs/a.txt')`);
+  await older.execute(sql`
+    insert into app.local_grants (owner_username, path, grantee_username, access) values
+      ('alice', '/shared', 'bob', 'write')`);
+  await older.execute(sql`
+    insert into app.saved_searches (account_id, name, query, type) values
+      (${ALICE}, 'Reports', 'report', 'all')`);
+  await older.execute(sql`
+    insert into app.api_tokens (account_id, identity_id, name, token_hash, access) values
+      (${ALICE}, ${ALICE_LOGIN}, 'Laptop', 'token-hash', '{"mode":"read","paths":["/"]}')`);
+  await older.execute(sql`
+    insert into app.desktop_items (identity_id, path, kind) values
+      (${ALICE_LOGIN}, '/docs/a.txt', 'file')`);
+  await older.execute(sql`
+    insert into idx.files (root_id, path, name, size, mtime_ns) values
+      (1, 'alice/docs/a.txt', 'a.txt', 3, 1)`);
+}
+
+/** `rows` without the `original_path` of `app.desktop_items`, which the upgrade drops. */
+function withoutDesktopOriginalPath(
+  rows: Record<string, Record<string, unknown>[]>,
+): Record<string, Record<string, unknown>[]> {
+  const items = (rows["app.desktop_items"] ?? []).map(({ original_path: _, ...row }) => row);
+  items.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+  return { ...rows, "app.desktop_items": items };
+}
 
 beforeAll(async () => {
   container = await new PostgreSqlContainer("pgvector/pgvector:pg17")
@@ -72,6 +188,7 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
+  await Promise.all(opened.map((database) => database.close()));
   await close();
   await container.stop();
 }, 180_000);
@@ -80,6 +197,13 @@ describe("migrate", () => {
   it("applies every migration and is a no-op the second time", async () => {
     await migrate(db);
     await expect(migrate(db)).resolves.toBeUndefined();
+    // The files folder's index root is there before anything indexes it.
+    const roots = await db.execute(sql`select id, name from idx.roots`);
+    expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
+    // No setting either: the API creates the storage id when it first starts,
+    // and a restore needs every backed-up table empty.
+    const settings = await db.execute(sql`select key from app.settings`);
+    expect(settings.rows).toEqual([]);
   });
 
   it("covers every app foreign key with an unconditional leading-column index", async () => {
@@ -101,7 +225,8 @@ describe("migrate", () => {
 
   it("indexes the idx read paths on their filter and sort columns", async () => {
     const expected: ReadonlyArray<{ readonly name: string; readonly definition: string }> = [
-      { name: "moves_root_id_idx", definition: "USING btree (root_id)" },
+      { name: "changes_root_id_id_idx", definition: "USING btree (root_id, id)" },
+      { name: "changes_created_at_idx", definition: "USING btree (created_at)" },
       { name: "ocr_log_status_at_idx", definition: "USING btree (status, at DESC NULLS LAST)" },
       {
         name: "scans_root_id_started_at_idx",
@@ -120,15 +245,14 @@ describe("migrate", () => {
     }
   });
 
-  it("creates every table from the domain model", async () => {
-    for (const { schema: schemaName, table } of EXPECTED_TABLES) {
-      const result = await db.execute(sql`
-        select 1
-        from information_schema.tables
-        where table_schema = ${schemaName} and table_name = ${table}
-      `);
-      expect(result.rows, `${schemaName}.${table} should exist`).toHaveLength(1);
-    }
+  it("creates exactly the tables of the domain model", async () => {
+    const result = await db.execute<{ name: string }>(sql`
+      select table_schema || '.' || table_name as name
+      from information_schema.tables
+      where table_schema in ('app', 'idx')
+    `);
+    expect(EXPECTED_TABLES).toContain("idx.changes");
+    expect(result.rows.map((row) => row.name).sort()).toEqual(EXPECTED_TABLES);
   });
 
   it("indexes a root, a file, and a chunk with a 384-dim embedding, then queries them back", async () => {
@@ -231,101 +355,135 @@ describe("migrate", () => {
       }),
     ).rejects.toThrow();
   });
+
+  it("refuses an API token without an access level", async () => {
+    const error = await db
+      .execute(sql`
+        insert into app.api_tokens (account_id, identity_id, name, token_hash)
+        values (gen_random_uuid(), gen_random_uuid(), 'Old', 'old-hash')
+      `)
+      .catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ cause: { code: "23502", column: "access" } });
+  });
 });
 
-describe("migration 0019", () => {
-  it("keeps the old index when an indexer created the files root before the API migrated", async () => {
-    await db.execute(sql.raw("create database fdrive_root_race"));
-    const url = new URL(container.getConnectionUri());
-    url.pathname = "/fdrive_root_race";
-    const older = createDb(url.toString());
-    const folder = await migrationsUpTo("0016_personal_activity");
-    try {
-      // A 0.6 install: the folder is indexed under `sftpgo`, with an Office document.
-      await runMigrations(older.db, { migrationsFolder: folder });
-      await older.db.execute(sql`
-        insert into app.providers (id, type, base_url, enabled, managed_by_env)
-        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'http://sftpgo:8080', true, true)`);
-      await older.db.execute(sql`insert into idx.roots (name) values ('sftpgo')`);
-      await older.db.execute(sql`
-        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
-        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'done'
-        from idx.roots where name = 'sftpgo'`);
-      await older.db.execute(sql`
-        insert into app.office_files (provider_id, root_name, path)
-        values ('00000000-0000-4000-8000-0000000000a1', 'sftpgo', 'alice/report.docx')`);
-      // The new indexer starts first and creates `files`, then indexes again under it.
-      await older.db.execute(sql`insert into idx.roots (name) values ('files')`);
-      await older.db.execute(sql`
-        insert into idx.files (root_id, path, name, ext, size, mtime_ns, text_status)
-        select id, 'alice/report.docx', 'report.docx', '.docx', 10, 1, 'pending'
-        from idx.roots where name = 'files'`);
-      await older.db.execute(sql`
-        insert into app.office_files (provider_id, root_name, path)
-        values ('00000000-0000-4000-8000-0000000000a1', 'files', 'alice/report.docx')`);
+describe("the squashed history", () => {
+  const SQUASHED_0047 = "0047_drop_desktop_original_path";
+  let fresh: Db;
 
-      await migrate(older.db);
-
-      const roots = await older.db.execute<{ id: number; name: string }>(
-        sql`select id, name from idx.roots order by id`,
-      );
-      expect(roots.rows).toEqual([{ id: 1, name: "files" }]);
-      const files = await older.db.execute<{ root_id: number; status: string }>(
-        sql`select root_id, text_status as status from idx.files`,
-      );
-      expect(files.rows).toEqual([{ root_id: 1, status: "done" }]);
-      const office = await older.db.execute<{ root_name: string }>(
-        sql`select root_name from app.office_files`,
-      );
-      expect(office.rows).toEqual([{ root_name: "files" }]);
-      // The indexer and OCR wait for this before touching roots.
-      const version = await older.db.execute<{ version: number }>(
-        sql`select max(version) as version from idx.schema_version`,
-      );
-      expect(version.rows[0]?.version).toBe(2);
-    } finally {
-      await older.close();
-      await rm(folder, { recursive: true, force: true });
-    }
+  beforeAll(async () => {
+    fresh = await database("new_install");
+    await migrate(fresh);
   });
 
-  it("switches off WebDAV and S3 rows and keeps them for the logins that reference them", async () => {
-    await db.execute(sql.raw("create database fdrive_storage_types"));
-    const url = new URL(container.getConnectionUri());
-    url.pathname = "/fdrive_storage_types";
-    const older = createDb(url.toString());
-    const folder = await migrationsUpTo("0018_local_grants");
-    try {
-      await runMigrations(older.db, { migrationsFolder: folder });
-      await older.db.execute(sql`
-        insert into app.providers (type, base_url, enabled, managed_by_env) values
-          ('local', 'local', true, true),
-          ('webdav', 'http://dav.test/', true, true),
-          ('s3', 'http://s3.test/bucket', true, false)`);
-      await older.db.execute(sql`
-        insert into app.accounts (id) values ('00000000-0000-4000-8000-000000000001')`);
-      await older.db.execute(sql`
-        insert into app.identities (account_id, provider_id, external_username)
-        select '00000000-0000-4000-8000-000000000001', id, 'alice'
-        from app.providers where type = 'webdav'`);
+  it("dates the baseline as the old 0000, so databases that ran the old history skip it", async () => {
+    const shipped = await journal(SHIPPED_MIGRATIONS);
+    const squashed = await journal(SQUASHED_MIGRATIONS);
+    expect(shipped.slice(0, 2).map((entry) => entry.tag)).toEqual([
+      "0000_baseline",
+      "0001_squash_history",
+    ]);
+    expect(shipped[0]?.when).toBe(squashed[0]?.when);
+    expect(shipped[1]?.when).toBeGreaterThan(squashed.at(-1)?.when ?? Number.POSITIVE_INFINITY);
+  });
 
-      await migrate(older.db);
+  it("builds from the baseline exactly the schema and rows the squashed history built", async () => {
+    await migratedThrough("baseline_only", SHIPPED_MIGRATIONS, "0001_squash_history");
+    await migratedThrough("squashed_history", SQUASHED_MIGRATIONS, SQUASHED_0047);
 
-      const rows = await older.db.execute<{
-        type: string;
-        enabled: boolean;
-        managed_by_env: boolean;
-      }>(sql`select type, enabled, managed_by_env from app.providers order by type`);
-      expect(rows.rows).toEqual([
-        { type: "local", enabled: true, managed_by_env: true },
-        { type: "s3", enabled: false, managed_by_env: false },
-        { type: "webdav", enabled: false, managed_by_env: false },
-      ]);
-      const logins = await older.db.execute(sql`select 1 from app.identities`);
-      expect(logins.rows).toHaveLength(1);
-    } finally {
-      await older.close();
-      await rm(folder, { recursive: true, force: true });
+    const schema = await schemaOf("baseline_only");
+    expect(schema).toContain("CREATE TABLE app.trash_items (");
+    expect(schema).toContain("CREATE EXTENSION IF NOT EXISTS vector");
+    expect(schema).toBe(await schemaOf("squashed_history"));
+    const data = await dataOf("baseline_only");
+    // The one row both seed: the files folder's index root.
+    expect(data).toContain("1\tfiles");
+    expect(data).toBe(await dataOf("squashed_history"));
+  });
+
+  it("records the shipped migrations on a new install, the baseline first", async () => {
+    expect(await history(fresh)).toEqual(await expectedHistory(SHIPPED_MIGRATIONS));
+  });
+
+  it.each([
+    ["0046_trash_items", "v0.7.0-rc.11"],
+    [SQUASHED_0047, "main's edge build"],
+  ])("upgrades a database at %s (%s) in place, keeping every row", async (through) => {
+    const name = `at_${through.slice(0, 4)}`;
+    const older = await migratedThrough(name, SQUASHED_MIGRATIONS, through);
+    await seedRows(older);
+    if (through === "0046_trash_items")
+      await older.execute(sql`update app.desktop_items set original_path = '/docs/old.txt'`);
+    const before = withoutDesktopOriginalPath(await contents(older));
+    expect(before["app.trash_items"]).toHaveLength(3);
+
+    await migrate(older);
+
+    expect(withoutDesktopOriginalPath(await contents(older))).toEqual(before);
+    expect(await schemaOf(name)).toBe(await schemaOf("new_install"));
+    expect(await history(older)).toEqual(await history(fresh));
+    // Then it is a database like any other: the next start migrates nothing.
+    await migrate(older);
+    expect(await history(older)).toEqual(await history(fresh));
+  });
+
+  it("refuses a database older than v0.7.0-rc.11 and leaves it as it was", async () => {
+    const older = await migratedThrough("at_0045", SQUASHED_MIGRATIONS, "0045_drop_providers");
+    await older.execute(sql`insert into app.accounts (id) values (${ALICE})`);
+    await older.execute(sql`
+      insert into app.identities (account_id, username) values (${ALICE}, 'alice')`);
+    const schemaBefore = await schemaOf("at_0045");
+    const historyBefore = await history(older);
+    const rowsBefore = await contents(older);
+
+    const error = await migrate(older).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      cause: {
+        message: "fdrive cannot upgrade this database: it is older than v0.7.0-rc.11",
+        hint: "Start fdrive v0.7.0-rc.11 on it once, then this release.",
+      },
+    });
+    expect(await schemaOf("at_0045")).toBe(schemaBefore);
+    expect(await history(older)).toEqual(historyBefore);
+    expect(historyBefore).toHaveLength(46);
+    expect(await contents(older)).toEqual(rowsBefore);
+  });
+
+  it("refuses a history with an entry no release wrote and leaves it as it was", async () => {
+    const older = await migratedThrough("unknown_entry", SQUASHED_MIGRATIONS, "0046_trash_items");
+    await older.execute(sql`
+      insert into drizzle.__drizzle_migrations (hash, created_at) values (${"0".repeat(64)}, 1)`);
+    const schemaBefore = await schemaOf("unknown_entry");
+    const historyBefore = await history(older);
+
+    const error = await migrate(older).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({
+      cause: {
+        message:
+          "fdrive cannot upgrade this database: its migration history has entries no fdrive release wrote",
+      },
+    });
+    expect(await schemaOf("unknown_entry")).toBe(schemaBefore);
+    expect(await history(older)).toEqual(historyBefore);
+  });
+
+  it("builds the same schema from the SQL files alone, as the indexer's and OCR's tests do", async () => {
+    const raw = await database("raw_files");
+    const files = (await readdir(SHIPPED_MIGRATIONS)).filter((name) => name.endsWith(".sql"));
+    for (const file of files.sort()) {
+      const text = await readFile(path.join(SHIPPED_MIGRATIONS, file), "utf8");
+      for (const statement of text.split("--> statement-breakpoint"))
+        if (statement.trim()) await raw.execute(sql.raw(statement));
     }
+
+    const schemas = ["--schema=app", "--schema=idx"];
+    expect(await dump("raw_files", "--schema-only", ...schemas)).toBe(
+      await dump("new_install", "--schema-only", ...schemas),
+    );
+    expect(await dump("raw_files", "--data-only", ...schemas)).toBe(
+      await dump("new_install", "--data-only", ...schemas),
+    );
   });
 });

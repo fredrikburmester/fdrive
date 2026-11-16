@@ -1,11 +1,10 @@
 import type { ImageSearchHit, ImageSearchResponse } from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, type Scope } from "@fdrive/core";
-import type { ImageSearchHit as DbImageSearchHit, IndexQueries, ScopePrefix } from "@fdrive/db";
-import type { ReadAuthorizer } from "../scoping/read-authorizer.ts";
+import type { IndexQueries } from "@fdrive/db";
 import { roundTripVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
-import { trashExclusion } from "./scopes.js";
+import { indexPrefixes, reservedExclusion } from "./scopes.js";
 
 /**
  * Rows fanned out from `IndexQueries.searchImages` before ranking. Matches
@@ -53,8 +52,8 @@ export function selectImageHits<T extends { readonly score: number }>(
 
 export interface ImageSearchServiceDeps {
   readonly enabled?: () => Promise<boolean>;
-  readonly indexQueries: Pick<IndexQueries, "searchImages" | "rootIdsByName">;
-  /** `null` when `FDRIVE_IMAGE_EMBED_URL` is not configured; image search never runs then. */
+  readonly indexQueries: Pick<IndexQueries, "searchImages">;
+  /** `null` when `FDRIVE_ML_URL` is not configured; image search never runs then. */
   readonly imageEmbedClient: ImageEmbedClient | null;
   /**
    * Resolves the sidecar's cached health (`{status, model, dim, device}` or
@@ -64,19 +63,11 @@ export interface ImageSearchServiceDeps {
    * is itself `null`.
    */
   readonly resolveHealth: () => Promise<SidecarResult<ImageEmbedHealthInfo> | null>;
-  /**
-   * Same Trash rule as `SearchServiceDeps.trashPath`: the query leaves the
-   * folder out before its limit. A test/default value; production passes a
-   * request snapshot.
-   */
-  readonly trashPath?: string | null;
   readonly clock: () => Date;
 }
 
 export interface ImageSearchServiceInput {
-  readonly trashPath?: string | null;
   readonly scopes: readonly Scope[];
-  readonly authorizer: ReadAuthorizer;
   readonly query: string;
   readonly limit: number;
 }
@@ -105,10 +96,10 @@ function unavailableResponse(
 
 /**
  * Builds the image-content search service: resolves the query's embedding
- * against the image-embed sidecar, ranks `IndexQueries.searchImages` rows
- * with `selectImageHits`, and round-trips plus live-read checks every
- * candidate before it can appear in a hit, exactly like the text search
- * service. `unavailable: true` covers three distinct causes (no verified
+ * against the image-embed sidecar, round-trips every
+ * `IndexQueries.searchImages` row through the caller's scopes (which are the
+ * permission, exactly as for text search), then ranks what is left with
+ * `selectImageHits`, so a page is full whenever there are enough matches. `unavailable: true` covers three distinct causes (no verified
  * scope, image search not configured, or no embedding for this query); the
  * caller cannot tell which from the response alone, only that there is
  * nothing to search or show.
@@ -116,7 +107,6 @@ function unavailableResponse(
 export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSearchService {
   return {
     async search(input: ImageSearchServiceInput): Promise<ImageSearchResponse> {
-      const trashPath = input.trashPath ?? deps.trashPath ?? null;
       if (deps.enabled !== undefined && !(await deps.enabled()))
         return unavailableResponse(input.query, 0);
       const startedAt = deps.clock();
@@ -136,82 +126,43 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
         return unavailableResponse(input.query, tookMs());
       }
 
-      const rootIds = await deps.indexQueries.rootIdsByName();
-      const rootNameById = new Map<number, string>();
-      for (const [name, id] of Object.entries(rootIds)) {
-        rootNameById.set(id, name);
-      }
-
-      const prefixes: ScopePrefix[] = [];
-      for (const scope of input.scopes) {
-        const rootId = rootIds[scope.rootName];
-        if (rootId !== undefined) {
-          prefixes.push({ rootId, fsPrefix: scope.fsPrefix });
-        }
-      }
-      if (prefixes.length === 0) {
-        return unavailableResponse(input.query, tookMs());
-      }
-
       const embedded = await deps.imageEmbedClient.embedText(input.query);
       if (embedded === null) {
         return unavailableResponse(input.query, tookMs());
       }
 
       const rows = await deps.indexQueries.searchImages(
-        prefixes,
+        indexPrefixes(input.scopes),
         embedded.vector,
         health.data.model,
         IMAGE_SEARCH_FANOUT_LIMIT,
-        { exclude: trashExclusion(input.scopes, trashPath, rootIds) },
+        { exclude: reservedExclusion(input.scopes) },
       );
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
-      const ranked = selectImageHits(rows, input.limit);
 
-      function virtualPathFor(row: DbImageSearchHit): string | null {
-        const rootName = rootNameById.get(row.rootId);
-        if (rootName === undefined) {
-          return null;
-        }
-        return roundTripVirtualPath(input.scopes, rootName, row.path);
-      }
-
-      let authUnavailable = false;
-
-      const resolvedHits = await Promise.all(
-        ranked.map(async (row): Promise<ImageSearchHit | null> => {
-          const virtualPath = virtualPathFor(row);
-          if (virtualPath === null) {
-            return null;
-          }
-          const authResult = await input.authorizer.authorize({ path: virtualPath, kind: "file" });
-          if (!authResult.allowed) {
-            if (authResult.reason === "unavailable") {
-              authUnavailable = true;
-            }
-            return null;
-          }
-          const name = baseName(virtualPath);
-          const ext = extensionOf(name);
-          return {
-            path: virtualPath,
-            name,
-            ext,
-            mime: mimeFromExtension(ext),
-            size: row.size,
-            modifiedAt: row.modifiedAt.toISOString(),
-            score: row.score,
-          };
-        }),
-      );
-
-      const hits = resolvedHits.filter((hit): hit is ImageSearchHit => hit !== null);
+      const visible = rows.flatMap((row) => {
+        const path = roundTripVirtualPath(input.scopes, row.path);
+        return path === null ? [] : [{ ...row, path }];
+      });
+      const hits = selectImageHits(visible, input.limit).map((row): ImageSearchHit => {
+        const name = baseName(row.path);
+        const ext = extensionOf(name);
+        return {
+          path: row.path,
+          name,
+          ext,
+          mime: mimeFromExtension(ext),
+          size: row.size,
+          modifiedAt: row.modifiedAt.toISOString(),
+          score: row.score,
+        };
+      });
 
       return {
         query: input.query,
         hits,
         unavailable: false,
-        ...((fanoutCut || authUnavailable) && { partial: true }),
+        ...(fanoutCut && { partial: true }),
         tookMs: tookMs(),
       };
     },

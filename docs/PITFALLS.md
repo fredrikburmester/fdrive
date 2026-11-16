@@ -25,11 +25,10 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
 
 ## Code and integration
 
-- System never follows the login being browsed. Filtering the sidebar activity by the active
+- System never follows the login being browsed. Filtering the sidebar activity by the signed-in
   login while the pages stayed installation-wide made the two disagree, and resolving Trash
-  settings from the active login hid them behind a login switch. Every System page is
-  installation-wide, Trash settings still name their provider row explicitly, and each page
-  header says so.
+  settings from it hid them behind a login switch, back when an account could switch logins.
+  Every System page is installation-wide, and each page header says so.
 - Worker state that tracks feature transitions must start from the persisted selection. A
   disabled placeholder made every indexer restart look like enabling thumbnails and image
   search, re-running the media backfill over the whole library.
@@ -68,6 +67,48 @@ Reference for affected code; shared rules live in [AGENTS.md](../AGENTS.md).
   running two registry transactions per entry behind one lock. Background work stays silent,
   its pace follows what it costs, and it asks which folders changed (`POST /checks`) before
   listing any.
+- Trash once intercepted every delete in a storage wrapper, fdrive's own folders included: Mac
+  write retention, built on it, moved the recovery copies it reclaimed into their owner's Trash.
+  Now `deleteFile` and `deleteDir` delete for good, and moving to Trash is `trash.put`, so each
+  caller says which it means.
+- Trash once encoded each item's original path in its folders
+  (`<kind>/p/<segment>/…/v/<timestamp>`), so it needed no database on any
+  backend. It roughly doubled path length, so a delete near `PATH_MAX` failed with
+  `ENAMETOOLONG`; it left empty folders behind; every listing walked the tree; and every caller
+  parsed leaves. Trash now keeps one folder per item and a row: a listing is one query, and an
+  item is written as on its way before it moves, so a crash never leaves one in Trash without
+  its row.
+- Shares, public links and Office files keep the owner's paths, and each translates any
+  login's path into the owner's (`ownerPath`). Followed once per login for one change on the
+  disk, a rename of a shared folder that the person it is shared with sees only one end of reads
+  as "left their files" and dropped the owner's links whenever that login came first. One
+  change follows them once, as its owner; each login only moves its own tags and favorites.
+- What grants access (grants, public links, Office files) once followed a move after its
+  storage call, in a separate step. When that step failed after a web, MCP or AI move, nothing
+  repaired it: a link kept pointing at the vacated path and served whatever was made there
+  next. It now changes in the storage call's transaction, before the call where the
+  destination is known, and the transaction holds the vacated path, so a refused change fails
+  the request with the file in place and a new item there waits for it. Replaying the API's own
+  journal rows as a backstop was rejected: those rows are hints a failed write may lose, and a
+  move replayed later would also move links made at the old path since. Tags, favorites and
+  the rest follow after, best effort; none of them grants access.
+- Office saves once took their document's lock on the main pool: saves queued behind one
+  document held every connection while the save holding the lock waited for one more, and the
+  API stopped. Work that holds a connection while it waits for another connection takes them
+  from pools in one order (Office, write gate, file operations, main), never from its own pool
+  ([database connections](ARCHITECTURE.md#database-connections)). Hold a connection only for
+  what needs it: an upload stages its body and holds its path only to publish it
+  (`critical`), so slow or stalled uploads cannot take the file operations' pool.
+- The backups' write gate was once request middleware: every mutating request held a gate
+  connection from its start to its end, a body included, so sixteen slow uploads (through a
+  public upload link, say) stopped every write, and a capture gave up after 30 seconds behind
+  any one of them. A write now holds the gate only for the section a snapshot must see whole
+  (`WriteGate`), taken where it starts: an upload's once its body is all here. A write that
+  commits in one transaction needs no gate.
+- The API keeps what every request would read again in memory: that setup is done, the Trash
+  retention and the storage name. Only the API writes them, so a test (or
+  anything else) that changes the Trash retention or the storage name straight in `app.settings`
+  goes unseen until a restart; change them through their routes.
 - Storage compares names byte for byte, and accents come in two encodings: macOS stores "ö" as
   "o" plus a combining mark, while models (and most typing) produce one character. A model
   that echoed Swedish file names matched none of them, so organize dropped every suggestion.

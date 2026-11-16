@@ -15,7 +15,6 @@ export const SUBSYSTEMS = [
   "ocr",
   "thumbnails",
   "office",
-  "trash",
   "shares",
   "network",
 ] as const;
@@ -83,42 +82,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_EMBED_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the text embedding unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/text",
-    secret: false,
-    subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the image embedding unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/image",
-    secret: false,
-    subsystem: "imageSearch",
-  },
-  {
-    key: "FDRIVE_TIKA_RUNTIME_URL",
-    description:
-      "Optional base URL whose /runtime reports the document extraction unit's status; unset probes the worker directly without revision checks.",
-    default: null,
-    example: "http://ml:8080/extract",
-    secret: false,
-    subsystem: "index",
-  },
-  {
-    key: "FDRIVE_TIKA_URL",
-    description:
-      "Base URL of the document extraction unit of the ml service, probed directly when no runtime URL is configured.",
-    default: null,
-    example: "http://ml:8080/extract",
-    secret: false,
-    subsystem: "index",
-  },
-  {
     key: "FDRIVE_WORKER_TOKEN",
     description: "Shared internal credential for bundled worker configuration polling.",
     default: null,
@@ -169,7 +132,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_STORAGE_ROOT",
     description:
-      "Folder fdrive serves as its built-in storage, one home per user at <root>/<username>; fdrive keeps the users. Required: without it there is no storage and setup cannot finish.",
+      "Folder fdrive serves as its storage, one home per user at <root>/<username>; fdrive keeps the users. Required.",
     default: null,
     example: "/data",
     secret: false,
@@ -178,7 +141,7 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
   {
     key: "FDRIVE_MASTER_KEY",
     description:
-      "Base64-encoded 32-byte key that encrypts stored credentials. Generate with `openssl rand -base64 32`; losing it makes stored credentials unrecoverable.",
+      "Base64-encoded 32-byte key that encrypts and signs what fdrive keeps secret: backup destination keys, AI provider keys, and share link and Office tokens. Generate with `openssl rand -base64 32`; losing it makes those secrets unrecoverable.",
     default: null,
     example: "change-me-32-random-bytes-base64==",
     secret: true,
@@ -220,36 +183,10 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "network",
   },
   {
-    key: "FDRIVE_AUTO_MIGRATE",
-    description: "Whether the API runs pending database migrations on startup.",
-    default: "true",
-    example: "true",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_TMP_DIR",
-    description:
-      "Directory archive jobs spool temporary files into. Defaults to the OS temp directory.",
+    description: "Directory for temporary files. Defaults to the OS temp directory.",
     default: null,
     example: "/tmp",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_DESKTOP_STATE_DIR",
-    description: "Persistent private directory for Mac upload recovery. Unset disables writes.",
-    default: null,
-    example: "/var/lib/fdrive/desktop",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_DESKTOP_RETENTION_DAYS",
-    description:
-      "Days to keep acknowledged or cancelled Mac write backups before reclaiming their storage.",
-    default: "30",
-    example: "30",
     secret: false,
     subsystem: "core",
   },
@@ -287,15 +224,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "shares",
   },
   {
-    key: "FDRIVE_ADMIN_USERS",
-    description:
-      "Comma-separated local usernames always treated as admins, in addition to account records.",
-    default: null,
-    example: "alice,bob",
-    secret: false,
-    subsystem: "core",
-  },
-  {
     key: "FDRIVE_SETUP_TOKEN",
     description:
       "Overrides the randomly generated one-time setup token. Mainly for tests and scripted installs.",
@@ -305,49 +233,22 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     subsystem: "core",
   },
   {
-    key: "FDRIVE_MCP_WRITES",
-    description:
-      "Enables create_folder and move_path for legacy MCP tokens only. New tokens use their individual access permissions.",
-    default: "false",
-    example: "false",
-    secret: false,
-    subsystem: "core",
-  },
-  {
-    key: "FDRIVE_INDEX_ROOTS",
-    description:
-      "JSON array of { name, storagePath, indexerPath } mapping every indexed root; storagePath is the folder's path in the API (FDRIVE_STORAGE_ROOT), indexerPath its path in the indexer. Unset disables search, thumbnails, and the Indexer page's per-root data.",
-    default: null,
-    example: '[{"name":"files","storagePath":"/data","indexerPath":"/data"}]',
-    secret: false,
-    subsystem: "index",
-  },
-  {
     key: "FDRIVE_INDEXER_URL",
     description:
-      "Base URL of the indexer's internal HTTP API. Unset disables the System > Indexer page and MCP document extraction. Explicit tokens can still read UTF-8 files directly.",
+      "Base URL of the indexer's internal HTTP API. Unset disables search, thumbnails, folder sizes, the System > Indexer page and MCP document extraction. MCP can still read UTF-8 files directly.",
     default: null,
     example: "http://indexer:8010",
     secret: false,
     subsystem: "index",
   },
   {
-    key: "FDRIVE_EMBED_URL",
+    key: "FDRIVE_ML_URL",
     description:
-      "Base URL of the text embedding unit of the ml service. Unset disables semantic search.",
+      "Base URL of the ml service; the API reaches its text, image and extract units below it. Unset disables semantic search, image search and document extraction.",
     default: null,
-    example: "http://ml:8080/text",
+    example: "http://ml:8080",
     secret: false,
     subsystem: "search",
-  },
-  {
-    key: "FDRIVE_IMAGE_EMBED_URL",
-    description:
-      "Base URL of the image embedding unit of the ml service. Unset disables image search.",
-    default: null,
-    example: "http://ml:8080/image",
-    secret: false,
-    subsystem: "imageSearch",
   },
   {
     key: "FDRIVE_THUMBS_DIR",
@@ -410,15 +311,6 @@ export const CONFIG_KEYS: readonly ConfigKeyDef[] = [
     secret: false,
     subsystem: "office",
   },
-  {
-    key: "FDRIVE_OFFICE_EDIT_RULES",
-    description:
-      "Advanced per-identity path restrictions, applied in addition to the saved editor username list. Empty/unset adds no further restriction.",
-    default: null,
-    example: "[]",
-    secret: false,
-    subsystem: "office",
-  },
 ];
 
 /** A subsystem's configuration state, before any liveness probe is applied. */
@@ -435,26 +327,20 @@ export interface SubsystemStatus {
  * on top for subsystems where one exists.
  */
 export function subsystemsStatus(config: AppConfig): Record<Subsystem, SubsystemStatus> {
-  const indexMissing: string[] = [];
-  if (config.fdriveIndexRoots === null) indexMissing.push("FDRIVE_INDEX_ROOTS");
-  if (config.fdriveIndexerUrl === undefined) indexMissing.push("FDRIVE_INDEXER_URL");
-
+  const ml: SubsystemStatus =
+    config.fdriveMlUrl === undefined
+      ? { status: "not_configured", missing: ["FDRIVE_ML_URL"] }
+      : { status: "configured", missing: [] };
   return {
     core: { status: "configured", missing: [] },
     network: { status: "configured", missing: [] },
     shares: { status: "configured", missing: [] },
     index:
-      indexMissing.length === 0
-        ? { status: "configured", missing: [] }
-        : { status: "not_configured", missing: indexMissing },
-    search:
-      config.fdriveEmbedUrl === undefined
-        ? { status: "not_configured", missing: ["FDRIVE_EMBED_URL"] }
+      config.fdriveIndexerUrl === undefined
+        ? { status: "not_configured", missing: ["FDRIVE_INDEXER_URL"] }
         : { status: "configured", missing: [] },
-    imageSearch:
-      config.fdriveImageEmbedUrl === undefined
-        ? { status: "not_configured", missing: ["FDRIVE_IMAGE_EMBED_URL"] }
-        : { status: "configured", missing: [] },
+    search: ml,
+    imageSearch: ml,
     thumbnails:
       config.fdriveThumbsDir === undefined
         ? { status: "not_configured", missing: ["FDRIVE_THUMBS_DIR"] }
@@ -464,7 +350,6 @@ export function subsystemsStatus(config: AppConfig): Record<Subsystem, Subsystem
         ? { status: "not_configured", missing: ["FDRIVE_OCR_URL"] }
         : { status: "configured", missing: [] },
     office: { status: "configured", missing: [] },
-    trash: { status: "configured", missing: [] },
   };
 }
 

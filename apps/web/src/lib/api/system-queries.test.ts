@@ -1,19 +1,18 @@
 // @vitest-environment jsdom
 
-import type { AdminProvidersResponse, IndexerStats } from "@fdrive/contracts";
+import type { IndexerStats, SystemStorage } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { allCapabilities } from "@/lib/identity/capabilities";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
 const setupStatusMock = vi.fn();
 const systemFeaturesMock = vi.fn();
 const systemUpdateFeaturesMock = vi.fn();
 const setupCompleteMock = vi.fn();
-const adminProvidersMock = vi.fn();
-const adminUpdateProviderMock = vi.fn();
+const systemStorageMock = vi.fn();
+const systemUpdateStorageMock = vi.fn();
 const adminUsersMock = vi.fn();
 const adminCreateUserMock = vi.fn();
 const adminUpdateUserMock = vi.fn();
@@ -44,8 +43,8 @@ vi.mock("./client.js", () => ({
     systemUpdateFeatures: (...args: unknown[]) => systemUpdateFeaturesMock(...args),
     setupStatus: (...args: unknown[]) => setupStatusMock(...args),
     setupComplete: (...args: unknown[]) => setupCompleteMock(...args),
-    adminProviders: (...args: unknown[]) => adminProvidersMock(...args),
-    adminUpdateProvider: (...args: unknown[]) => adminUpdateProviderMock(...args),
+    systemStorage: (...args: unknown[]) => systemStorageMock(...args),
+    systemUpdateStorage: (...args: unknown[]) => systemUpdateStorageMock(...args),
     adminUsers: (...args: unknown[]) => adminUsersMock(...args),
     adminCreateUser: (...args: unknown[]) => adminCreateUserMock(...args),
     adminUpdateUser: (...args: unknown[]) => adminUpdateUserMock(...args),
@@ -75,11 +74,9 @@ vi.mock("./client.js", () => ({
 
 const ME_RESPONSE = makeMe({
   account: { id: "00000000-0000-0000-0000-000000000000", displayName: "Ada" },
-  identities: [
-    makeIdentity({ id: "00000000-0000-0000-0000-000000000001", providerLabel: "Local folder" }),
-  ],
-  activeIdentityId: "00000000-0000-0000-0000-000000000001",
+  identity: makeIdentity({ id: "00000000-0000-0000-0000-000000000001" }),
   isAdmin: true,
+  storageName: "Local folder",
 });
 
 describe("feature queries", () => {
@@ -96,7 +93,6 @@ describe("feature queries", () => {
       configuration: { version: 1, revision: 0, values, walkthroughComplete: false },
       source: "default",
       statuses: [],
-      roots: [],
     };
     const saved = { ...data, configuration: { ...data.configuration, revision: 1 } };
     systemFeaturesMock.mockResolvedValue(data);
@@ -117,21 +113,11 @@ describe("feature queries", () => {
   });
 });
 
-const PROVIDER = {
-  id: "00000000-0000-4000-8000-000000000009",
-  type: "local" as const,
-  label: "Local folder",
-  baseUrl: "" as const,
-  config: {},
-  enabled: true,
-  managedByEnv: true,
-  identityCount: 1,
-  reachable: true,
-  checkedAt: "2026-01-01T00:00:00.000Z",
-  createdAt: "2026-01-01T00:00:00.000Z",
-  capabilities: allCapabilities(true),
+const STORAGE: SystemStorage = {
+  name: "Local folder",
+  healthy: true,
+  detail: "The storage root is a writable folder",
 };
-const PROVIDERS_RESPONSE: AdminProvidersResponse = { providers: [PROVIDER] };
 
 function createWrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -142,8 +128,8 @@ function createWrapper(queryClient: QueryClient) {
 beforeEach(() => {
   setupStatusMock.mockReset();
   setupCompleteMock.mockReset();
-  adminProvidersMock.mockReset();
-  adminUpdateProviderMock.mockReset();
+  systemStorageMock.mockReset();
+  systemUpdateStorageMock.mockReset();
   adminUsersMock.mockReset();
   adminCreateUserMock.mockReset();
   adminUpdateUserMock.mockReset();
@@ -168,15 +154,13 @@ beforeEach(() => {
 
 describe("useSetupStatus", () => {
   it("fetches the setup status", async () => {
-    setupStatusMock.mockResolvedValue({ required: true, storageConfigured: true });
+    setupStatusMock.mockResolvedValue({ required: true });
     const { useSetupStatus } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
     const { result } = renderHook(() => useSetupStatus(), { wrapper: createWrapper(queryClient) });
 
-    await waitFor(() =>
-      expect(result.current.data).toEqual({ required: true, storageConfigured: true }),
-    );
+    await waitFor(() => expect(result.current.data).toEqual({ required: true }));
   });
 });
 
@@ -199,52 +183,38 @@ describe("useSetupComplete", () => {
   });
 });
 
-describe("useAdminProviders", () => {
-  it("fetches the configured providers", async () => {
-    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
-    const { useAdminProviders } = await import("./system-queries.js");
+describe("useSystemStorage", () => {
+  it("fetches the files folder's name and health", async () => {
+    systemStorageMock.mockResolvedValue(STORAGE);
+    const { useSystemStorage } = await import("./system-queries.js");
     const queryClient = new QueryClient();
 
-    const { result } = renderHook(() => useAdminProviders(), {
+    const { result } = renderHook(() => useSystemStorage(), {
       wrapper: createWrapper(queryClient),
     });
 
-    await waitFor(() => expect(result.current.data).toEqual(PROVIDERS_RESPONSE));
+    await waitFor(() => expect(result.current.data).toEqual(STORAGE));
   });
 });
 
-describe("useAdminUpdateProvider", () => {
-  it("renames the storage and invalidates the cached list", async () => {
-    const updated = { ...PROVIDER, label: "Home storage" };
-    adminUpdateProviderMock.mockResolvedValue(updated);
-    adminProvidersMock.mockResolvedValue({ providers: [updated] });
-    const { useAdminUpdateProvider } = await import("./system-queries.js");
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
+describe("useUpdateSystemStorage", () => {
+  it("renames the storage and invalidates it and the cached login", async () => {
+    systemUpdateStorageMock.mockResolvedValue({ ...STORAGE, name: "Home storage" });
+    const { useUpdateSystemStorage } = await import("./system-queries.js");
+    const client = new QueryClient();
+    client.setQueryData(["system", "storage"], STORAGE);
+    client.setQueryData(["auth", "me"], ME_RESPONSE);
 
-    const { result } = renderHook(() => useAdminUpdateProvider(), {
-      wrapper: createWrapper(queryClient),
+    const { result } = renderHook(() => useUpdateSystemStorage(), {
+      wrapper: createWrapper(client),
     });
-    result.current.mutate({ id: PROVIDER.id, patch: { label: "Home storage" } });
+    await result.current.mutateAsync({ name: "Home storage" });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
+    expect(systemUpdateStorageMock).toHaveBeenCalledWith({ name: "Home storage" });
+    expect(client.getQueryState(["system", "storage"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
+    expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
   });
-});
-
-it("invalidates cached login names and public choices after a rename, keeping identities separate", async () => {
-  adminUpdateProviderMock.mockResolvedValue({ ...PROVIDER, label: "Home storage" });
-  const { useAdminUpdateProvider } = await import("./system-queries.js");
-  const client = new QueryClient();
-  client.setQueryData(["providers"], { providers: [PROVIDER] });
-  client.setQueryData(["auth", "me"], ME_RESPONSE);
-  const { result } = renderHook(() => useAdminUpdateProvider(), { wrapper: createWrapper(client) });
-  await result.current.mutateAsync({ id: PROVIDER.id, patch: { label: "Home storage" } });
-  expect(adminUpdateProviderMock).toHaveBeenCalledWith(PROVIDER.id, { label: "Home storage" });
-  expect(client.getQueryState(["providers"])?.isInvalidated).toBe(true);
-  expect(client.getQueryState(["auth", "me"])?.isInvalidated).toBe(true);
-  expect(client.getQueryData(["auth", "me"])).toEqual(ME_RESPONSE);
 });
 
 const USER = {
@@ -252,11 +222,10 @@ const USER = {
   disabled: false,
   isAdmin: false,
   isYou: false,
-  adminByDeployment: false,
   createdAt: "2026-01-01T00:00:00.000Z",
   lastLoginAt: null,
 };
-const USERS_RESPONSE = { available: true, users: [USER] };
+const USERS_RESPONSE = { users: [USER] };
 
 describe("local user queries", () => {
   it("fetches the local folder's users", async () => {
@@ -274,7 +243,7 @@ describe("local user queries", () => {
     adminUsersMock.mockResolvedValue(USERS_RESPONSE);
     const { useAdminCreateUser } = await import("./system-queries.js");
     const queryClient = new QueryClient();
-    queryClient.setQueryData(["admin", "users"], { available: true, users: [] });
+    queryClient.setQueryData(["admin", "users"], { users: [] });
 
     const { result } = renderHook(() => useAdminCreateUser(), {
       wrapper: createWrapper(queryClient),
@@ -304,14 +273,12 @@ describe("local user queries", () => {
     expect(queryClient.getQueryState(["admin", "users"])?.isInvalidated).toBe(true);
   });
 
-  it("removes a user and refreshes the users and the providers' login counts", async () => {
+  it("removes a user and refreshes the users", async () => {
     adminDeleteUserMock.mockResolvedValue({ ok: true });
-    adminUsersMock.mockResolvedValue({ available: true, users: [] });
-    adminProvidersMock.mockResolvedValue(PROVIDERS_RESPONSE);
+    adminUsersMock.mockResolvedValue({ users: [] });
     const { useAdminDeleteUser } = await import("./system-queries.js");
     const queryClient = new QueryClient();
     queryClient.setQueryData(["admin", "users"], USERS_RESPONSE);
-    queryClient.setQueryData(["admin", "providers"], PROVIDERS_RESPONSE);
 
     const { result } = renderHook(() => useAdminDeleteUser(), {
       wrapper: createWrapper(queryClient),
@@ -320,7 +287,6 @@ describe("local user queries", () => {
 
     expect(adminDeleteUserMock).toHaveBeenCalledWith("grace");
     expect(queryClient.getQueryState(["admin", "users"])?.isInvalidated).toBe(true);
-    expect(queryClient.getQueryState(["admin", "providers"])?.isInvalidated).toBe(true);
   });
 });
 
@@ -397,7 +363,7 @@ describe("useReindex", () => {
     await waitFor(() => expect(query.current.isSuccess).toBe(true));
 
     const { result: mutation } = renderHook(() => useReindex(), { wrapper });
-    mutation.current.mutate({ root: "files" });
+    mutation.current.mutate({});
 
     await waitFor(() => expect(mutation.current.data).toEqual({ marked: 3 }));
     expect(systemIndexerMock).toHaveBeenCalledTimes(2);
@@ -426,7 +392,6 @@ describe("useRebuildIndexerThumbnails", () => {
 const SYSTEM_SEARCH_RESPONSE = {
   configured: false,
   semantic: { configured: false, healthy: false },
-  roots: [],
   index: { files: 0, withText: 0, chunks: 0, embedded: 0 },
 } as const;
 
@@ -446,7 +411,7 @@ describe("useReembed", () => {
   it("triggers a re-embed and invalidates search and indexer queries", async () => {
     systemSearchMock.mockResolvedValue(SYSTEM_SEARCH_RESPONSE);
     systemIndexerMock.mockResolvedValue(SYSTEM_INDEXER_RESPONSE);
-    systemReembedMock.mockResolvedValue({ marked: 5, roots: ["files"] });
+    systemReembedMock.mockResolvedValue({ marked: 5 });
     const { useSystemSearch, useSystemIndexer, useReembed } = await import("./system-queries.js");
     const queryClient = new QueryClient();
     const wrapper = createWrapper(queryClient);
@@ -695,13 +660,13 @@ describe("maintenance mutations", () => {
         expect(indexer.result.current.isSuccess && search.result.current.isSuccess).toBe(true),
       );
       const mutation = renderHook(() => useClearIndex(), { wrapper });
-      mutation.result.current.mutate({ root: "files", path: "alice/docs" });
+      mutation.result.current.mutate({ path: "alice/docs" });
       await waitFor(() =>
         expect(fail ? mutation.result.current.isError : mutation.result.current.isSuccess).toBe(
           true,
         ),
       );
-      expect(systemClearIndexMock).toHaveBeenCalledWith({ root: "files", path: "alice/docs" });
+      expect(systemClearIndexMock).toHaveBeenCalledWith({ path: "alice/docs" });
       expect(systemIndexerMock).toHaveBeenCalledTimes(2);
       expect(systemSearchMock).toHaveBeenCalledTimes(2);
     },
@@ -736,7 +701,10 @@ describe("maintenance mutations", () => {
         key === undefined
           ? undefined
           : {
-              roots: [],
+              countsByStatus: {},
+              chunks: 0,
+              chunksEmbedded: 0,
+              lastScan: null,
               thumbnails: 0,
               queueDepth: 0,
               errorsSample: [],

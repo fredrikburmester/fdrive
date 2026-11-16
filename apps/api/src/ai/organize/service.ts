@@ -4,7 +4,7 @@ import {
   type OrganizeRequest,
   type OrganizeRun,
 } from "@fdrive/contracts";
-import { isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
+import { isReservedPath, isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
@@ -49,7 +49,7 @@ async function statItems(principal: Principal, paths: readonly string[], signal:
         const stat = await principal.storage.stat(path);
         items[index] =
           stat.kind === "dir" || stat.kind === "file"
-            ? { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt ?? null }
+            ? { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt }
             : null;
       } catch (error) {
         if (!isStorageError(error) || error.kind !== "not_found") throw error;
@@ -67,12 +67,6 @@ async function statItems(principal: Principal, paths: readonly string[], signal:
  * against storage. Runs never move anything.
  */
 export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeService {
-  async function indexedFor(principal: Principal): Promise<boolean> {
-    const identity = await deps.mcp.identities.get(principal.identityId);
-    if (identity === null) return false;
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(identity)).available;
-  }
-
   return {
     async status() {
       const config = await deps.settings.resolved();
@@ -95,8 +89,6 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
           "unsupported",
           "Organize is turned off. An administrator can turn it on under System > AI.",
         );
-      const trashPath =
-        deps.mcp.trashPathForStorage?.(principal.storage) ?? deps.mcp.trashPath ?? null;
       const paths: string[] = [];
       for (const raw of request.paths) {
         let path: string;
@@ -106,8 +98,11 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
           throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
         }
         if (path === "/") throw new ApiHttpError("bad_request", "The drive root cannot be moved.");
-        if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-          throw new ApiHttpError("bad_request", "Items in Trash cannot be organized.");
+        if (isReservedPath(path))
+          throw new ApiHttpError(
+            "bad_request",
+            "Items in Trash or fdrive's own folders cannot be organized.",
+          );
         if (!paths.includes(path)) paths.push(path);
       }
       // Moving a folder moves its contents too, so an item inside another selected folder is redundant.
@@ -132,7 +127,7 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
               const items = await statItems(principal, selected, signal);
               if (items.length === 0)
                 throw new OrganizeError("None of the selected items exist anymore.");
-              const indexed = await indexedFor(principal);
+              const indexed = await deps.mcp.indexed();
               const submission = await runOrganizeAgent({
                 model,
                 tools: createDriveTools({
@@ -162,7 +157,6 @@ export function createOrganizeService(deps: OrganizeServiceDeps): OrganizeServic
                 storage: principal.storage,
                 items,
                 submission,
-                trashPath,
               });
             } catch (error) {
               if (error instanceof AiProviderError) throw new OrganizeError(error.message);

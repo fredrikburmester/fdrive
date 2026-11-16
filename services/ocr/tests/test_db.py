@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import threading
+
 import psycopg
 import pytest
 
 from fdrive_ocr import db
+from fdrive_ocr.runner import FILES_ROOT_ID, FILES_ROOT_NAME
 
 
 def test_connect_success(postgres_dsn: str) -> None:
@@ -29,62 +32,6 @@ def test_connect_retries_then_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sleeps == [2, 2, 2]
 
 
-def test_read_schema_version_present(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        assert db.read_schema_version(conn) == 2
-    finally:
-        conn.close()
-
-
-def test_read_schema_version_handles_db_error(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        with conn.cursor() as cur:
-            cur.execute('DROP TABLE "idx"."schema_version"')
-        assert db.read_schema_version(conn) is None
-    finally:
-        with conn.cursor() as cur:
-            cur.execute('CREATE TABLE "idx"."schema_version" (version integer PRIMARY KEY)')
-            cur.execute('INSERT INTO "idx"."schema_version" (version) VALUES (1), (2)')
-        conn.close()
-
-
-def test_wait_for_schema_version_immediate_match(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        logs: list[str] = []
-        version = db.wait_for_schema_version(conn, 2, timeout_seconds=5, log=logs.append)
-        assert version == 2
-        assert logs == []
-    finally:
-        conn.close()
-
-
-def test_wait_for_schema_version_times_out(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        logs: list[str] = []
-        times = iter([0.0, 0.0, 100.0])
-        version = db.wait_for_schema_version(
-            conn, 99, timeout_seconds=5, log=logs.append, sleep=lambda _s: None, now=lambda: next(times)
-        )
-        assert version is None
-        assert any("giving up" in line for line in logs)
-    finally:
-        conn.close()
-
-
-def test_upsert_root_is_idempotent(postgres_dsn: str) -> None:
-    conn = db.connect(postgres_dsn)
-    try:
-        first = db.upsert_root(conn, "files")
-        second = db.upsert_root(conn, "files")
-        assert first == second
-    finally:
-        conn.close()
-
-
 def test_read_settings_empty(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
@@ -93,12 +40,13 @@ def test_read_settings_empty(postgres_dsn: str) -> None:
         conn.close()
 
 
-def test_record_ocr_log_and_done_keys(postgres_dsn: str) -> None:
+def test_a_recorded_decision_marks_its_content_done_wherever_it_lies(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "files")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "has_text", None)
-        assert db.done_keys(conn, root_id) == {("a.pdf", 100, 111)}
+        assert db.is_done(conn, "a" * 64) is False
+        db.record_ocr_log(conn, FILES_ROOT_ID, "a.pdf", 100, 111, "a" * 64, "has_text", None)
+        assert db.is_done(conn, "a" * 64) is True
+        assert db.is_done(conn, "b" * 64) is False
     finally:
         conn.close()
 
@@ -106,15 +54,33 @@ def test_record_ocr_log_and_done_keys(postgres_dsn: str) -> None:
 def test_record_ocr_log_upserts_on_conflict(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:
-        root_id = db.upsert_root(conn, "files")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "failed", "boom")
-        db.record_ocr_log(conn, root_id, "a.pdf", 100, 111, "ocred", None)
+        db.record_ocr_log(conn, FILES_ROOT_ID, "a.pdf", 100, 111, "a" * 64, "failed", "boom")
+        db.record_ocr_log(conn, FILES_ROOT_ID, "a.pdf", 100, 111, "b" * 64, "ocred", None)
         with conn.cursor() as cur:
-            cur.execute('SELECT status, detail FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s', (root_id, "a.pdf"))
-            row = cur.fetchone()
-            assert row is not None
-            assert row[0] == "ocred"
-            assert row[1] is None
+            cur.execute(
+                'SELECT sha256, status, detail FROM "idx"."ocr_log" WHERE root_id = %s AND path = %s', (FILES_ROOT_ID, "a.pdf")
+            )
+            assert cur.fetchall() == [("b" * 64, "ocred", None)]
+    finally:
+        conn.close()
+
+
+def test_pdf_candidates_leave_out_content_decided_at_another_path(postgres_dsn: str) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        for path, digest in (("b.pdf", "b" * 64), ("a.pdf", "a" * 64), ("done.pdf", "d" * 64), ("c.PDF", "e" * 64)):
+            conn.execute(
+                'INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256) '
+                "VALUES (%s, %s, %s, '.pdf', 10, 20, %s)",
+                (FILES_ROOT_ID, path, path, digest),
+            )
+        db.record_ocr_log(conn, FILES_ROOT_ID, "elsewhere.pdf", 10, 20, "d" * 64, "has_text", None)
+
+        assert db.pdf_candidates(conn, FILES_ROOT_ID, ()) == [
+            db.IndexedPdf("a.pdf", 10, 20, "a" * 64),
+            db.IndexedPdf("b.pdf", 10, 20, "b" * 64),
+            db.IndexedPdf("c.PDF", 10, 20, "e" * 64),
+        ]
     finally:
         conn.close()
 
@@ -155,4 +121,27 @@ def test_last_run_orders_by_most_recent(postgres_dsn: str) -> None:
         assert summary is not None
         assert summary.seen == 2
     finally:
+        conn.close()
+
+
+def test_journal_change_waits_for_the_journal_lock_so_positions_commit_in_order(postgres_dsn: str) -> None:
+    conn = db.connect(postgres_dsn)
+    holder = psycopg.connect(postgres_dsn)
+    try:
+        holder.execute(db.JOURNAL_LOCK)  # held until `holder` commits
+        logs: list[str] = []
+        writer = threading.Thread(
+            target=db.journal_change, args=(conn, FILES_ROOT_ID, FILES_ROOT_NAME, "a.pdf", logs.append)
+        )
+        writer.start()
+        writer.join(timeout=0.5)
+        assert writer.is_alive()
+        holder.commit()
+        writer.join(timeout=10)
+        assert not writer.is_alive()
+        assert logs == []
+        rows = conn.execute('SELECT path, target_path, source FROM "idx"."changes"').fetchall()
+        assert rows == [("a.pdf", None, "ocr")]
+    finally:
+        holder.close()
         conn.close()

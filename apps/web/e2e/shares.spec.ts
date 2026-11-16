@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { ManagedShare } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
+import { homePath } from "./support/local-folder.js";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
 import {
@@ -9,6 +10,7 @@ import {
   shareImageFixture,
   shareZipFixture,
 } from "./support/share-fixture.js";
+import { uniqueName } from "./support/unique.js";
 
 const DESKTOP_VIEWPORT = { width: 1440, height: 900 };
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
@@ -69,8 +71,6 @@ function publicRequests(page: Page): string[] {
     const url = new URL(request.url());
     if (url.pathname.startsWith("/api/v1/") && !url.pathname.startsWith("/api/v1/public/shares/"))
       forbidden.push(url.pathname);
-    if (url.pathname.startsWith("/api/v1/public/shares/") && request.headers()["x-identity-id"])
-      forbidden.push("identity header");
   });
   return forbidden;
 }
@@ -265,6 +265,48 @@ test("directory paths, bounded safe previews, Range and multipath ZIP use only p
   }
 });
 
+test("a public link never reaches the Trash through a symbolic link in its folder", async ({
+  page,
+  browser,
+}) => {
+  const folder = uniqueName("linked");
+  const owner = (path: string) => homePath("share_owner", path);
+  await mkdir(owner("/.trash"), { recursive: true });
+  await writeFile(owner(`/.trash/${folder}-deleted.txt`), "deleted secret");
+  await mkdir(owner(`/${folder}`));
+  await writeFile(owner(`/${folder}/kept.txt`), "kept");
+  // Left by a writer outside fdrive, such as SMB: fdrive never makes links.
+  await symlink(owner("/.trash"), owner(`/${folder}/bin`));
+  const context = await browser.newContext();
+  try {
+    await loginAs(page, "share_owner", "share-owner-test-password");
+    const url = await createLink(page, [folder], "Linked folder");
+    const visitor = await context.newPage();
+    await visitor.goto(url);
+    const bin = visitor.getByRole("row").filter({ hasText: "bin" });
+    await expect(bin).toHaveAttribute("aria-disabled", "true");
+    await expect(bin.getByRole("link")).toHaveCount(0);
+    const id = new URL(url).pathname.split("/").at(-1) ?? "";
+    for (const path of ["/bin", `/bin/${folder}-deleted.txt`]) {
+      const download = await visitor.request.get(
+        new URL(`/api/v1/public/shares/${id}/download?path=${encodeURIComponent(path)}`, url).href,
+      );
+      expect(download.ok(), path).toBe(false);
+      expect(await download.text(), path).not.toContain("deleted secret");
+    }
+    const zip = await downloaded(visitor, () =>
+      visitor.getByRole("link", { name: "Download ZIP" }).click(),
+    );
+    expect(zip.includes(Buffer.from("kept.txt"))).toBe(true);
+    expect(zip.includes(Buffer.from("deleted secret"))).toBe(false);
+  } finally {
+    await context.close().catch(() => {});
+    // Removes the link itself, never what it points at.
+    await rm(owner(`/${folder}`), { recursive: true, force: true });
+    await rm(owner(`/.trash/${folder}-deleted.txt`), { force: true });
+  }
+});
+
 test("upload-only retries password failures, forbids reads, and reports expired and exhausted links", async ({
   page,
   browser,
@@ -338,7 +380,7 @@ test("upload-only retries password failures, forbids reads, and reports expired 
     await expect(visitor.getByText("This link has expired.", { exact: true })).toBeVisible();
     const limited = await create("One download", null, 1);
     await visitor.goto(new URL(limited.publicPath, url).href);
-    await expect(visitor.getByRole("button", { name: "Preview", exact: true })).toHaveCount(0);
+    await expect(visitor.getByRole("button", { name: "Preview", exact: true })).toBeVisible();
     await expect(visitor.getByRole("link", { name: "Download", exact: true })).toBeVisible();
     const beforeDownload = await visitor.request.get(
       new URL(`/api/v1/public/shares/${limited.id}`, url).href,
@@ -404,7 +446,8 @@ test("an image-only folder shows a gallery with lightbox navigation and per-imag
     });
     try {
       await visitor.goto(galleryUrl);
-      const tiles = visitor.locator("button img");
+      // The e2e stack has no thumbnails, so each tile is an icon: never the original.
+      const tiles = visitor.getByRole("button", { name: /^[123]\.png$/ });
       await expect(tiles).toHaveCount(3);
       await expect.poll(() => thumbRequests.length).toBeGreaterThanOrEqual(3);
       await tiles.first().click();
@@ -441,7 +484,7 @@ test("an image-only folder shows a gallery with lightbox navigation and per-imag
   }
 });
 
-test("a shared ZIP can be peeked without extracting it, hidden on a limited link, and shown beside a single archive file's own download", async ({
+test("a shared ZIP can be peeked without extracting it, on a limited link too, and shown beside a single archive file's own download", async ({
   page,
   browser,
 }) => {
@@ -495,9 +538,131 @@ test("a shared ZIP can be peeked without extracting it, hidden on a limited link
     await expect(singlePeek).toBeVisible();
     await expect(singlePeek.getByText("a.txt")).toBeVisible();
 
+    // A limited link peeks like any other, and the peek counts once.
     await visitor.goto(new URL(limitedShare.publicPath, single).href);
-    await expect(visitor.getByRole("button", { name: "Peek", exact: true })).toHaveCount(0);
+    await visitor.getByRole("button", { name: "Peek", exact: true }).click();
+    const limitedPeek = visitor.getByRole("region", { name: "Archive entries for single.zip" });
+    await expect(limitedPeek.getByText("a.txt")).toBeVisible();
+    const peeked = await visitor.request.get(
+      new URL(`/api/v1/public/shares/${limitedShare.id}`, single).href,
+    );
+    expect(((await peeked.json()) as { usedDownloads: number }).usedDownloads).toBe(1);
     expect(forbidden).toEqual([]);
+  } finally {
+    await context.close().catch(() => {});
+  }
+});
+
+test("a limited link previews audio through Range reads and counts the preview once", async ({
+  page,
+  browser,
+}, testInfo) => {
+  await loginAs(page, "share_owner", "share-owner-test-password");
+  const name = `${uniqueName("limited")}.wav`;
+  const upload = await page.request.put(
+    `/api/v1/fs/upload?path=${encodeURIComponent(`/limited/${name}`)}&mkdirParents=true`,
+    {
+      headers: { "x-requested-with": "fdrive", "content-type": "application/octet-stream" },
+      data: shareAudioFixture(),
+    },
+  );
+  expect(upload.ok(), await upload.text()).toBe(true);
+  const created = await page.request.post("/api/v1/shares", {
+    headers: { "x-requested-with": "fdrive" },
+    data: {
+      name: "Limited audio",
+      paths: [`/limited/${name}`],
+      scope: "read",
+      expiresAt: null,
+      maxDownloads: 1,
+    },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const share = ManagedShare.parse(await created.json());
+  const context = await browser.newContext();
+  const visitor = await context.newPage();
+  const forbidden = publicRequests(visitor);
+  const reads: number[] = [];
+  visitor.on("response", (response) => {
+    if (new URL(response.url()).pathname.endsWith("/download")) reads.push(response.status());
+  });
+  const used = async () => {
+    const response = await visitor.request.get(
+      new URL(`/api/v1/public/shares/${share.id}`, page.url()).href,
+    );
+    return ((await response.json()) as { usedDownloads: number }).usedDownloads;
+  };
+  try {
+    await visitor.goto(new URL(share.publicPath, page.url()).href);
+    await expect(visitor.getByText("0 of 1 downloads")).toBeVisible();
+    await visitor.getByRole("button", { name: "Preview", exact: true }).click();
+    const preview = visitor.getByRole("region", { name: `Preview of ${name}` });
+    await expect(preview).toBeVisible();
+    await expect
+      .poll(() => preview.locator("audio").evaluate((audio: HTMLAudioElement) => audio.readyState))
+      .toBeGreaterThan(0);
+    expect(reads.length).toBeGreaterThan(0);
+    expect(reads.every((status) => status === 200 || status === 206)).toBe(true);
+    expect(await used()).toBe(1);
+    await visitor.screenshot({ path: testInfo.outputPath("limited-share-preview.png") });
+    // The one download is spent: another preview is refused and says why.
+    await preview.getByRole("button", { name: "Close preview" }).click();
+    await visitor.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect(
+      visitor
+        .getByRole("region", { name: `Preview of ${name}` })
+        .getByText("Share download limit reached"),
+    ).toBeVisible();
+    expect(await used()).toBe(1);
+    await visitor.getByRole("button", { name: "Refresh share" }).click();
+    await expect(
+      visitor.getByText("This link has reached its download limit.", { exact: true }),
+    ).toBeVisible();
+    await visitor.screenshot({ path: testInfo.outputPath("limited-share-spent.png") });
+    expect(forbidden).toEqual([]);
+  } finally {
+    await context.close().catch(() => {});
+  }
+});
+
+test("a public upload never replaces a file and shows the name it landed on", async ({
+  page,
+  browser,
+}) => {
+  await loginAs(page, "share_owner", "share-owner-test-password");
+  const folder = uniqueName("drop");
+  const existing = await page.request.put(
+    `/api/v1/fs/upload?path=${encodeURIComponent(`/${folder}/photo.txt`)}&mkdirParents=true`,
+    {
+      headers: { "x-requested-with": "fdrive", "content-type": "application/octet-stream" },
+      data: Buffer.from("the owner's file"),
+    },
+  );
+  expect(existing.ok(), await existing.text()).toBe(true);
+  const created = await page.request.post("/api/v1/shares", {
+    headers: { "x-requested-with": "fdrive" },
+    data: { name: "Drop box", paths: [`/${folder}`], scope: "write", expiresAt: null },
+  });
+  expect(created.ok(), await created.text()).toBe(true);
+  const share = ManagedShare.parse(await created.json());
+  const context = await browser.newContext();
+  const visitor = await context.newPage();
+  try {
+    await visitor.goto(new URL(share.publicPath, page.url()).href);
+    await visitor.getByLabel("Choose files to upload").setInputFiles({
+      name: "photo.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("the visitor's file"),
+    });
+    await expect(visitor.getByText("Uploaded as photo (2).txt", { exact: true })).toBeVisible();
+    const kept = await page.request.get(
+      `/api/v1/fs/download?path=${encodeURIComponent(`/${folder}/photo.txt`)}`,
+    );
+    expect(await kept.text()).toBe("the owner's file");
+    const added = await page.request.get(
+      `/api/v1/fs/download?path=${encodeURIComponent(`/${folder}/photo (2).txt`)}`,
+    );
+    expect(await added.text()).toBe("the visitor's file");
   } finally {
     await context.close().catch(() => {});
   }

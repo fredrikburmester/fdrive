@@ -3,11 +3,14 @@
 import {
   ChevronsUpDown,
   Clock3,
+  HardDrive,
+  Images,
   Info,
   Link2,
   LogOut,
   Monitor,
   Moon,
+  PanelLeftIcon,
   Sun,
   Trash2,
   UserRound,
@@ -16,17 +19,18 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
-import { toast } from "sonner";
-import { ProviderIcon } from "@/components/identity/provider-icon";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
 import { RecentsSection } from "@/components/shell/recents-section";
 import { SidebarResizeHandle } from "@/components/shell/resizable-sidebar";
+import { SavedSearchesSection } from "@/components/shell/saved-searches-section";
 import { SharedWithMeItem } from "@/components/shell/shared-with-me-item";
+import { SIDEBAR_ROW, SidebarSectionLabel } from "@/components/shell/sidebar-section";
 import { SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,17 +50,14 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
-import { useIdentityActions } from "@/lib/account/use-identities";
 import { useLogout } from "@/lib/api/auth-queries";
-import { anyLoginCan } from "@/lib/identity/capabilities";
-import { loginDisplay } from "@/lib/identity/login-display";
+import { useSidebarSwipe } from "@/lib/sidebar-swipe";
 import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
@@ -90,98 +91,111 @@ export function isTrashRoute(pathname: string | null): boolean {
 const FILES_ROUTE = "/files" as unknown as Route;
 const TRASH_ROUTE = "/trash" as Route;
 const ACCOUNT_ROUTE = "/account" as Route;
+const STORAGE_ROUTE = "/storage" as Route;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
-  const identityActions = useIdentityActions();
   const pathname = usePathname();
+  const { isMobile, openMobile, setOpenMobile, toggleSidebar } = useSidebar();
+  useSidebarSwipe(isMobile, openMobile, setOpenMobile);
 
-  const activeIdentity = me?.identities.find((identity) => identity.id === me.activeIdentityId);
-  const active = activeIdentity ? loginDisplay(activeIdentity) : undefined;
+  const username = me?.identity.username;
 
   return (
-    <Sidebar className="border-r border-sidebar-border backdrop-blur-xl">
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          {/* The wordmark returns to the root of Files, like a site logo. */}
-          <Link
-            href={FILES_ROUTE}
-            className="rounded-sm text-base font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          >
-            fdrive
-          </Link>
-        </div>
+    <Sidebar className="border-sidebar-border">
+      {/* As tall as the page header beside it, so the two line up. */}
+      <SidebarHeader className="h-12 flex-row items-center gap-1.5 px-3 py-0">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close sidebar"
+          className="rounded-sm text-sidebar-foreground/70"
+          onClick={toggleSidebar}
+        >
+          <PanelLeftIcon />
+        </Button>
+        {/* The wordmark returns to the root of Files, like a site logo. */}
+        <Link
+          href={FILES_ROUTE}
+          className="rounded-sm text-[24px] leading-none font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+        >
+          fdrive
+        </Link>
       </SidebarHeader>
-      <SidebarContent className="gap-0 [&_[data-sidebar=group]]:py-1 [&_[data-sidebar=group-label]]:h-7 [&_[data-sidebar=menu]]:gap-0">
-        <SidebarGroup>
-          <SidebarGroupLabel>Locations</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <FolderTree />
-              <SharedWithMeItem />
-            </SidebarMenu>
-          </SidebarGroupContent>
+      <SidebarContent className="gap-4 pt-1 pb-3">
+        <SidebarGroup className="py-0">
+          <SidebarSectionLabel>Locations</SidebarSectionLabel>
+          <SidebarMenu className="mt-0.5">
+            <FolderTree />
+            <SharedWithMeItem />
+          </SidebarMenu>
         </SidebarGroup>
         <FavoritesSection />
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={pathname?.startsWith("/activity")}
-                  render={<Link href={"/activity" as Route} />}
-                >
-                  <Clock3 />
-                  <span>My activity</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
+        <SidebarGroup className="py-0">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname === "/photos"}
+                render={<Link href={"/photos" as Route} />}
+              >
+                <Images />
+                <span>Photos</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname?.startsWith("/activity")}
+                render={<Link href={"/activity" as Route} />}
+              >
+                <Clock3 />
+                <span>My activity</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarGroup>
         <TagsSection />
+        <SavedSearchesSection />
         <RecentsSection />
         {/* Shares and Trash sit at the bottom of the navigation, above System. */}
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {anyLoginCan(me, "shares") && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={pathname === "/shares"}
-                    render={<Link href={"/shares" as Route} />}
-                  >
-                    <Link2 />
-                    <span>Shares</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-              {anyLoginCan(me, "trash") && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    isActive={isTrashRoute(pathname)}
-                    render={<Link href={TRASH_ROUTE} />}
-                  >
-                    <Trash2 />
-                    <span>Trash</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-            </SidebarMenu>
-          </SidebarGroupContent>
+        <SidebarGroup className="py-0">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname === "/shares"}
+                render={<Link href={"/shares" as Route} />}
+              >
+                <Link2 />
+                <span>Shares</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={isTrashRoute(pathname)}
+                render={<Link href={TRASH_ROUTE} />}
+              >
+                <Trash2 />
+                <span>Trash</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarGroup>
         {me?.isAdmin ? (
-          <SidebarGroup>
-            <SidebarGroupLabel>
+          <SidebarGroup className="py-0">
+            <SidebarSectionLabel>
               System
               <span className="ml-auto truncate font-normal text-sidebar-foreground/50">
                 {SYSTEM_SCOPE_CAPTION}
               </span>
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
+            </SidebarSectionLabel>
+            <div className="mt-0.5">
               <SystemNav />
-            </SidebarGroupContent>
+            </div>
           </SidebarGroup>
         ) : null}
       </SidebarContent>
@@ -191,13 +205,13 @@ export function AppSidebar() {
             render={
               <SidebarMenuButton size="lg">
                 <Avatar className="size-6">
-                  <AvatarFallback>{active ? avatarInitials(active.title) : "?"}</AvatarFallback>
+                  <AvatarFallback>{username ? avatarInitials(username) : "?"}</AvatarFallback>
                 </Avatar>
                 <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
-                  <span className="truncate text-sm font-medium">{active?.title ?? "..."}</span>
+                  <span className="truncate text-sm font-medium">{username ?? "..."}</span>
                   <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    {activeIdentity && <ProviderIcon type={activeIdentity.providerType} />}
-                    <span className="truncate">{active?.detail ?? ""}</span>
+                    {me && <HardDrive aria-hidden className="size-3.5 shrink-0" />}
+                    <span className="truncate">{me?.storageName ?? ""}</span>
                   </span>
                 </div>
                 <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
@@ -206,39 +220,7 @@ export function AppSidebar() {
           />
           <DropdownMenuContent align="start" className="w-56">
             <DropdownMenuGroup>
-              <DropdownMenuLabel>Logins</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={me?.activeIdentityId ?? ""}
-                onValueChange={(id) => {
-                  if (id !== me?.activeIdentityId)
-                    void identityActions
-                      .switch(id)
-                      .catch(() => toast.error("Could not switch login. Please try again."));
-                }}
-              >
-                {me?.identities.map((identity) => {
-                  const display = loginDisplay(identity);
-                  return (
-                    <DropdownMenuRadioItem
-                      key={identity.id}
-                      value={identity.id}
-                      disabled={identityActions.pending}
-                    >
-                      <span className="flex min-w-0 flex-col">
-                        <span className="truncate">{display.title}</span>
-                        <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                          <ProviderIcon type={identity.providerType} />
-                          <span className="truncate">{display.detail}</span>
-                        </span>
-                      </span>
-                    </DropdownMenuRadioItem>
-                  );
-                })}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{active?.title ?? "Account"}</DropdownMenuLabel>
+              <DropdownMenuLabel>{username ?? "Account"}</DropdownMenuLabel>
               <DropdownMenuSub>
                 <DropdownMenuSubTrigger>
                   <Monitor />
@@ -264,6 +246,10 @@ export function AppSidebar() {
               <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
                 <UserRound />
                 Account
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link href={STORAGE_ROUTE} />}>
+                <HardDrive />
+                Storage
               </DropdownMenuItem>
               <DropdownMenuItem render={<Link href={"/about" as Route} />}>
                 <Info />

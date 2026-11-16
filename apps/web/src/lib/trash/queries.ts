@@ -1,37 +1,19 @@
 "use client";
 
 import {
-  type ApiClient,
   ApiClientError,
   type OkResponse,
   type TrashListResponse,
   type TrashRestoreResponse,
-  type TrashStatusResponse,
 } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { toast } from "sonner";
-import { refreshIdentityQuery } from "@/lib/account/invalidation";
-import { accountTransition } from "@/lib/account/transition";
+import { refreshQuery } from "@/lib/api/refresh-query";
 import { describeFsError } from "@/lib/files/queries";
-import { apiClient, queryKeys, snapshotTabApiClient } from "./deps";
+import { apiClient, queryKeys } from "./deps";
 
-/** How long a fetched trash status is considered fresh: it only ever
- * changes when an operator reconfigures the storage provider, not while a
- * tab is open. */
-const TRASH_STATUS_STALE_TIME_MS = 5 * 60 * 1000;
-
-/** Whether the active identity's storage provider exposes a trash, and its configuration. */
-export function useTrashStatus() {
-  return useQuery({
-    queryKey: queryKeys.trash.status(),
-    queryFn: () => apiClient.trashStatus(),
-    staleTime: TRASH_STATUS_STALE_TIME_MS,
-  });
-}
-
-/** The active identity's trash listing. */
+/** The signed-in login's trash listing. */
 export function useTrash() {
   return useQuery({
     queryKey: queryKeys.trash.list(),
@@ -40,41 +22,27 @@ export function useTrash() {
 }
 
 /**
- * The shared shape behind every trash mutation hook: pins the API client
- * and login generation at mount (so a mutation started before a login
- * switch never lands against the new identity, matching `lib/files/queries.ts`'s
- * `useFsMutation`), always refreshes the trash list on success, and shows a
- * toast built from `describeFsError` on failure, unless `suppressErrorToast`
- * says the caller already has a more specific toast planned for this error
- * (used by `useTrashRestore`, whose caller shows a richer, actionable toast
- * for a restore conflict instead of the generic one below).
+ * The shared shape behind every trash mutation hook: always refreshes the
+ * trash list on success, and shows a toast built from `describeFsError` on
+ * failure, unless `suppressErrorToast` says the caller already has a more
+ * specific toast planned for this error (used by `useTrashRestore`, whose
+ * caller shows a richer, actionable toast for a restore conflict instead of
+ * the generic one below).
  */
 function useTrashMutation<TVariables, TResult>(config: {
-  mutationFn: (vars: TVariables, client: ApiClient) => Promise<TResult>;
+  mutationFn: (vars: TVariables) => Promise<TResult>;
   onSuccess?: (vars: TVariables, result: TResult, queryClient: QueryClient) => void;
   errorFallback: string;
   suppressErrorToast?: (error: unknown) => boolean;
 }) {
   const queryClient = useQueryClient();
-  const [scope] = useState(() => ({
-    generation: accountTransition.getSnapshot().generation,
-    client: snapshotTabApiClient(),
-  }));
   return useMutation({
-    mutationFn: (vars: TVariables) => {
-      const current = accountTransition.getSnapshot();
-      if (current.pending || current.generation !== scope.generation) {
-        return Promise.reject(new Error("The active login changed."));
-      }
-      return config.mutationFn(vars, scope.client);
-    },
+    mutationFn: config.mutationFn,
     onSuccess: (result, vars) => {
-      if (scope.generation !== accountTransition.getSnapshot().generation) return;
-      void refreshIdentityQuery(queryClient, queryKeys.trash.list());
+      void refreshQuery(queryClient, queryKeys.trash.list());
       config.onSuccess?.(vars, result, queryClient);
     },
     onError: (error) => {
-      if (scope.generation !== accountTransition.getSnapshot().generation) return;
       if (config.suppressErrorToast?.(error) === true) return;
       toast.error(describeFsError(error, config.errorFallback));
     },
@@ -101,15 +69,15 @@ export interface TrashRestoreVariables {
  */
 export function useTrashRestore() {
   return useTrashMutation<TrashRestoreVariables, TrashRestoreResponse>({
-    mutationFn: (vars, client) =>
-      client.trashRestore(
+    mutationFn: (vars) =>
+      apiClient.trashRestore(
         vars.target === undefined
           ? { ids: [...vars.ids] }
           : { ids: [...vars.ids], target: vars.target },
       ),
     onSuccess: (_vars, result, queryClient) => {
       for (const entry of result.restored) {
-        void refreshIdentityQuery(queryClient, queryKeys.fs.list(parentPath(entry.path)));
+        void refreshQuery(queryClient, queryKeys.fs.list(parentPath(entry.path)));
       }
     },
     errorFallback: "Could not restore.",
@@ -120,7 +88,7 @@ export function useTrashRestore() {
 /** Permanently deletes one or more trash entries. */
 export function useTrashPurge() {
   return useTrashMutation<readonly string[], OkResponse>({
-    mutationFn: (ids, client) => client.trashPurge({ ids: [...ids] }),
+    mutationFn: (ids) => apiClient.trashPurge({ ids: [...ids] }),
     errorFallback: "Could not delete permanently.",
   });
 }
@@ -128,9 +96,9 @@ export function useTrashPurge() {
 /** Permanently empties the whole trash. */
 export function useTrashEmpty() {
   return useTrashMutation<void, OkResponse>({
-    mutationFn: (_vars, client) => client.trashEmpty(),
+    mutationFn: () => apiClient.trashEmpty(),
     errorFallback: "Could not empty the trash.",
   });
 }
 
-export type { TrashListResponse, TrashStatusResponse };
+export type { TrashListResponse };

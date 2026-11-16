@@ -14,6 +14,7 @@ import {
   DURABLE_TABLES,
   quoteIdentifier,
   quoteTable,
+  SNAPSHOT_GATE,
 } from "./registry.js";
 import { digest, fileStream, ignoreCleanupError, limitBytes, syncFile } from "./streams.js";
 import type {
@@ -105,6 +106,7 @@ export async function captureSnapshot(
   pack.on("error", () => undefined);
   const partial = `${options.output}.partial`;
   let transfer: Promise<void> | undefined;
+  let snapshotting = false;
   let locked = false;
   let created = false;
   let published = false;
@@ -122,11 +124,20 @@ export async function captureSnapshot(
     const encrypted = new Encrypter();
     encrypted.addRecipient(options.recipient);
     await client.query("set lock_timeout = '30s'");
+    // No write (SNAPSHOT_GATE) and no recovery file writer (BACKUP_GATE) is half done when the
+    // repeatable-read snapshot is taken. Writes then go on and the snapshot does not see them;
+    // recovery files stay still until every one is read. A write may wait on OCR, which writes
+    // under BACKUP_GATE, so SNAPSHOT_GATE is always taken first.
+    await client.query("select pg_advisory_lock($1)", [SNAPSHOT_GATE]);
+    snapshotting = true;
     await client.query("select pg_advisory_lock($1)", [BACKUP_GATE]);
     locked = true;
     await client.query("begin isolation level repeatable read read only");
     await client.query("set local statement_timeout = '120s'");
+    // The transaction's first query takes its snapshot.
     const schema = await describeSchema(client);
+    await client.query("select pg_advisory_unlock($1)", [SNAPSHOT_GATE]);
+    snapshotting = false;
     const header: SnapshotHeader = {
       format: 1,
       id: options.id,
@@ -138,14 +149,14 @@ export async function captureSnapshot(
       fingerprint: schemaFingerprint(schema),
       environment: source.environment,
     };
-    const capture = await source.blobs(client, options.metadataOnly);
+    const capture: Awaited<ReturnType<BackupSource["blobs"]>> = options.metadataOnly
+      ? { sources: [], coverage: [] }
+      : await source.blobs(client);
     signal.throwIfAborted();
-    const selected = options.metadataOnly
-      ? capture.sources.filter((blob) => blob.kind === "attachment")
-      : capture.sources;
     HeaderSchema.parse(header);
-    if (selected.length > 100_000) throw Error("Backup source inventory exceeds restore limit");
-    let entryCount = selected.length + 2;
+    if (capture.sources.length > 100_000)
+      throw Error("Backup source inventory exceeds restore limit");
+    let entryCount = capture.sources.length + 2;
     const manifest: SnapshotManifest = {
       format: 1,
       id: options.id,
@@ -170,12 +181,7 @@ export async function captureSnapshot(
     for (const table of DURABLE_TABLES) {
       const columns = schema[table];
       if (!columns) throw Error("Missing backup table");
-      const projection = columns.map((column) =>
-        table === "app.credentials" &&
-        ["cached_token", "cached_token_expires_at"].includes(column.name)
-          ? "null::text"
-          : `${quoteIdentifier(column.name)}::text`,
-      );
+      const projection = columns.map((column) => `${quoteIdentifier(column.name)}::text`);
       await client.query(
         `declare backup_rows no scroll cursor for select array[${projection.join(",")}]::text[] as values from ${quoteTable(table)}`,
       );
@@ -201,7 +207,7 @@ export async function captureSnapshot(
       }
       manifest.tables[table] = { rows: count, sha256: hash.digest("hex") };
     }
-    for (const [index, blob] of selected.entries()) {
+    for (const [index, blob] of capture.sources.entries()) {
       signal.throwIfAborted();
       const name = `blobs/${index}`;
       const hash = createHash("sha256");
@@ -224,7 +230,6 @@ export async function captureSnapshot(
         path: blob.path,
         size: blob.size,
         sha256: hash.digest("hex"),
-        ...(blob.identityId ? { identityId: blob.identityId } : {}),
         ...(blob.sourceId ? { sourceId: blob.sourceId } : {}),
       };
       manifest.blobs.push(record);
@@ -249,6 +254,10 @@ export async function captureSnapshot(
     throw error;
   } finally {
     client.off("error", fail);
+    if (snapshotting)
+      await client
+        .query("select pg_advisory_unlock($1)", [SNAPSHOT_GATE])
+        .catch(ignoreCleanupError);
     if (locked)
       await client.query("select pg_advisory_unlock($1)", [BACKUP_GATE]).catch(ignoreCleanupError);
     await client.query("reset lock_timeout").catch(ignoreCleanupError);

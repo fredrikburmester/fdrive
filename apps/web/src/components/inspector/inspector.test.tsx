@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Inspector } from "./inspector";
 
 const useFolderSizeMock = vi.fn();
+const usePhotoDetailsMock = vi.fn();
 
 vi.mock("@/components/activity/file-activity-section", () => ({
   FileActivitySection: ({ path }: { path: string }) => (
@@ -14,6 +15,7 @@ vi.mock("@/components/activity/file-activity-section", () => ({
 
 vi.mock("@/lib/inspector/queries", () => ({
   useFolderSize: (...args: unknown[]) => useFolderSizeMock(...args),
+  usePhotoDetails: (...args: unknown[]) => usePhotoDetailsMock(...args),
 }));
 
 vi.mock("@/components/metadata/entry-metadata-section", () => ({
@@ -46,6 +48,8 @@ beforeEach(() => {
     removeEventListener: () => {},
   }));
   useFolderSizeMock.mockReset();
+  usePhotoDetailsMock.mockReset();
+  usePhotoDetailsMock.mockReturnValue({ data: undefined });
 });
 
 afterEach(() => {
@@ -71,6 +75,16 @@ describe("Inspector: folder size states", () => {
     render(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} />);
 
     expect(screen.getAllByText("Not indexed")).toHaveLength(2);
+  });
+
+  it("shows Not indexed without asking when the files folder is not indexed", () => {
+    useFolderSizeMock.mockReturnValue({ isPending: true, isError: false, data: undefined });
+
+    render(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} indexed={false} />);
+
+    expect(useFolderSizeMock).toHaveBeenCalledWith("/photos", { enabled: false });
+    expect(screen.getAllByText("Not indexed")).toHaveLength(2);
+    expect(screen.queryByText("Calculating")).toBeNull();
   });
 
   it("shows the real size and file count once indexed, with a note", () => {
@@ -138,6 +152,34 @@ describe("Inspector: image preview", () => {
     expect(screen.getByRole("img", { name: "DSC00001.ARW" }).getAttribute("src")).toBe(
       "https://example.test/thumb?path=/DSC00001.ARW&size=256",
     );
+  });
+
+  it("shows the details the photo has, and asks only for an image while indexed", () => {
+    useFolderSizeMock.mockReturnValue({ isPending: true, isError: false, data: undefined });
+    usePhotoDetailsMock.mockReturnValue({
+      data: {
+        takenAt: null,
+        camera: "Apple iPhone 15 Pro",
+        width: 3024,
+        height: 4032,
+        latitude: 59.5,
+        longitude: 18.25,
+      },
+    });
+    render(<Inspector entries={[heicEntry]} onClose={() => {}} />);
+
+    expect(usePhotoDetailsMock).toHaveBeenCalledWith("/photo.heic", { enabled: true });
+    expect(screen.getByText("Apple iPhone 15 Pro")).toBeTruthy();
+    expect(screen.getByText("3024 \u00d7 4032")).toBeTruthy();
+    expect(screen.getByText("59.50000, 18.25000")).toBeTruthy();
+    expect(screen.queryByText("Taken")).toBeNull();
+
+    cleanup();
+    render(<Inspector entries={[heicEntry]} onClose={() => {}} indexed={false} />);
+    expect(usePhotoDetailsMock).toHaveBeenLastCalledWith("/photo.heic", { enabled: false });
+    cleanup();
+    render(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} />);
+    expect(usePhotoDetailsMock).toHaveBeenLastCalledWith("/photos", { enabled: false });
   });
 
   it("falls back to the kind icon when the image fails to load", () => {

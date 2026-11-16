@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { Loader2 } from "lucide-react";
 import {
   AlertDialog,
@@ -12,7 +12,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { deleteDialogCopy, type TrashAvailability } from "@/lib/trash/format";
+import { useTrashSettings } from "@/lib/api/trash-settings-queries";
+import { receivedGrantFor } from "@/lib/grants/paths";
+import { deleteDialogCopy } from "@/lib/trash/format";
 
 export interface DeleteDialogProps {
   entries: readonly FsEntry[];
@@ -25,30 +27,32 @@ export interface DeleteDialogProps {
    * as a large folder or selection; the request itself cannot be cancelled.
    */
   pending?: boolean;
-  /**
-   * Whether the active identity's storage provider exposes a trash. `null`
-   * (the default) and `{ available: false }` both render the permanent
-   * "Delete" copy; `{ available: true, retentionHours }` renders the
-   * non-destructive "Move to Trash" copy, adding the retention sentence
-   * when `retentionHours` is configured.
-   */
-  trash?: TrashAvailability | null;
+  /** Folders others share with the login: what is in one goes to its owner's Trash. */
+  received?: readonly ReceivedGrant[];
 }
 
-/** Confirms deleting (or, with a trash configured, moving to Trash) one or more entries. */
+const NONE: readonly ReceivedGrant[] = [];
+
+/**
+ * Confirms moving one or more entries to Trash, saying whose Trash and, once
+ * that setting has loaded, how long it keeps them.
+ */
 export function DeleteDialog({
   entries,
   onOpenChange,
   onConfirm,
   pending = false,
-  trash = null,
+  received = NONE,
 }: DeleteDialogProps) {
   const count = entries.length;
+  const retentionDays = useTrashSettings().data?.retentionDays;
   const copy = deleteDialogCopy(
-    entries.map((entry) => entry.name),
-    trash,
+    entries.map((entry) => ({
+      name: entry.name,
+      owner: receivedGrantFor(entry.path, received)?.owner,
+    })),
+    retentionDays,
   );
-  const movingToTrash = trash?.available === true;
 
   return (
     <AlertDialog
@@ -68,7 +72,6 @@ export function DeleteDialog({
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            variant={movingToTrash ? "default" : "destructive"}
             disabled={pending}
             aria-busy={pending}
             onClick={() => {

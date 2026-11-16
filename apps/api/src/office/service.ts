@@ -10,15 +10,18 @@ import {
   extensionOf,
   isStorageError,
   joinPath,
+  mimeFromExtension,
   parentPath,
-  toFsPath,
 } from "@fdrive/core";
-import { recordOfficeAction, recordOfficeOpen } from "../activity/office.js";
+import { officeFileActor, recordOfficeOpen } from "../activity/office.js";
+import { gated, ungated } from "../backups/write-gate.js";
+import { sendFile } from "../fs/send-file.ts";
 import { browserActor, callbackFile, requireOfficeEdit } from "./auth.ts";
 import { officeErrorResponse, WopiError } from "./errors.ts";
 import { selectDiscoveryAction } from "./protocol/discovery.ts";
 import { verifyProof } from "./protocol/proof.ts";
-import { boundedStream, contentVersion } from "./streams.ts";
+import { documentVersion } from "./protocol/version.ts";
+import { boundedStream } from "./streams.ts";
 import { blankDocument } from "./templates.ts";
 import type {
   BrowserOfficeInput,
@@ -26,29 +29,26 @@ import type {
   OfficeConfig,
   OfficeDeps,
   OfficeFile,
+  OfficeFileLocation,
   OpenedFile,
 } from "./types.ts";
 import { callbackProofUrl, editorHostUrl, officeActionUrl } from "./urls.ts";
 import { dispatchOfficeWrite } from "./writes.ts";
 
-export function officeLocation(
+/**
+ * The key of the document at `path` in the actor's files: the owner's login
+ * and the owner's path, so a document in a folder shared with the actor is
+ * the same document its owner and everyone else it is shared with open.
+ */
+export async function officeLocation(
+  deps: OfficeDeps,
   actor: OfficeActor,
   path: string,
-): { providerId: string; rootName: string; path: string } {
-  const mapped = toFsPath(actor.scopes, path);
-  if (mapped === null) throw new WopiError(404);
-  return {
-    providerId: actor.identity.providerId,
-    rootName: mapped.rootName,
-    path: mapped.fsPath.slice(1),
-  };
+): Promise<OfficeFileLocation> {
+  return deps.grants.ownerPath(actor.identity.id, path);
 }
-export function mutationKey(location: {
-  providerId: string;
-  rootName: string;
-  path: string;
-}): string {
-  return `office-target:${JSON.stringify([location.providerId, location.rootName, location.path])}`;
+export function mutationKey(location: OfficeFileLocation): string {
+  return `office-target:${JSON.stringify([location.identityId, location.path])}`;
 }
 export async function fileExists(actor: OfficeActor, path: string): Promise<boolean> {
   try {
@@ -59,22 +59,6 @@ export async function fileExists(actor: OfficeActor, path: string): Promise<bool
     if (isStorageError(error) && error.kind === "bad_request") return true;
     throw error;
   }
-}
-export function publishOfficeChange(
-  deps: OfficeDeps,
-  actor: OfficeActor,
-  path: string,
-  op: "create" | "update" | "move",
-  target?: string,
-): void {
-  deps.bus.publish({
-    type: "fs",
-    op,
-    identityId: actor.identity.id,
-    paths: [path],
-    at: deps.clock().toISOString(),
-    ...(target === undefined ? {} : { targetPaths: [target] }),
-  });
 }
 export function officeSignal(config: OfficeConfig, request?: Request): AbortSignal {
   const deadline = AbortSignal.timeout(config.timeoutMs ?? 120000);
@@ -112,27 +96,22 @@ export function mintedFields(
     },
   };
 }
-async function checkFileInfo(
-  _deps: OfficeDeps,
-  config: OfficeConfig,
-  opened: OpenedFile,
-  signal: AbortSignal,
-): Promise<Response> {
+async function checkFileInfo(config: OfficeConfig, opened: OpenedFile): Promise<Response> {
   const { actor, file, path, mode } = opened;
-  const content = await contentVersion(actor.storage, path, config.maxBytes, signal);
+  const content = await documentVersion(actor.storage, path);
   const edit = mode === "edit";
-  const folder = actor.session.activeIdentityId === actor.identity.id ? parentPath(path) : "/";
+  const folder = parentPath(path);
   const close = `${config.appUrl.replace(/\/$/, "")}/files${folder === "/" ? "" : folder.split("/").map(encodeURIComponent).join("/")}`;
   return Response.json({
     BaseFileName: baseName(path),
-    OwnerId: file.providerId,
+    OwnerId: file.identityId,
     UserId: actor.identity.id,
-    UserFriendlyName: actor.identity.externalUsername,
+    UserFriendlyName: actor.identity.username,
     Size: content.size,
     Version: content.version,
     // ONLYOFFICE prefers this optional timestamp over Version for its view cache key.
-    // Omit it there so same-mtime external writes invalidate through the content hash.
-    ...(config.product === "collabora" && content.modifiedAt !== null
+    // Omit it there so same-mtime external writes invalidate through Version.
+    ...(config.product === "collabora"
       ? { LastModifiedTime: content.modifiedAt.toISOString() }
       : {}),
     UserCanWrite: edit,
@@ -150,10 +129,8 @@ async function checkFileInfo(
     BreadcrumbFolderUrl: close,
     BreadcrumbDocName: baseName(path),
     CloseUrl: close,
-    HostViewUrl: editorHostUrl(config, actor.identity.id, path, "view"),
-    ...(opened.editAllowed
-      ? { HostEditUrl: editorHostUrl(config, actor.identity.id, path, "edit") }
-      : {}),
+    HostViewUrl: editorHostUrl(config, path, "view"),
+    ...(opened.editAllowed ? { HostEditUrl: editorHostUrl(config, path, "edit") } : {}),
     PostMessageOrigin: new URL(config.appUrl).origin,
     FileNameMaxLength: 255,
   });
@@ -165,25 +142,21 @@ async function getContents(
   signal: AbortSignal,
 ): Promise<Response> {
   const raw = request.headers.get("X-WOPI-MaxExpectedSize");
-  let max = config.maxBytes;
-  if (raw !== null) {
-    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))) throw new WopiError(400);
-    if (opened.stat.size > Number(raw)) throw new WopiError(412);
-    max = Math.min(max, Number(raw));
+  if (raw !== null && (!/^\d+$/.test(raw) || !Number.isSafeInteger(Number(raw))))
+    throw new WopiError(400);
+  const max = raw === null ? config.maxBytes : Math.min(config.maxBytes, Number(raw));
+  const file = await opened.actor.storage.open(opened.path);
+  if (file.size > max) {
+    await file.close();
+    throw new WopiError(raw !== null && file.size > Number(raw) ? 412 : 413);
   }
-  if (opened.stat.size > config.maxBytes) throw new WopiError(413);
-  const result = await opened.actor.storage.download(opened.path, { signal });
-  if (result.contentLength !== null && result.contentLength > max) {
-    await result.body.cancel();
-    throw new WopiError(raw === null ? 413 : 412);
-  }
-  const headers = new Headers({
-    "Content-Type": result.contentType ?? "application/octet-stream",
-    "Cache-Control": "no-store",
-  });
-  if (result.contentLength !== null) headers.set("Content-Length", String(result.contentLength));
-  if (result.lastModified !== null) headers.set("Last-Modified", result.lastModified.toUTCString());
-  return new Response(boundedStream(result.body, max, signal), { headers });
+  const type = mimeFromExtension(extensionOf(baseName(opened.path))) ?? "application/octet-stream";
+  return sendFile(
+    request,
+    file,
+    { "Content-Type": type, "Cache-Control": "no-store" },
+    { body: (bytes) => boundedStream(bytes, max, signal) },
+  );
 }
 export function createOfficeService(deps: OfficeDeps) {
   async function configured(): Promise<{
@@ -232,8 +205,10 @@ export function createOfficeService(deps: OfficeDeps) {
       const doc = await discovery.get();
       const action = selectDiscoveryAction(doc, extensionOf(baseName(request.path)), request.mode);
       if (action === undefined) throw new WopiError(400);
-      await contentVersion(actor.storage, request.path, config.maxBytes, officeSignal(config));
-      const file = await deps.files.ensure(officeLocation(actor, request.path));
+      // The document must be there, readable and within what Office accepts.
+      const { size } = await documentVersion(actor.storage, request.path);
+      if (size > config.maxBytes) throw new WopiError(413);
+      const file = await deps.files.ensure(await officeLocation(deps, actor, request.path));
       const actionUrl = officeActionUrl(action.url, config, file.id, request.ui);
       const fields = mintedFields(
         deps,
@@ -242,8 +217,10 @@ export function createOfficeService(deps: OfficeDeps) {
         file,
         request.mode === "view" ? "view" : "edit",
       );
-      await recordOfficeOpen(deps, actor, request.path, file.id, () =>
-        deps.metadata.touchRecent(actor.identity.id, request.path),
+      await gated(deps.gate ?? ungated, () =>
+        recordOfficeOpen(deps, actor, request.path, file.id, () =>
+          deps.metadata.touchRecent(actor.identity.id, request.path),
+        ),
       );
       return {
         fileId: file.id,
@@ -262,35 +239,24 @@ export function createOfficeService(deps: OfficeDeps) {
       const { config } = await configured();
       const actor = await browserActor(deps, input);
       const path = joinPath(request.parent, request.name);
-      const location = officeLocation(actor, path);
       await requireOfficeEdit(deps, actor, path);
+      const location = await officeLocation(deps, actor, path);
       const bytes = await blankDocument(extensionOf(request.name).slice(1));
-      await deps.withWriteScope(actor.identity.providerId, (scope) =>
+      await deps.withWriteScope((scope) =>
         scope.locks.withFileLock(mutationKey(location), async () => {
           await requireOfficeEdit(deps, actor, path);
-          if (await fileExists(actor, path)) throw new WopiError(409, { "X-WOPI-Lock": "" });
-          const file = await scope.files.ensure(location);
-          await recordOfficeAction(
-            deps,
-            actor,
-            "file.create",
-            path,
-            path,
-            file.id,
-            () =>
-              // The lock serializes fdrive's own writers; `overwrite: false`
-              // refuses a name a writer outside fdrive took since the check,
-              // as a `conflict` the route reports like the check's 409.
-              actor.storage.upload(path, bytes, {
-                contentLength: bytes.byteLength,
-                overwrite: false,
-                signal: officeSignal(config),
-              }),
-            { size: bytes.byteLength },
-          );
+          // On its own transaction, so the registry's lock is not held while the document is written.
+          const file = await deps.files.ensure(location);
+          // Published only while the name is free: a taken name is a
+          // `conflict` (409), never replaced.
+          await deps.operations.upload(officeFileActor(deps, actor, file.id), path, bytes, {
+            action: "file.create",
+            contentLength: bytes.byteLength,
+            overwrite: false,
+            signal: officeSignal(config),
+          });
         }),
       );
-      publishOfficeChange(deps, actor, path, "create");
       return { identityId: actor.identity.id, path };
     },
     async callback(request: Request, fileId: string, contents: boolean): Promise<Response> {
@@ -326,7 +292,7 @@ export function createOfficeService(deps: OfficeDeps) {
         if (request.method === "GET")
           return await (contents
             ? getContents(config, opened, request, signal)
-            : checkFileInfo(deps, config, opened, signal));
+            : checkFileInfo(config, opened));
         if (request.method !== "POST") throw new WopiError(501);
         return await dispatchOfficeWrite(deps, config, opened, request, contents, signal);
       } catch (error) {

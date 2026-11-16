@@ -1,21 +1,23 @@
-import { createHash } from "node:crypto";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdtemp, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
-import type { StorageProvider } from "@fdrive/core";
 import { WopiError } from "./errors.ts";
-import { deriveFileVersion } from "./protocol/version.ts";
 
+/** What a bounded stream let through, and why it stopped early, if it did. */
+export interface BoundedProgress {
+  size: number;
+  failure?: unknown;
+}
+
+/**
+ * `source` with at most `maxBytes`: past the limit it fails with 413, and on
+ * `signal` with 408. `progress` follows it, so a caller whose consumer wraps
+ * the failure (a storage upload) can still answer with the request's own.
+ */
 export function boundedStream(
   source: ReadableStream<Uint8Array>,
   maxBytes: number,
   signal: AbortSignal,
+  progress: BoundedProgress = { size: 0 },
 ): ReadableStream<Uint8Array> {
   const reader = source.getReader();
-  let size = 0;
   let stopped = false;
   let controller: ReadableStreamDefaultController<Uint8Array>;
   function cleanup() {
@@ -25,7 +27,8 @@ export function boundedStream(
     if (stopped) return;
     stopped = true;
     cleanup();
-    controller.error(new WopiError(408));
+    progress.failure = new WopiError(408);
+    controller.error(progress.failure);
     void reader.cancel().catch(() => undefined);
   }
   return new ReadableStream<Uint8Array>({
@@ -45,13 +48,14 @@ export function boundedStream(
           reader.releaseLock();
           return;
         }
-        size += next.value.byteLength;
-        if (size > maxBytes) throw new WopiError(413);
+        progress.size += next.value.byteLength;
+        if (progress.size > maxBytes) throw new WopiError(413);
         c.enqueue(next.value);
       } catch (error) {
         if (!stopped) {
           stopped = true;
           cleanup();
+          progress.failure = error;
           c.error(error);
           void reader.cancel().catch(() => undefined);
         }
@@ -63,63 +67,4 @@ export function boundedStream(
       await reader.cancel(reason);
     },
   });
-}
-export async function contentVersion(
-  storage: StorageProvider,
-  path: string,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<{ version: string; size: number; modifiedAt: Date | null }> {
-  const download = await storage.download(path, { signal });
-  const reader = boundedStream(download.body, maxBytes, signal).getReader();
-  const hash = createHash("sha256");
-  let size = 0;
-  try {
-    for (;;) {
-      const next = await reader.read();
-      if (next.done) break;
-      size += next.value.byteLength;
-      hash.update(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const mtime = download.lastModified?.getTime() ?? 0;
-  return {
-    version: deriveFileVersion({
-      mtimeNs: BigInt(mtime) * 1000000n,
-      size: BigInt(size),
-      sha256: hash.digest("hex"),
-    }),
-    size,
-    modifiedAt: download.lastModified,
-  };
-}
-
-/** Validate the complete request on private disk before touching upstream content. */
-export async function withStagedUpload<T>(
-  source: ReadableStream<Uint8Array>,
-  maxBytes: number,
-  signal: AbortSignal,
-  consume: (body: ReadableStream<Uint8Array>, size: number) => Promise<T>,
-  temporaryRoot = tmpdir(),
-): Promise<T> {
-  const directory = await mkdtemp(join(temporaryRoot, "fdrive-office-"));
-  const path = join(directory, "upload");
-  try {
-    await pipeline(
-      Readable.fromWeb(boundedStream(source, maxBytes, signal)),
-      createWriteStream(path, { flags: "wx", mode: 0o600 }),
-    );
-    if (signal.aborted) throw new WopiError(408);
-    const size = (await stat(path)).size;
-    const file = createReadStream(path);
-    try {
-      return await consume(Readable.toWeb(file), size);
-    } finally {
-      file.destroy();
-    }
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
 }

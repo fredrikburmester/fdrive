@@ -8,7 +8,6 @@ import type { Logger } from "pino";
 import { createApp } from "../../../src/app.js";
 import { COOKIE_NAME, hashSessionId } from "../../../src/auth/sessions.js";
 import { loadConfig } from "../../../src/config.js";
-import { type BusEvent, createEventBus } from "../../../src/events/bus.js";
 import { createMetadataService } from "../../../src/metadata/service.js";
 import { buildExpectedProof } from "../../../src/office/protocol/proof.ts";
 import { registerOfficeRoutes, registerWopiRoutes } from "../../../src/office/routes.ts";
@@ -16,6 +15,11 @@ import { createOfficeService } from "../../../src/office/service.ts";
 import { createOfficeTokenCodec } from "../../../src/office/tokens.ts";
 import type { OfficeConfig, OfficeDeps } from "../../../src/office/types.ts";
 import { activityFixture } from "../../activity-fixture.js";
+import {
+  memoryAccessRepo,
+  testAccessFollowers,
+  testFileOperations,
+} from "../../file-operations.js";
 export const proofPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
 export function proofKey(pair = proofPair) {
   const jwk = pair.publicKey.export({ format: "jwk" });
@@ -36,7 +40,6 @@ export async function officeHarness(
   const repos = createMemoryRepos();
   const now = { value: new Date("2026-09-06T00:00:00Z") };
   const clock = () => now.value;
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
   const storage =
     options.storage ??
     createMemoryStorage({
@@ -56,14 +59,13 @@ export async function officeHarness(
     const account = await repos.accounts.create({ displayName: username });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: username,
+      username,
     });
     const sessionId = `session-${username}`;
     const session = await repos.sessions.create({
       idHash: hashSessionId(sessionId),
       accountId: account.id,
-      activeIdentityId: identity.id,
+      identityId: identity.id,
       expiresAt: new Date(now.value.getTime() + 86400000),
       userAgent: null,
       ip: null,
@@ -125,16 +127,18 @@ export async function officeHarness(
   const files = createMemoryOfficeFileRepo();
   const locks = createMemoryWopiLockRepo();
   const activity = activityFixture(clock);
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  for (const user of users)
-    bus.subscribe({ identityId: user.identity.id }, (event) => events.push(event));
+  // Every user reaches alice's files at the same paths, so cross-user
+  // cases need no copies: every document is alice's.
+  const ownerPath = async (_identityId: string, path: string) => ({
+    identityId: alice.identity.id,
+    path,
+  });
+  const metadata = createMetadataService(repos);
+  const activityService =
+    options.deps && "activity" in options.deps ? options.deps.activity : activity.service;
   const deps: OfficeDeps = {
-    canEdit: async (actor) =>
-      actor.identity.providerId === provider.id &&
-      ["alice", "bob"].includes(actor.identity.externalUsername),
-    withWriteScope: (providerId, callback) =>
-      locks.withFileLock(`office-write:${providerId}`, () => callback({ files, locks })),
+    canEdit: async (actor) => ["alice", "bob"].includes(actor.identity.username),
+    withWriteScope: (callback) => callback({ files, locks }),
     config,
     discovery: cache,
     tokens: createOfficeTokenCodec(Buffer.alloc(32, 7)),
@@ -142,17 +146,23 @@ export async function officeHarness(
     files,
     locks,
     clock,
-    location: async () => ({
-      providerId: provider.id,
-      // Every user shares one folder, so cross-user cases need no copies.
-      scopes: [{ rootName: "files", fsPrefix: "/shared", virtualPrefix: "/" }],
-    }),
-    storageFactory: (id) =>
+    grants: {
+      ownerPath,
+      pathFor: async (_identityId, owned) =>
+        owned.identityId === alice.identity.id ? owned.path : null,
+    },
+    storageFactory: (id: string) =>
       options.storageForUser?.(
-        users.find((user) => user.identity.id === id)?.identity.externalUsername ?? "alice",
+        users.find((user) => user.identity.id === id)?.identity.username ?? "alice",
       ) ?? storage,
-    metadata: createMetadataService(repos),
-    bus,
+    // Documents keep their ids through renames with what grants access.
+    operations: testFileOperations({
+      ...(activityService === undefined ? {} : { activity: activityService }),
+      metadata,
+      ownerPath,
+      access: testAccessFollowers(memoryAccessRepo({ office: files }, clock), { ownerPath }),
+    }),
+    metadata,
     activity: activity.service,
     ...options.deps,
   };
@@ -161,6 +171,7 @@ export async function officeHarness(
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger,
@@ -169,7 +180,7 @@ export async function officeHarness(
     startedAt: clock(),
     principalResolver: async (c) =>
       users.find((u) => u.sessionId === getCookie(c, COOKIE_NAME))?.principal ?? alice.principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) => registerOfficeRoutes(groups, { service }),
   });
   registerWopiRoutes(app, { service });
@@ -197,6 +208,7 @@ export async function officeHarness(
       body?: string | ReadableStream<Uint8Array>;
       pair?: typeof proofPair;
       urlSuffix?: string;
+      signal?: AbortSignal;
     } = {},
   ) {
     const suffix = `/files/${fileId}${options.contents ? "/contents" : ""}?access_token=${encodeURIComponent(token)}${options.urlSuffix ?? ""}`;
@@ -210,6 +222,7 @@ export async function officeHarness(
       method: options.method ?? "GET",
       headers: { "X-WOPI-TimeStamp": timestamp, "X-WOPI-Proof": proof, ...options.headers },
       ...(options.body === undefined ? {} : { body: options.body, duplex: "half" }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
   }
   async function callback(
@@ -223,6 +236,7 @@ export async function officeHarness(
   return {
     app,
     deps,
+    metadata,
     activity,
     service,
     config,
@@ -232,10 +246,8 @@ export async function officeHarness(
     locks,
     storage,
     repos,
-    provider,
     now,
     clock,
-    events,
     alice,
     bob,
     reader,

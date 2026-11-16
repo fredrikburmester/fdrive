@@ -1,63 +1,31 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_TRASH_RETENTION_DAYS,
   isValidPath,
-  TrashConfiguration,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
   TrashSettings,
-  TrashSettingsUpdateRequest,
-  TrashStatusResponse,
 } from "./trash";
 
 const AT = "2026-01-01T00:00:00.000Z";
-const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 
-describe("Trash settings", () => {
-  const disabled = {
-    providerId: PROVIDER_ID,
-    revision: 0,
-    enabled: false,
-    path: "/.trash",
-    retentionHours: null,
-    strategy: "move",
-  };
-
-  it("accepts disabled defaults and enabled settings", () => {
-    expect(TrashSettings.safeParse(disabled).success).toBe(true);
-    expect(
-      TrashSettingsUpdateRequest.safeParse({ ...disabled, enabled: true, retentionHours: 720 })
-        .success,
-    ).toBe(true);
+describe("TrashSettings", () => {
+  it("accepts whole days from one to ten years, defaulting to 30", () => {
+    expect(DEFAULT_TRASH_RETENTION_DAYS).toBe(30);
+    expect(TrashSettings.safeParse({ retentionDays: 1 }).success).toBe(true);
+    expect(TrashSettings.safeParse({ retentionDays: 3650 }).success).toBe(true);
   });
 
-  it("never enables Trash for a provider without one", () => {
-    expect(TrashSettings.safeParse({ ...disabled, strategy: "none" }).success).toBe(true);
-    expect(TrashSettings.safeParse({ ...disabled, strategy: "none", enabled: true }).success).toBe(
-      false,
-    );
+  it.each([0, -1, 1.5, 3651])("rejects %s days", (retentionDays) => {
+    expect(TrashSettings.safeParse({ retentionDays }).success).toBe(false);
   });
 
-  it("knows no strategy other than fdrive moving deletes into Trash, or none", () => {
-    expect(TrashSettings.safeParse({ ...disabled, strategy: "native" }).success).toBe(false);
-  });
-
-  it("stores the configuration without the module's strategy", () => {
-    const { strategy, ...configuration } = disabled;
-    expect(TrashConfiguration.safeParse(configuration).success).toBe(true);
-    expect(TrashConfiguration.safeParse({ ...configuration, strategy }).success).toBe(false);
-    expect(TrashSettings.safeParse(configuration).success).toBe(false);
-  });
-
-  it.each(["/", "relative", "/.trash/", "/a//b", "/a/../b"])("rejects invalid path %s", (path) => {
-    expect(TrashSettings.safeParse({ ...disabled, path }).success).toBe(false);
-  });
-
-  it("rejects nonpositive retention and unknown fields", () => {
-    expect(TrashSettings.safeParse({ ...disabled, retentionHours: 0 }).success).toBe(false);
-    expect(TrashSettings.safeParse({ ...disabled, extra: true }).success).toBe(false);
+  it("has no switch, folder or other field", () => {
+    expect(TrashSettings.safeParse({ retentionDays: 30, enabled: false }).success).toBe(false);
+    expect(TrashSettings.safeParse({ retentionDays: 30, path: "/Bin" }).success).toBe(false);
   });
 });
 
@@ -96,28 +64,6 @@ describe("isValidPath", () => {
 
   it("rejects a path with a NUL byte in a segment", () => {
     expect(isValidPath("/docs/a\0.txt")).toBe(false);
-  });
-});
-
-describe("TrashStatusResponse", () => {
-  it("accepts an available trash with a path and retention", () => {
-    expect(
-      TrashStatusResponse.safeParse({ available: true, path: "/.trash", retentionHours: 720 })
-        .success,
-    ).toBe(true);
-  });
-
-  it("accepts an unavailable trash with null path and retention", () => {
-    expect(
-      TrashStatusResponse.safeParse({ available: false, path: null, retentionHours: null }).success,
-    ).toBe(true);
-  });
-
-  it("rejects a non-positive retentionHours", () => {
-    expect(
-      TrashStatusResponse.safeParse({ available: true, path: "/.trash", retentionHours: 0 })
-        .success,
-    ).toBe(false);
   });
 });
 

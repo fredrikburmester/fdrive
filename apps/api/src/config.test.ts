@@ -8,8 +8,7 @@ import {
   isBase64Of32Bytes,
   isHttpUrl,
   loadConfig,
-  parseAdminUsers,
-  parseIndexRoots,
+  mlUnitUrl,
   undefinedWhenEmpty,
   withDefault,
 } from "./config";
@@ -18,6 +17,7 @@ const MASTER_KEY_32_BYTES = Buffer.alloc(32, 7).toString("base64");
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: MASTER_KEY_32_BYTES,
 };
 
@@ -46,49 +46,6 @@ describe("undefinedWhenEmpty", () => {
 
   it("returns the value when it is a non-empty string", () => {
     expect(undefinedWhenEmpty("value")).toBe("value");
-  });
-});
-
-describe("parseIndexRoots", () => {
-  it("returns null for undefined", () => {
-    expect(parseIndexRoots(undefined)).toBeNull();
-  });
-
-  it("parses a valid single-root JSON array", () => {
-    const raw = JSON.stringify([{ name: "files", storagePath: "/data", indexerPath: "/data" }]);
-    expect(parseIndexRoots(raw)).toEqual([
-      { name: "files", storagePath: "/data", indexerPath: "/data" },
-    ]);
-  });
-
-  it("parses multiple roots", () => {
-    const raw = JSON.stringify([
-      { name: "files", storagePath: "/a", indexerPath: "/roots/a" },
-      { name: "photos", storagePath: "/b", indexerPath: "/roots/b" },
-    ]);
-    expect(parseIndexRoots(raw)).toHaveLength(2);
-  });
-
-  it("throws when a root names no storagePath", () => {
-    expect(() =>
-      parseIndexRoots(JSON.stringify([{ name: "files", indexerPath: "/roots/files" }])),
-    ).toThrow(/storagePath/);
-  });
-
-  it("throws for invalid JSON", () => {
-    expect(() => parseIndexRoots("not json")).toThrow(/valid JSON/);
-  });
-
-  it("throws for an empty array", () => {
-    expect(() => parseIndexRoots("[]")).toThrow();
-  });
-
-  it("throws when a root is missing a required field", () => {
-    expect(() => parseIndexRoots(JSON.stringify([{ name: "files" }]))).toThrow();
-  });
-
-  it("throws when the value is not an array", () => {
-    expect(() => parseIndexRoots(JSON.stringify({ name: "files" }))).toThrow();
   });
 });
 
@@ -132,56 +89,48 @@ describe("loadConfig", () => {
       fdriveBackupSources: [],
       fdriveBackupWorker: false,
       fdriveRestoreMode: false,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
       fdriveOfficePublicUrl: undefined,
       fdriveWopiUrl: undefined,
       fdriveOfficeMaxBytes: 104857600,
-      fdriveOfficeEditRules: [],
       port: 3001,
       host: "0.0.0.0",
       logLevel: "info",
       databaseUrl: "postgres://localhost/fdrive",
-      fdriveStorageRoot: undefined,
+      fdriveStorageRoot: "/srv/files",
       fdriveMasterKey: MASTER_KEY_32_BYTES,
       fdriveSessionTtlDays: 30,
       fdriveSessionMaxAgeDays: 90,
       fdriveCookieSecure: "auto",
       fdriveTrustedProxyHops: 1,
       nodeEnv: "development",
-      fdriveAutoMigrate: true,
       fdriveTmpDir: tmpdir(),
-      fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: DEFAULT_JOB_MAX_BYTES,
       fdriveArchivePeekMaxBytes: DEFAULT_ARCHIVE_PEEK_MAX_BYTES,
       fdriveJsonMaxBytes: DEFAULT_JSON_MAX_BYTES,
       fdriveShareUploadMaxBytes: DEFAULT_SHARE_UPLOAD_MAX_BYTES,
-      fdriveIndexRoots: null,
-      fdriveEmbedUrl: undefined,
+      fdriveMlUrl: undefined,
       fdriveThumbsDir: undefined,
-      fdriveAdminUsers: [],
       fdriveSetupToken: undefined,
       fdriveIndexerUrl: undefined,
       fdriveOcrUrl: undefined,
-      fdriveMcpWrites: false,
     });
   });
 
   it("throws when a required variable is missing", () => {
-    expect(() => loadConfig({})).toThrowError(/DATABASE_URL.*\n.*FDRIVE_MASTER_KEY/s);
+    expect(() => loadConfig({})).toThrowError(
+      /DATABASE_URL.*\n.*FDRIVE_STORAGE_ROOT.*\n.*FDRIVE_MASTER_KEY/s,
+    );
   });
 
-  it("leaves fdriveStorageRoot undefined when FDRIVE_STORAGE_ROOT is unset or empty", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveStorageRoot).toBeUndefined();
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "" }).fdriveStorageRoot,
-    ).toBeUndefined();
+  it("requires FDRIVE_STORAGE_ROOT", () => {
+    const { FDRIVE_STORAGE_ROOT: _, ...withoutRoot } = REQUIRED_ENV;
+    expect(() => loadConfig(withoutRoot)).toThrow(/FDRIVE_STORAGE_ROOT/);
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_STORAGE_ROOT: "" })).toThrow(
+      /FDRIVE_STORAGE_ROOT.*is required/,
+    );
   });
 
   it("reads FDRIVE_STORAGE_ROOT as the local folder", () => {
@@ -208,40 +157,28 @@ describe("loadConfig", () => {
       FDRIVE_COOKIE_SECURE: "true",
       FDRIVE_TRUSTED_PROXY_HOPS: "2",
       NODE_ENV: "production",
-      FDRIVE_AUTO_MIGRATE: "false",
       FDRIVE_TMP_DIR: "/var/tmp/fdrive",
       FDRIVE_JOB_MAX_BYTES: "1000",
       FDRIVE_ARCHIVE_PEEK_MAX_BYTES: "1500",
       FDRIVE_JSON_MAX_BYTES: "2000",
       FDRIVE_SHARE_UPLOAD_MAX_BYTES: "3000",
-      FDRIVE_INDEX_ROOTS: JSON.stringify([
-        { name: "files", storagePath: "/data", indexerPath: "/roots/files" },
-      ]),
-      FDRIVE_EMBED_URL: "http://embed:8081",
+      FDRIVE_ML_URL: "http://ml:8080/",
       FDRIVE_THUMBS_DIR: "/data/thumbs",
-      FDRIVE_ADMIN_USERS: "alice, bob",
       FDRIVE_SETUP_TOKEN: "fixed-token",
       FDRIVE_INDEXER_URL: "http://indexer:8010",
       FDRIVE_OCR_URL: "http://ocr:8020",
-      FDRIVE_MCP_WRITES: "true",
     });
 
     expect(config).toEqual({
       fdriveBackupSources: [],
       fdriveBackupWorker: false,
       fdriveRestoreMode: false,
-      fdriveEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedRuntimeUrl: undefined,
-      fdriveImageEmbedUrl: undefined,
-      fdriveTikaRuntimeUrl: undefined,
-      fdriveTikaUrl: undefined,
       fdriveWorkerToken: undefined,
       fdriveOfficeProduct: undefined,
       fdriveOfficeUrl: undefined,
       fdriveOfficePublicUrl: undefined,
       fdriveWopiUrl: undefined,
       fdriveOfficeMaxBytes: 104857600,
-      fdriveOfficeEditRules: [],
       port: 8080,
       host: "127.0.0.1",
       logLevel: "debug",
@@ -253,36 +190,29 @@ describe("loadConfig", () => {
       fdriveCookieSecure: "true",
       fdriveTrustedProxyHops: 2,
       nodeEnv: "production",
-      fdriveAutoMigrate: false,
       fdriveTmpDir: "/var/tmp/fdrive",
-      fdriveDesktopRetentionDays: 30,
       fdriveJobMaxBytes: 1000,
       fdriveArchivePeekMaxBytes: 1500,
       fdriveJsonMaxBytes: 2000,
       fdriveShareUploadMaxBytes: 3000,
-      fdriveIndexRoots: [{ name: "files", storagePath: "/data", indexerPath: "/roots/files" }],
-      fdriveEmbedUrl: "http://embed:8081",
+      fdriveMlUrl: "http://ml:8080",
       fdriveThumbsDir: "/data/thumbs",
-      fdriveAdminUsers: ["alice", "bob"],
       fdriveSetupToken: "fixed-token",
       fdriveIndexerUrl: "http://indexer:8010",
       fdriveOcrUrl: "http://ocr:8020",
-      fdriveMcpWrites: true,
     });
   });
 
-  it("defaults FDRIVE_INDEX_ROOTS, FDRIVE_EMBED_URL, and FDRIVE_THUMBS_DIR to unset", () => {
+  it("defaults FDRIVE_ML_URL and FDRIVE_THUMBS_DIR to unset", () => {
     const config = loadConfig(REQUIRED_ENV);
-    expect(config.fdriveIndexRoots).toBeNull();
-    expect(config.fdriveEmbedUrl).toBeUndefined();
+    expect(config.fdriveMlUrl).toBeUndefined();
     expect(config.fdriveThumbsDir).toBeUndefined();
   });
 
-  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset, and FDRIVE_MCP_WRITES to false", () => {
+  it("defaults FDRIVE_INDEXER_URL and FDRIVE_OCR_URL to unset", () => {
     const config = loadConfig(REQUIRED_ENV);
     expect(config.fdriveIndexerUrl).toBeUndefined();
     expect(config.fdriveOcrUrl).toBeUndefined();
-    expect(config.fdriveMcpWrites).toBe(false);
   });
 
   it("rejects a non-http FDRIVE_INDEXER_URL", () => {
@@ -303,39 +233,9 @@ describe("loadConfig", () => {
     ).toBeUndefined();
   });
 
-  it("parses FDRIVE_MCP_WRITES=true and rejects an invalid value", () => {
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "true" }).fdriveMcpWrites).toBe(true);
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "false" }).fdriveMcpWrites).toBe(false);
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_MCP_WRITES: "yes" })).toThrow(
-      /FDRIVE_MCP_WRITES/,
-    );
-  });
-
-  it("rejects an invalid FDRIVE_INDEX_ROOTS", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_INDEX_ROOTS: "not json" })).toThrow(
-      /FDRIVE_INDEX_ROOTS/,
-    );
-  });
-
-  it("rejects a non-http FDRIVE_EMBED_URL", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_EMBED_URL: "not a url" })).toThrow(
-      /FDRIVE_EMBED_URL/,
-    );
-  });
-
-  it("defaults FDRIVE_AUTO_MIGRATE to true and accepts an explicit false", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveAutoMigrate).toBe(true);
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "true" }).fdriveAutoMigrate).toBe(
-      true,
-    );
-    expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "false" }).fdriveAutoMigrate).toBe(
-      false,
-    );
-  });
-
-  it("rejects an invalid FDRIVE_AUTO_MIGRATE value", () => {
-    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_AUTO_MIGRATE: "yes" })).toThrow(
-      /FDRIVE_AUTO_MIGRATE/,
+  it("rejects a non-http FDRIVE_ML_URL", () => {
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "not a url" })).toThrow(
+      /FDRIVE_ML_URL/,
     );
   });
 
@@ -517,77 +417,30 @@ describe("loadConfig", () => {
   });
 });
 
-describe("parseAdminUsers", () => {
-  it("returns an empty array for undefined", () => {
-    expect(parseAdminUsers(undefined)).toEqual([]);
-  });
-
-  it("returns an empty array for an empty or whitespace-only string", () => {
-    expect(parseAdminUsers("")).toEqual([]);
-    expect(parseAdminUsers("   ")).toEqual([]);
-  });
-
-  it("splits a comma-separated list and trims whitespace", () => {
-    expect(parseAdminUsers("alice, bob ,carol")).toEqual(["alice", "bob", "carol"]);
-  });
-
-  it("drops empty entries from stray commas", () => {
-    expect(parseAdminUsers("alice,,bob,")).toEqual(["alice", "bob"]);
-  });
-
-  it("returns a single-element array for one username", () => {
-    expect(parseAdminUsers("alice")).toEqual(["alice"]);
-  });
-});
-
-describe("Office operator edit policy", () => {
-  it("defaults to no grants and validates explicit rules at startup", () => {
-    expect(loadConfig(REQUIRED_ENV).fdriveOfficeEditRules).toEqual([]);
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: "" }).fdriveOfficeEditRules,
-    ).toEqual([]);
-    const rule = {
-      providerId: "12345678-1234-4234-8234-123456789abc",
-      username: "alice",
-      path: "/docs",
-      recursive: true,
-      allow: true,
-    };
-    expect(
-      loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: JSON.stringify([rule]) })
-        .fdriveOfficeEditRules,
-    ).toEqual([rule]);
-    for (const value of ["bad", "{}", '[{"allow":true}]', " ".repeat(131073)])
-      expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_OFFICE_EDIT_RULES: value })).toThrow(
-        "FDRIVE_OFFICE_EDIT_RULES",
-      );
-  });
-});
-
 it("parses the internal worker credential", () => {
   expect(loadConfig({ ...REQUIRED_ENV, FDRIVE_WORKER_TOKEN: "worker-secret" })).toMatchObject({
     fdriveWorkerToken: "worker-secret",
   });
 });
 
-describe("explicit processing probe URLs", () => {
-  it.each([
-    ["FDRIVE_EMBED_RUNTIME_URL", "fdriveEmbedRuntimeUrl"],
-    ["FDRIVE_IMAGE_EMBED_RUNTIME_URL", "fdriveImageEmbedRuntimeUrl"],
-    ["FDRIVE_TIKA_RUNTIME_URL", "fdriveTikaRuntimeUrl"],
-    ["FDRIVE_TIKA_URL", "fdriveTikaUrl"],
-  ] as const)("loads %s without changing its published port", (key, property) => {
-    expect(loadConfig({ ...REQUIRED_ENV, [key]: "http://127.0.0.1:59123" })[property]).toBe(
-      "http://127.0.0.1:59123",
+describe("mlUnitUrl", () => {
+  it("names each unit below FDRIVE_ML_URL, and none without it", () => {
+    const config = loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "http://127.0.0.1:59123/ml/" });
+    expect(config.fdriveMlUrl).toBe("http://127.0.0.1:59123/ml");
+    expect(mlUnitUrl(config, "text")).toBe("http://127.0.0.1:59123/ml/text");
+    expect(mlUnitUrl(config, "image")).toBe("http://127.0.0.1:59123/ml/image");
+    expect(mlUnitUrl(config, "extract")).toBe("http://127.0.0.1:59123/ml/extract");
+    expect(mlUnitUrl(loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "" }), "text")).toBeUndefined();
+    expect(() => loadConfig({ ...REQUIRED_ENV, FDRIVE_ML_URL: "file:///tmp/ml" })).toThrow(
+      "FDRIVE_ML_URL",
     );
-    expect(loadConfig({ ...REQUIRED_ENV, [key]: "" })[property]).toBeUndefined();
-    expect(() => loadConfig({ ...REQUIRED_ENV, [key]: "file:///tmp/worker" })).toThrow(key);
   });
 });
 
 it("requires absolute, explicitly classified backup sources and validates worker modes", () => {
   const base = {
     DATABASE_URL: "postgres://localhost/test",
+    FDRIVE_STORAGE_ROOT: "/srv/files",
     FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
   };
   const roots = [

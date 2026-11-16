@@ -10,7 +10,6 @@ import {
   type McpToolDeps,
   similarFilesInScope,
 } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import type { AiTool } from "../tools/tool.ts";
 import { createChatReadTools, READ_CHARS, readBytes } from "./tools.ts";
 
@@ -27,7 +26,7 @@ beforeEach(() => {
   vi.mocked(findFilesInScope).mockReset();
 });
 
-const SCOPES: readonly Scope[] = [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }];
+const SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function indexedFile(id: number, path: string, extra: Partial<IndexedFile> = {}): IndexedFile {
   return {
@@ -44,7 +43,6 @@ function indexedFile(id: number, path: string, extra: Partial<IndexedFile> = {})
     textChars: 0,
     error: null,
     indexedAt: null,
-    deletedAt: null,
     ...extra,
   };
 }
@@ -83,21 +81,14 @@ function setup(
   );
   const mcp: McpToolDeps = {
     indexQueries: {
-      rootIdsByName: async () => ({ files: 1 }),
       fileByPath: async (_rootId: number, path: string) => FILES[path] ?? null,
       fileTextPrefix,
     } as unknown as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () =>
-        options.indexed === false
-          ? ({ available: false, reason: "no_connection" } as const)
-          : ({ available: true, scopes: SCOPES } as const),
-    },
-    identities: { get: async () => buildIdentity() },
+    scopeResolver: { scopesFor: async () => SCOPES },
+    indexed: async () => options.indexed !== false,
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     ...(options.metadata ? { metadata: options.metadata } : {}),
   };
@@ -219,6 +210,7 @@ describe("file_info", () => {
         "kind: file",
         "size: 11 B (11 bytes)",
         "modified: 1970-01-01T00:00:00.000Z",
+        "type: text/plain",
         "tags: Work",
         "favorite: yes",
         "index: done",
@@ -237,7 +229,7 @@ describe("file_info", () => {
     const { run } = setup({ share: { contents: true, otherFileNames: false } });
 
     expect(await run("file_info", { path: "/Inbox" })).toBe(
-      ["/Inbox", "kind: folder", "modified: unknown"].join("\n"),
+      ["/Inbox", "kind: folder", "modified: 1970-01-01T00:00:00.000Z"].join("\n"),
     );
     expect(await run("file_info", { path: "/Inbox/bytes.bin" })).toContain(
       "index: not indexed, so no content hash or copies",
@@ -282,7 +274,7 @@ describe("duplicates_of", () => {
         "same name elsewhere: /Backup/scan.pdf",
       ].join("\n"),
     );
-    expect(vi.mocked(findFilesInScope).mock.calls.at(-1)?.[3]).toEqual({
+    expect(vi.mocked(findFilesInScope).mock.calls.at(-1)?.[2]).toEqual({
       name_contains: "scan.pdf",
       limit: 20,
     });
@@ -295,34 +287,14 @@ describe("duplicates_of", () => {
 });
 
 describe("readBytes", () => {
-  function storageWith(contentLength: number | null, bytes: Uint8Array) {
-    return {
-      download: async () => ({
-        contentLength,
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(bytes);
-            controller.close();
-          },
-        }),
-      }),
-    } as unknown as StorageProvider;
-  }
-  const deps = (storage: StorageProvider) =>
-    ({ principal: { storage } }) as unknown as Parameters<typeof readBytes>[0];
+  const deps = (files: Record<string, Uint8Array>) =>
+    ({ principal: { storage: createMemoryStorage(files) } }) as unknown as Parameters<
+      typeof readBytes
+    >[0];
 
-  it("gives up on files the provider reports as too large, or that turn out too large", async () => {
-    const signal = new AbortController().signal;
-    expect(await readBytes(deps(storageWith(20, new Uint8Array(20))), "/x", 10, signal)).toBeNull();
-    expect(
-      await readBytes(deps(storageWith(null, new Uint8Array(20))), "/x", 10, signal),
-    ).toBeNull();
-    const read = await readBytes(
-      deps(storageWith(null, new Uint8Array([104, 105]))),
-      "/x",
-      10,
-      signal,
-    );
+  it("gives up on a file past the byte cap, and reads one within it whole", async () => {
+    expect(await readBytes(deps({ "/x": new Uint8Array(20) }), "/x", 10)).toBeNull();
+    const read = await readBytes(deps({ "/x": new Uint8Array([104, 105]) }), "/x", 10);
     expect(read?.bytes.toString()).toBe("hi");
   });
 });

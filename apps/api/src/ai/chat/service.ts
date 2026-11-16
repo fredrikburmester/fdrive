@@ -15,11 +15,11 @@ import {
   MAX_CHAT_REFERENCES,
   MAX_CHATS,
 } from "@fdrive/contracts";
-import { isStorageError, isUnderPath, normalizePath } from "@fdrive/core";
+import { isReservedPath, isStorageError, normalizePath } from "@fdrive/core";
 import type { AiChat, AiChatMessage, AiChatRepo } from "@fdrive/db";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
-import type { FsRoutesDeps } from "../../fs/routes.js";
+import type { FileOperations } from "../../files/operations.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import type { AiInput, AiModel, AiToolResult } from "../model.ts";
 import type { AiSettingsService, ResolvedAiConfig } from "../settings.ts";
@@ -78,11 +78,8 @@ export interface ChatServiceDeps {
   readonly chats: AiChatRepo;
   /** The MCP read handlers the tools reuse. */
   readonly mcp: McpToolDeps;
-  /** What applying a move, rename or trash card needs: events and metadata hooks. */
-  readonly fs: Pick<
-    FsRoutesDeps,
-    "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
-  >;
+  /** Applies a move, rename, trash or write card the person approved. */
+  readonly files: FileOperations;
   readonly clock: () => Date;
   readonly ids?: () => string;
   readonly live?: LiveChats;
@@ -142,16 +139,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
   const ids = deps.ids ?? randomUUID;
   const live = deps.live ?? createLiveChats({ clock: deps.clock });
   const turns = new Map<string, Promise<void>>();
-
-  async function indexedFor(principal: Principal): Promise<boolean> {
-    const identity = await deps.mcp.identities.get(principal.identityId);
-    if (identity === null) return false;
-    return (await deps.mcp.scopeResolver.verifiedIndexScopes(identity)).available;
-  }
-
-  function trashPathOf(principal: Principal): string | null {
-    return deps.mcp.trashPathForStorage?.(principal.storage) ?? deps.mcp.trashPath ?? null;
-  }
 
   async function checkAuthority(principal: Principal): Promise<void> {
     if (principal.verifyAuthority !== undefined && !(await principal.verifyAuthority()))
@@ -224,9 +211,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     }
     const located = await createPathLocator(principal.storage).locate(path);
     if (located.occupancy !== "dir") return null;
-    const trashPath = trashPathOf(principal);
-    if (trashPath !== null && (located.path === trashPath || isUnderPath(trashPath, located.path)))
-      return null;
+    if (isReservedPath(located.path)) return null;
     return located.path;
   }
 
@@ -245,7 +230,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       mcp: deps.mcp,
       principal,
       focus,
-      indexed: await indexedFor(principal),
+      indexed: await deps.mcp.indexed(),
       share: chat.share,
     };
     const tools: AiTool[] = [
@@ -254,7 +239,7 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
     ];
     const actions: ActionTool[] = createChatActionTools({
       ...toolDeps,
-      fs: deps.fs,
+      files: deps.files,
       conversationId: chat.id,
     });
     return {
@@ -467,7 +452,6 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
       if (before.length >= limits.maxMessages)
         throw new ApiHttpError("conflict", "This chat is full. Start a new chat.");
 
-      const trashPath = trashPathOf(principal);
       const existing = await deps.chats.references(chat.id);
       const known = new Set(existing.map((reference) => reference.path));
       const added: string[] = [];
@@ -478,8 +462,11 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         } catch {
           throw new ApiHttpError("bad_request", `"${raw}" is not a valid path.`);
         }
-        if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-          throw new ApiHttpError("bad_request", "Items in Trash cannot be referenced.");
+        if (isReservedPath(path))
+          throw new ApiHttpError(
+            "bad_request",
+            "Items in Trash or fdrive's own folders cannot be referenced.",
+          );
         if (!known.has(path) && !added.includes(path)) added.push(path);
       }
       if (existing.length + added.length > limits.maxReferences)
@@ -561,9 +548,8 @@ export function createChatService(deps: ChatServiceDeps): ChatService {
         });
         const location = stored.findLast((message) => message.role === "user")?.location ?? null;
         const actions = target?.actions ?? (await buildTools(principal, chat, location)).actions;
-        const tool = actions.get(ACTION_TOOL_NAMES[card.proposal.kind]);
-        if (tool === undefined)
-          throw new ApiHttpError("conflict", "That action is no longer available for this login.");
+        // Every login is offered every action tool, so a stored card's is always there.
+        const tool = actions.get(ACTION_TOOL_NAMES[card.proposal.kind]) as ActionTool;
         const outcome = await tool.apply(
           card.proposal,
           request.edits,

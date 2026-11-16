@@ -1,29 +1,23 @@
 "use client";
 
-import type {
-  FsEntry,
-  OfficeStatusResponse,
-  ProviderCapabilities,
-  ReceivedGrant,
-  Tag,
-} from "@fdrive/contracts";
+import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
-import { endDragSession, getActiveDragPaths, startDragSession } from "@/lib/dnd";
+import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
 import { INTERNAL_DND_TYPE, readDraggedPaths, writeDraggedPaths } from "@/lib/files/deps";
 import { dropTargetState, effectFor } from "@/lib/files/dnd-targets";
 import { computeGridLayout, readGridWidth, writeGridWidth } from "@/lib/files/grid-layout";
 import { DEFAULT_GRID_SIZE, type GridSize } from "@/lib/files/grid-size";
+import { isLink, LINK_TITLE } from "@/lib/files/links";
 import { findRevealIndex, gridRowForIndex, type ScrollRequest } from "@/lib/files/reveal";
-import { contextEntries } from "@/lib/files/selection";
+import { contextEntries, selectionOf } from "@/lib/files/selection";
 import { wantsGridThumbnail } from "@/lib/files/thumbnail";
 import { sharedFolderCaption } from "@/lib/grants/format";
-import { DEFAULT_CAPABILITIES, selectionOf } from "@/lib/identity/capabilities";
 import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
@@ -98,9 +92,6 @@ export interface FileGridProps {
   /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
   showChat?: boolean;
   hideArchive?: boolean;
-  /** What the active login's storage can do, for every tile's context menu
-   * (see `FileContextMenu`). Defaults to `DEFAULT_CAPABILITIES`. */
-  capabilities?: ProviderCapabilities;
   /** The folders others share with the active login: captions in `Shared with me`, and
    * what each context menu offers (see `FileContextMenu`). Defaults to none. */
   received?: readonly ReceivedGrant[];
@@ -197,7 +188,6 @@ export function FileGrid({
   hideArchive = false,
   showOrganize = false,
   showChat = false,
-  capabilities = DEFAULT_CAPABILITIES,
   received = EMPTY_RECEIVED,
   scrollRequest = null,
   onScrollConsumed,
@@ -319,6 +309,12 @@ export function FileGrid({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
+    writeDownloadUrl(
+      event.dataTransfer,
+      paths,
+      entry,
+      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+    );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);
@@ -398,6 +394,29 @@ export function FileGrid({
                   }}
                 >
                   {rowEntries.map((entry) => {
+                    if (isLink(entry)) {
+                      // Shown so its name stays visible, and nothing more: no menu,
+                      // no selection, no drag, nothing to open.
+                      return (
+                        <div
+                          key={entry.path}
+                          data-path={entry.path}
+                          aria-disabled="true"
+                          title={LINK_TITLE}
+                          className="flex flex-col items-center gap-1.5 rounded-lg p-2 text-center text-muted-foreground opacity-60"
+                        >
+                          <GridTileIcon
+                            key={entry.path}
+                            entry={entry}
+                            thumbnails={false}
+                            tile={tile}
+                          />
+                          <span className="line-clamp-2 w-full break-words text-xs">
+                            {entry.name}
+                          </span>
+                        </div>
+                      );
+                    }
                     const isSelected = selected.has(entry.path);
                     const isFocused = focusedPath === entry.path;
                     const group = contextEntries(entry, entries, selected);
@@ -427,7 +446,6 @@ export function FileGrid({
                         onOpenTagsEditor={() => onOpenTagsEditor(group)}
                         favorite={groupFavorite(group)}
                         onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-                        capabilities={capabilities}
                         received={received}
                       >
                         {/** biome-ignore lint/a11y/noStaticElementInteractions: this tile supports drag-and-drop and click selection; keyboard activation is handled by the grid container's roving onKeyDown */}

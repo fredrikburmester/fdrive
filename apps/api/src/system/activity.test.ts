@@ -43,20 +43,16 @@ const features: SystemFeaturesResponse = {
     state: id === "thumbnails" ? "ready" : "off",
     detail: "",
   })),
-  roots: [],
 };
 const office: SystemOfficeResponse = {
   configuration: {
     revision: 0,
     enabled: false,
     editingEnabled: false,
-    editingProviderId: null,
     editorUsernames: [],
   },
   product: "onlyoffice",
   status: "off",
-  activeProviderId: null,
-  activeProviderLabel: null,
 };
 const snapshot = (operations: ActivityOperation[] = [operation]) => ({
   instanceId: "worker",
@@ -160,6 +156,7 @@ function fixture(admin = true) {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
@@ -173,10 +170,7 @@ function fixture(admin = true) {
         isAdmin: admin,
         storage: {},
       }) as Principal,
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     registerRoutes(groups) {
       registerActivityRoutes(groups, {
         indexerUrl: "http://indexer",

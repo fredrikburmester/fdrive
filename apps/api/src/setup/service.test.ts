@@ -1,276 +1,140 @@
-import type { MeResponse } from "@fdrive/contracts";
-import type { Provider } from "@fdrive/db";
-import { createMemoryRepos } from "@fdrive/db/testing";
+import { SETUP_OWNER_KEY } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthService, LoginResult } from "../auth/service.js";
-import { ApiHttpError } from "../errors.js";
-import { createLocalUserService } from "../local/service.js";
-import { FAST_PASSWORDS, localModuleFixture } from "../local/test-fixtures/index.ts";
-import { seedLocalProvider } from "../providers/test-fixtures/index.ts";
+import { hashSessionId } from "../auth/sessions.js";
+import { authHarness } from "../auth/test-fixtures/index.ts";
 import { createSetupService, type SetupCompleteInput } from "./service.js";
 
-const CAPABILITIES = {
-  zip: false,
-  setModifiedAt: false,
-  atomicMove: true,
-  trash: false,
-  shares: false,
-  office: false,
-  index: false,
-  shareWithPeople: false,
-};
-const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
-const ME: MeResponse = {
-  account: { id: "account-1", displayName: "alice" },
-  identities: [
-    {
-      id: "identity-1",
-      username: "alice",
-      providerId: PROVIDER_ID,
-      providerType: "local",
-      providerLabel: "x",
-      capabilities: CAPABILITIES,
-    },
-  ],
-  activeIdentityId: "identity-1",
-  isAdmin: false,
-};
-
-function buildAuthService(
-  loginResult: LoginResult,
-): Pick<AuthService, "loginCandidate" | "me" | "logout"> {
-  return {
-    loginCandidate: vi.fn().mockResolvedValue(loginResult),
-    logout: vi.fn().mockResolvedValue(undefined),
-    me: vi.fn().mockResolvedValue({ ...loginResult.me, isAdmin: true }),
-  };
-}
-
 /**
- * Setup on a deployment with a files folder: the owner becomes its first
- * user. Without `local` the deployment sets no `FDRIVE_STORAGE_ROOT`.
+ * Setup over the auth harness, so the owner is signed in through the real
+ * password check. The folder has no users unless `users` names some.
  */
-async function harness(options: { pinned?: boolean; local?: boolean } = {}) {
-  const repos = createMemoryRepos();
-  const local = localModuleFixture(repos);
-  const row: Provider | null = options.pinned === false ? null : await seedLocalProvider(repos);
-  const users = createLocalUserService({
-    repos,
-    store: local.users,
-    passwords: FAST_PASSWORDS,
-    master: Buffer.alloc(32, 5),
-    providerId: async () => row?.id ?? null,
+async function harness(options: { users?: readonly string[] } = {}) {
+  const h = authHarness({ users: options.users ?? [] });
+  await h.seeded;
+  const service = createSetupService({
+    authService: h.auth.service,
+    logins: h.repos.logins,
+    passwords: h.passwords,
+    clock: h.clock,
   });
-  const authService = buildAuthService({ sessionId: "session-1", me: ME });
-  const setAdmin = vi.fn();
-  const deps = {
-    authService,
-    accounts: { setAdmin },
-    identities: repos.identities,
-    settings: repos.settings,
-    ...(options.local === false
-      ? {}
-      : {
-          local: {
-            provider: async () => row,
-            userCount: () => repos.localUsers.count(),
-            users,
-          },
-        }),
-  };
-  const service = createSetupService(deps);
-  return { repos, row, users, store: local.users, authService, setAdmin, service, deps };
+  /** What setup left behind: the users, the logins and the owner record. */
+  async function state() {
+    return {
+      users: (await h.repos.localUsers.list()).map((user) => user.username),
+      logins: (await h.repos.identities.listAll()).map((login) => login.username),
+      owner: await h.repos.settings.get(SETUP_OWNER_KEY),
+    };
+  }
+  return { ...h, service, state };
 }
 
 const INPUT: SetupCompleteInput = {
-  username: "alice",
+  username: "owner",
   password: "correct horse",
   userAgent: "vitest",
   ip: "127.0.0.1",
 };
 
 describe("createSetupService: status", () => {
-  it("asks for the first user while the folder has none", async () => {
+  it("is open only on a fresh install", async () => {
     const h = await harness();
-    expect(await h.service.status()).toEqual({ required: true, storageConfigured: true });
-    await h.repos.localUsers.create({ username: "bob", passwordHash: "x" });
-    expect(await h.service.status()).toEqual({ required: false, storageConfigured: true });
-    // Remembered: removing that user later does not reopen setup.
-    await h.repos.localUsers.delete("bob");
-    expect((await h.service.status()).required).toBe(false);
-  });
+    expect(await h.service.status()).toEqual({ required: true });
+    // An owner record alone closes it.
+    await h.repos.settings.set(SETUP_OWNER_KEY, { state: "complete", accountId: "account-1" });
+    expect(await h.service.status()).toEqual({ required: false });
 
-  it("stays closed when people signed in before but no local user exists", async () => {
-    // An installation from before the owner record whose logins never became
-    // local users: nobody may claim it as its first user.
-    for (const local of [true, false]) {
-      const h = await harness({ local });
-      const old = await h.repos.providers.ensure({ type: "sftpgo", baseUrl: "http://old" });
-      const account = await h.repos.accounts.create({ displayName: "alice" });
-      await h.repos.identities.create({
-        accountId: account.id,
-        providerId: old.id,
-        externalUsername: "alice",
-      });
-      expect(await h.repos.localUsers.count()).toBe(0);
-      expect((await h.service.status()).required).toBe(false);
-      // Remembered, like a user: the login going away does not reopen setup.
-      expect(await h.repos.settings.get("setup.initialized.v1")).toBe(true);
-    }
-  });
-
-  it("says when the deployment has no files folder", async () => {
-    const h = await harness({ local: false });
-    expect(await h.service.status()).toEqual({ required: true, storageConfigured: false });
-  });
-
-  it("ignores an owner record it cannot read", async () => {
-    for (const record of [
-      { version: 1, state: "abandoned", accountId: "account-1", baseUrl: "local" },
-      { version: 2, state: "complete", accountId: "account-1", baseUrl: "local" },
-      { version: 1, state: "complete", accountId: 7, baseUrl: "local" },
-      { version: 1, state: "complete", accountId: "account-1" },
-      "complete",
-    ]) {
-      const h = await harness();
-      await h.repos.settings.set("setup.owner.v1", record);
-      expect((await h.service.status()).required).toBe(true);
-    }
-  });
-
-  it("is complete once an owner record says so, users or not", async () => {
-    const h = await harness({ local: false });
-    await h.repos.settings.set("setup.owner.v1", {
-      version: 1,
-      state: "complete",
-      accountId: "account-1",
-      baseUrl: "http://dav:8080",
-    });
-    expect(await h.service.status()).toEqual({ required: false, storageConfigured: false });
+    // So does a user, with no owner record or an unfinished one, and it stays closed
+    // once every user is gone, since their logins remain.
+    const used = await harness({ users: ["alice"] });
+    expect((await used.service.status()).required).toBe(false);
+    await used.repos.settings.set(SETUP_OWNER_KEY, { state: "claiming", accountId: "account-1" });
+    expect((await used.service.status()).required).toBe(false);
+    await used.repos.localUsers.delete("alice");
+    expect((await used.service.status()).required).toBe(false);
+    await expect(used.service.complete(INPUT)).rejects.toMatchObject({ kind: "conflict" });
   });
 });
 
 describe("createSetupService: complete", () => {
-  it("makes the owner the folder's first user and signs them in on its row", async () => {
+  it("creates the owner as an administrator in one step and signs them in", async () => {
     const h = await harness();
+    const verify = vi.spyOn(h.users, "verify");
+
     const result = await h.service.complete(INPUT);
 
-    expect(await h.store.verify("alice", "correct horse")).toEqual({
-      result: "ok",
-      username: "alice",
+    expect(result.me).toMatchObject({ identity: { username: "owner" }, isAdmin: true });
+    const login = await h.repos.identities.findByUsername("owner");
+    expect(login?.id).toBe(result.me.identity.id);
+    expect(await h.repos.settings.get(SETUP_OWNER_KEY)).toEqual({
+      state: "complete",
+      accountId: result.me.account.id,
     });
-    expect(h.authService.loginCandidate).toHaveBeenCalledWith(
-      {
-        providerId: h.row?.id,
-        credential: { username: "alice", password: "correct horse" },
-        userAgent: "vitest",
-        ip: "127.0.0.1",
-      },
-      h.row?.id,
-      "setup.owner.v1",
-    );
-    expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
-    expect(result.sessionId).toBe("session-1");
-    expect(result.me.isAdmin).toBe(true);
-    // The pinned row was enabled already and stays as it was.
-    expect(await h.repos.providers.list()).toEqual([h.row]);
+    // The session comes from the one password check, as any sign-in's does.
+    expect(verify).toHaveBeenCalledWith("owner", "correct horse");
+    expect(
+      await h.repos.sessions.getByIdHash(hashSessionId(result.sessionId), h.clock()),
+    ).toMatchObject({ identityId: result.me.identity.id });
     expect((await h.service.status()).required).toBe(false);
   });
 
-  it("refuses on a deployment without a files folder, naming the variable", async () => {
-    const h = await harness({ local: false });
-    await expect(h.service.complete(INPUT)).rejects.toMatchObject({
-      kind: "bad_request",
-      message: expect.stringContaining("FDRIVE_STORAGE_ROOT"),
-    });
-    expect(h.authService.loginCandidate).not.toHaveBeenCalled();
-    expect(await h.repos.localUsers.list()).toEqual([]);
+  it("refuses a folder that has users, with no owner record or an unfinished one", async () => {
+    for (const record of [null, { state: "claiming", accountId: "account-1" }]) {
+      const h = await harness({ users: ["alice"] });
+      if (record !== null) await h.repos.settings.set(SETUP_OWNER_KEY, record);
+      const before = await h.state();
+      await expect(h.service.complete(INPUT)).rejects.toMatchObject({
+        kind: "conflict",
+        message: "this server has already been claimed by another owner",
+      });
+      expect(await h.state()).toEqual(before);
+    }
   });
 
-  it("refuses while the folder's row is missing", async () => {
-    const h = await harness({ pinned: false });
-    await expect(h.service.complete(INPUT)).rejects.toMatchObject({
-      kind: "bad_request",
-      message: expect.stringContaining("FDRIVE_STORAGE_ROOT"),
-    });
-    expect(await h.repos.localUsers.list()).toEqual([]);
-  });
-
-  it.each(["unauthorized", "conflict"] as const)(
-    "removes the user it created after %s, so setup can run again",
-    async (kind) => {
-      const h = await harness();
-      vi.mocked(h.authService.loginCandidate).mockRejectedValueOnce(
-        new ApiHttpError(kind, "candidate rejected"),
-      );
-      await expect(h.service.complete(INPUT)).rejects.toMatchObject({ kind });
-      expect(await h.repos.localUsers.list()).toEqual([]);
-      expect((await h.service.status()).required).toBe(true);
-      expect(h.setAdmin).not.toHaveBeenCalled();
-      await h.service.complete({ ...INPUT, password: "another one" });
-      expect(await h.store.verify("alice", "another one")).toMatchObject({ result: "ok" });
-      expect((await h.service.status()).required).toBe(false);
-    },
-  );
-
-  it("resumes with the same password after an interruption, and refuses another", async () => {
+  it("allows setup once: a second owner is refused and leaves nothing", async () => {
     const h = await harness();
-    h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
-    await expect(h.service.complete(INPUT)).rejects.toThrow("interrupted");
-    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
-    // The user stays: the claim is pending and the same owner can finish it.
-    expect((await h.repos.localUsers.list()).map((user) => user.username)).toEqual(["alice"]);
-    await expect(h.service.complete({ ...INPUT, password: "not the same" })).rejects.toMatchObject({
-      kind: "conflict",
-    });
-    const restarted = createSetupService(h.deps);
-    expect((await restarted.status()).required).toBe(true);
-    await restarted.complete(INPUT);
-    expect((await restarted.status()).required).toBe(false);
+    await h.service.complete(INPUT);
+    const before = await h.state();
+    await expect(
+      h.service.complete({ ...INPUT, username: "intruder", password: "another one" }),
+    ).rejects.toMatchObject({ kind: "conflict" });
+    expect(await h.state()).toEqual(before);
   });
 
-  it("reports a conflict when the claim cannot be finalized by the same owner", async () => {
+  it("lets only one of two racing owners finish", async () => {
     const h = await harness();
-    vi.spyOn(h.repos.settings, "compareAndSet")
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
-    await expect(h.service.complete(INPUT)).rejects.toMatchObject({ kind: "conflict" });
-    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
-  });
-
-  it("allows only one owner when two verified users race to claim setup", async () => {
-    const h = await harness();
-    const bob: MeResponse = {
-      ...ME,
-      account: { id: "account-2", displayName: "bob" },
-      identities: ME.identities.map((identity) => ({
-        ...identity,
-        id: "identity-2",
-        username: "bob",
-      })),
-      activeIdentityId: "identity-2",
-    };
-    vi.mocked(h.authService.loginCandidate)
-      .mockResolvedValueOnce({ sessionId: "session-1", me: ME })
-      .mockResolvedValueOnce({ sessionId: "session-2", me: bob });
     const results = await Promise.allSettled([
       h.service.complete(INPUT),
-      h.service.complete({ ...INPUT, username: "bob", password: "bob's password" }),
+      h.service.complete({ ...INPUT, username: "rival", password: "rival's password" }),
     ]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.find((result) => result.status === "rejected")).toMatchObject({
       reason: { kind: "conflict" },
     });
-    expect(h.setAdmin).toHaveBeenCalledTimes(1);
-    expect(h.setAdmin).toHaveBeenCalledWith("account-1", true);
+    const { users, logins } = await h.state();
+    expect(users).toHaveLength(1);
+    expect(logins).toHaveLength(1);
   });
 
-  it("preserves the setup error and resumable claim when session cleanup also fails", async () => {
+  it("leaves no half-created owner when a step fails", async () => {
     const h = await harness();
-    h.setAdmin.mockRejectedValueOnce(new Error("interrupted"));
-    vi.mocked(h.authService.logout).mockRejectedValueOnce(new Error("database unavailable"));
-    await expect(h.service.complete(INPUT)).rejects.toThrow("interrupted");
-    expect(h.authService.logout).toHaveBeenCalledWith("session-1");
+    const before = await h.state();
+    vi.spyOn(h.passwords, "hash").mockRejectedValueOnce(new Error("out of memory"));
+    await expect(h.service.complete(INPUT)).rejects.toThrow("out of memory");
+    expect(await h.state()).toEqual(before);
+    vi.spyOn(h.repos.logins, "setup").mockRejectedValueOnce(new Error("connection lost"));
+    await expect(h.service.complete(INPUT)).rejects.toThrow("connection lost");
+    expect(await h.state()).toEqual(before);
     expect((await h.service.status()).required).toBe(true);
+  });
+
+  it("names a login a removed user left under another spelling as a taken name", async () => {
+    const h = await harness();
+    vi.spyOn(h.repos.logins, "setup").mockRejectedValueOnce(
+      new (await import("@fdrive/db")).ConflictError("username already exists"),
+    );
+    await expect(h.service.complete(INPUT)).rejects.toMatchObject({
+      kind: "conflict",
+      message: "a user with this name already exists",
+    });
   });
 });

@@ -8,7 +8,6 @@ import {
   IndexerHealth,
   IndexerLastScan,
   IndexerReindexRequest,
-  IndexerRootStats,
   IndexerSettingsResponse,
   IndexerSettingsUpdateRequest,
   IndexerStats,
@@ -48,21 +47,15 @@ describe("SettingSource", () => {
 describe("IndexerHealth", () => {
   const valid = {
     ok: true,
-    roots: ["files"],
-    watcher: { files: true },
+    watcher: true,
     embedOk: true,
-    schemaVersion: 3,
   };
 
   it("parses a valid payload", () => {
     expect(IndexerHealth.parse(valid)).toEqual(valid);
   });
 
-  it("accepts a null schemaVersion", () => {
-    expect(IndexerHealth.safeParse({ ...valid, schemaVersion: null }).success).toBe(true);
-  });
-
-  it("rejects a missing watcher map", () => {
+  it("rejects a missing watcher flag", () => {
     const { watcher: _drop, ...rest } = valid;
     expect(IndexerHealth.safeParse(rest).success).toBe(false);
   });
@@ -100,19 +93,6 @@ describe("IndexerLastScan", () => {
   });
 });
 
-describe("IndexerRootStats", () => {
-  it("parses a valid payload with a null lastScan", () => {
-    const valid = {
-      root: "files",
-      countsByStatus: { indexed: 5, pending: 1 },
-      chunks: 20,
-      chunksEmbedded: 18,
-      lastScan: null,
-    };
-    expect(IndexerRootStats.parse(valid)).toEqual(valid);
-  });
-});
-
 describe("IndexerErrorSample", () => {
   it("accepts a null error message", () => {
     expect(IndexerErrorSample.safeParse({ path: "a.pdf", error: null }).success).toBe(true);
@@ -122,7 +102,10 @@ describe("IndexerErrorSample", () => {
 describe("IndexerStats", () => {
   it("parses a valid payload", () => {
     const valid = {
-      roots: [],
+      countsByStatus: { indexed: 5, pending: 1 },
+      chunks: 20,
+      chunksEmbedded: 18,
+      lastScan: null,
       thumbnails: 4,
       queueDepth: 0,
       errorsSample: [{ path: "a.pdf", error: "boom" }],
@@ -131,14 +114,25 @@ describe("IndexerStats", () => {
   });
 
   it("parses without thumbnailRebuild (older indexer)", () => {
-    const valid = { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] };
+    const valid = {
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
+      thumbnails: 0,
+      queueDepth: 0,
+      errorsSample: [],
+    };
     const result = IndexerStats.parse(valid);
     expect(result.thumbnailRebuild).toBeUndefined();
   });
 
   it("parses with a thumbnailRebuild job", () => {
     const valid = {
-      roots: [],
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
       thumbnails: 0,
       queueDepth: 0,
       errorsSample: [],
@@ -156,7 +150,10 @@ describe("IndexerStats", () => {
 
   it("parses with imageEmbeddings and image-embedding jobs", () => {
     const valid = {
-      roots: [],
+      countsByStatus: {},
+      chunks: 0,
+      chunksEmbedded: 0,
+      lastScan: null,
       thumbnails: 0,
       queueDepth: 0,
       errorsSample: [],
@@ -254,12 +251,18 @@ describe("SystemIndexerResponse", () => {
       reachable: true,
       health: {
         ok: true,
-        roots: ["files"],
-        watcher: { files: true },
+        watcher: true,
         embedOk: true,
-        schemaVersion: 1,
       },
-      stats: { roots: [], thumbnails: 0, queueDepth: 0, errorsSample: [] },
+      stats: {
+        countsByStatus: {},
+        chunks: 0,
+        chunksEmbedded: 0,
+        lastScan: null,
+        thumbnails: 0,
+        queueDepth: 0,
+        errorsSample: [],
+      },
       settings,
     };
     expect(SystemIndexerResponse.parse(valid)).toEqual(valid);
@@ -313,21 +316,21 @@ describe("IndexerSettingsUpdateRequest", () => {
 });
 
 describe("IndexerReindexRequest", () => {
-  it("accepts a root with no path", () => {
-    expect(IndexerReindexRequest.safeParse({ root: "files" }).success).toBe(true);
+  it("accepts an empty body for the whole files folder", () => {
+    expect(IndexerReindexRequest.safeParse({}).success).toBe(true);
   });
 
-  it("accepts a root with a path", () => {
-    expect(IndexerReindexRequest.safeParse({ root: "files", path: "folder" }).success).toBe(true);
+  it("accepts a path", () => {
+    expect(IndexerReindexRequest.safeParse({ path: "folder" }).success).toBe(true);
   });
 
   it("accepts a thumbnails flag", () => {
-    const result = IndexerReindexRequest.safeParse({ root: "files", thumbnails: true });
+    const result = IndexerReindexRequest.safeParse({ thumbnails: true });
     expect(result.success).toBe(true);
   });
 
-  it("rejects an empty root", () => {
-    expect(IndexerReindexRequest.safeParse({ root: "" }).success).toBe(false);
+  it("rejects an empty path", () => {
+    expect(IndexerReindexRequest.safeParse({ path: "" }).success).toBe(false);
   });
 });
 
@@ -336,13 +339,8 @@ describe("IndexerThumbnailsRebuildRequest", () => {
     expect(IndexerThumbnailsRebuildRequest.safeParse({}).success).toBe(true);
   });
 
-  it("accepts a root", () => {
-    expect(IndexerThumbnailsRebuildRequest.safeParse({ root: "files" }).success).toBe(true);
-  });
-
   it("accepts a path and force", () => {
     const result = IndexerThumbnailsRebuildRequest.safeParse({
-      root: "files",
       path: "folder",
       force: true,
     });
@@ -404,7 +402,6 @@ describe("SystemSearchResponse", () => {
     const valid = {
       configured: true,
       semantic: { configured: true, healthy: true },
-      roots: ["files"],
       index: { files: 1, withText: 1, chunks: 1, embedded: 1 },
     };
     expect(SystemSearchResponse.parse(valid)).toEqual(valid);
@@ -413,10 +410,7 @@ describe("SystemSearchResponse", () => {
 
 describe("SystemReembedResponse", () => {
   it("parses a valid payload", () => {
-    expect(SystemReembedResponse.parse({ marked: 5, roots: ["files"] })).toEqual({
-      marked: 5,
-      roots: ["files"],
-    });
+    expect(SystemReembedResponse.parse({ marked: 5 })).toEqual({ marked: 5 });
   });
 });
 
@@ -703,31 +697,27 @@ describe("SystemThumbnailsResponse", () => {
 });
 
 describe("clear contracts", () => {
-  it.each([
-    {},
-    { root: "files" },
-    { root: "files", path: "/" },
-    { root: "files", path: "/a/b.pdf" },
-    { root: "files", path: "a_%/file.pdf" },
-  ])("accepts scope %j", (scope) => {
-    expect(IndexerClearRequest.parse(scope)).toEqual(scope);
-  });
+  it.each([{}, { path: "/" }, { path: "/a/b.pdf" }, { path: "a_%/file.pdf" }])(
+    "accepts scope %j",
+    (scope) => {
+      expect(IndexerClearRequest.parse(scope)).toEqual(scope);
+    },
+  );
 
   it.each([
     null,
     [],
-    { root: "" },
-    { root: " " },
-    { root: 2 },
-    { path: "/a" },
-    { root: "r", path: "" },
-    { root: "r", path: "../a" },
-    { root: "r", path: "a/../b" },
-    { root: "r", path: "a\n/../b" },
-    { root: "r", path: "a\\..\\b" },
-    { root: "r", path: "a\0b" },
-    { root: "r", path: ".." },
-    { root: "r", path: "a\\b" },
+    { root: "files" },
+    { path: "" },
+    { path: " " },
+    { path: 2 },
+    { path: "../a" },
+    { path: "a/../b" },
+    { path: "a\n/../b" },
+    { path: "a\\..\\b" },
+    { path: "a\0b" },
+    { path: ".." },
+    { path: "a\\b" },
     { force: true },
   ])("rejects unsafe scope %j", (scope) => {
     expect(IndexerClearRequest.safeParse(scope).success).toBe(false);
@@ -747,7 +737,10 @@ describe("clear contracts", () => {
     expect(IndexerClearJob.parse(progress)).toEqual(progress);
     expect(
       IndexerStats.parse({
-        roots: [],
+        countsByStatus: {},
+        chunks: 0,
+        chunksEmbedded: 0,
+        lastScan: null,
         thumbnails: 0,
         queueDepth: 0,
         errorsSample: [],

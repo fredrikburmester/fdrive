@@ -1,15 +1,14 @@
 import type { Chat, ChatPart } from "@fdrive/contracts";
-import { type Scope, StorageError, type StorageProvider, type TrashProvider } from "@fdrive/core";
+import { type Scope, StorageError, type StorageProvider } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries, Repos } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { testFileOperations } from "../../../test/file-operations.js";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
-import { createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
 import { createMetadataService } from "../../metadata/service.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import type { AiInput, AiModel, AiStartOptions, AiTurn } from "../model.ts";
 import type { ResolvedAiConfig } from "../settings.ts";
 import { type ChatService, createChatService, titleFrom } from "./service.ts";
@@ -22,9 +21,7 @@ const CONFIG: ResolvedAiConfig = {
   organize: true,
   chat: true,
 };
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 /** A model whose replies come from a queue; a hanging reply waits for its signal. */
 function scriptedModel() {
@@ -73,31 +70,26 @@ interface Setup {
   /** A second API process sharing the database but nothing in memory. */
   restart(): ChatService;
   /** Whether the login's Trash is configured; can be switched off mid-test. */
-  readonly trash: { enabled: boolean };
 }
 
 async function setup(
   options: {
     files?: Record<string, string>;
-    trash?: boolean;
     limits?: Record<string, number>;
     aiOff?: boolean;
     chatOff?: boolean;
-    noIdentity?: boolean;
   } = {},
 ): Promise<Setup> {
   const repos = createMemoryRepos();
   const account = await repos.accounts.create({ displayName: null });
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
+  const bobAccount = await repos.accounts.create({ displayName: null });
   const bob = await repos.identities.create({
-    accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "bob",
+    accountId: bobAccount.id,
+    username: "bob",
   });
   const base = createMemoryStorage(
     options.files ?? {
@@ -106,9 +98,7 @@ async function setup(
       "/Docs/readme.md": "# Hi",
     },
   );
-  const storage: StorageProvider = options.trash
-    ? Object.assign(base, { trash: {} as TrashProvider })
-    : base;
+  const storage = base;
   const principal: Principal = {
     accountId: account.id,
     identityId: identity.id,
@@ -116,25 +106,23 @@ async function setup(
     storage,
     isAdmin: false,
   };
-  const other: Principal = { ...principal, identityId: bob.id, username: "bob" };
+  const other: Principal = {
+    ...principal,
+    accountId: bobAccount.id,
+    identityId: bob.id,
+    username: "bob",
+  };
   const script = scriptedModel();
   const mcp: McpToolDeps = {
-    indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
+    indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
-    },
-    identities: {
-      get: async () => (options.noIdentity ? null : buildIdentity({ id: identity.id })),
-    },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
     metadata: createMetadataService(repos),
-    ...(options.trash ? { trashPathForStorage: () => (trash.enabled ? "/.Trash" : null) } : {}),
   };
-  const trash = { enabled: true };
   void HOME_SCOPES;
   const unexpected = vi.fn();
   let counter = 0;
@@ -147,11 +135,7 @@ async function setup(
       modelFor: () => script.model,
       chats: repos.aiChats,
       mcp,
-      fs: {
-        bus: createEventBus(),
-        clock: () => new Date(),
-        metadata: createMetadataService(repos),
-      },
+      files: testFileOperations({ metadata: createMetadataService(repos) }),
       clock: () => new Date(),
       ids: () => `id-${++counter}`,
       limits: { turnDeadlineMs: 2000, ...options.limits },
@@ -166,7 +150,6 @@ async function setup(
     script,
     unexpected,
     restart: build,
-    trash,
   };
 }
 
@@ -278,11 +261,12 @@ describe("chat service", () => {
       "file_info",
       "move_items",
       "rename_items",
+      "trash_items",
       "write_text_file",
     ]);
   });
 
-  it("refuses references that do not exist, are in Trash or exceed the limit", async () => {
+  it("refuses references that do not exist, are in fdrive's own folders or exceed the limit", async () => {
     const chat = await s.service.create(s.principal, {});
     await expect(
       s.service.send(s.principal, chat.id, { text: "x", references: ["/nope.txt"] }),
@@ -298,13 +282,22 @@ describe("chat service", () => {
         references: ["/Inbox/a.txt", "/Inbox/b.txt"],
       }),
     ).rejects.toMatchObject({ kind: "bad_request" });
-    const trashed = await setup({ trash: true });
+    const trashed = await setup();
     const t = await trashed.service.create(trashed.principal, {});
     await expect(
-      trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.Trash/x"] }),
+      trashed.service.send(trashed.principal, t.id, { text: "x", references: ["/.trash/x"] }),
     ).rejects.toMatchObject({
       kind: "bad_request",
-      message: "Items in Trash cannot be referenced.",
+      message: "Items in Trash or fdrive's own folders cannot be referenced.",
+    });
+    await expect(
+      trashed.service.send(trashed.principal, t.id, {
+        text: "x",
+        references: ["/.fdrive-desktop/staging/x"],
+      }),
+    ).rejects.toMatchObject({
+      kind: "bad_request",
+      message: "Items in Trash or fdrive's own folders cannot be referenced.",
     });
     expect((await s.service.get(s.principal, chat.id)).messages).toEqual([]);
   });
@@ -381,11 +374,10 @@ describe("chat service", () => {
 
   it("gives the model no open folder that is missing, a file or in Trash, and stores its spelling", async () => {
     const t = await setup({
-      trash: true,
-      files: { "/A\u030Arsbesked/x.txt": "x", "/.Trash/old/y.txt": "y", "/z.txt": "z" },
+      files: { "/A\u030Arsbesked/x.txt": "x", "/.trash/old/y.txt": "y", "/z.txt": "z" },
     });
     const chat = await t.service.create(t.principal, {});
-    for (const location of ["/Nope", "/z.txt", "/.Trash/old"]) {
+    for (const location of ["/Nope", "/z.txt", "/.trash/old"]) {
       t.script.queue.push(text("ok"));
       await t.service.send(t.principal, chat.id, { text: "Hi", location });
       await t.service.settled(chat.id);
@@ -414,7 +406,7 @@ describe("chat service", () => {
   });
 
   it("holds a trash card for the person, applies it with their edits and then lets the model continue", async () => {
-    const t = await setup({ trash: true });
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", {
         summary: "Remove both.",
@@ -482,7 +474,7 @@ describe("chat service", () => {
     ).rejects.toMatchObject({ kind: "not_found" });
   });
 
-  it("does not offer trash without a configured Trash, and tells the model when declined", async () => {
+  it("tells the model when the person declines a card", async () => {
     s.script.queue.push(
       call("c1", "move_items", {
         summary: "File it.",
@@ -492,7 +484,7 @@ describe("chat service", () => {
     );
     const chat = await chatWith(s, "Move it", ["/Inbox/a.txt"]);
     await s.service.settled(chat.id);
-    expect(s.script.starts[0]?.tools.map((tool) => tool.name)).not.toContain("trash_items");
+    expect(s.script.starts[0]?.tools.map((tool) => tool.name)).toContain("trash_items");
     const card = lastParts(await s.service.get(s.principal, chat.id))[0];
     if (card?.kind !== "action") throw new Error("expected a card");
     expect(card.proposal).toMatchObject({
@@ -709,7 +701,7 @@ describe("chat service", () => {
   });
 
   it("rebuilds the conversation from the transcript after a restart and still applies a card", async () => {
-    const t = await setup({ trash: true });
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", {
         summary: "Remove it.",
@@ -807,8 +799,8 @@ describe("chat service", () => {
     });
   });
 
-  it("treats a login without an identity row as unindexed and stops a live chat on delete", async () => {
-    const lone = await setup({ noIdentity: true });
+  it("treats a login without indexed scopes as unindexed and stops a live chat on delete", async () => {
+    const lone = await setup();
     lone.script.queue.push(text("Hi."));
     const chat = await chatWith(lone, "Hello");
     await lone.service.settled(chat.id);
@@ -828,8 +820,8 @@ describe("chat service", () => {
     ).rejects.toMatchObject({ kind: "forbidden" });
   });
 
-  it("declines stored cards on a new message after a restart, and refuses a card whose tool is gone", async () => {
-    const t = await setup({ trash: true });
+  it("declines stored cards on a new message after a restart", async () => {
+    const t = await setup();
     t.script.queue.push(
       call("c1", "trash_items", { summary: "s", items: [{ path: "/Inbox/a.txt", reason: "r" }] }),
     );
@@ -839,14 +831,6 @@ describe("chat service", () => {
     if (card?.kind !== "action") throw new Error("expected a card");
 
     const restarted = t.restart();
-    t.trash.enabled = false;
-    await expect(
-      restarted.act(t.principal, chat.id, card.id, { decision: "apply" }),
-    ).rejects.toMatchObject({
-      kind: "conflict",
-      message: "That action is no longer available for this login.",
-    });
-
     t.script.queue.push(text("Ok."));
     await restarted.send(t.principal, chat.id, { text: "Forget it" });
     await restarted.settled(chat.id);

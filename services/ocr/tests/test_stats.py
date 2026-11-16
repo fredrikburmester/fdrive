@@ -4,8 +4,8 @@ from fdrive_ocr.stats import RunSummary, shape_health, shape_stats
 
 
 def test_shape_health() -> None:
-    assert shape_health(True, False) == {"ok": True, "running": False}
-    assert shape_health(False, True) == {"ok": False, "running": True}
+    assert shape_health(False) == {"ok": True, "running": False}
+    assert shape_health(True, {"revision": 1}) == {"ok": True, "running": True, "features": {"revision": 1}}
 
 
 def test_shape_stats_with_no_last_run() -> None:

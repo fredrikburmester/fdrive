@@ -1,25 +1,36 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DESKTOP_API, DesktopPairing, DesktopPairResult } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import type { DesktopEffectsRepo } from "@fdrive/db";
+import type { Login } from "@fdrive/db";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { createMemoryStorage } from "@fdrive/testkit";
+import { createLocalStorage, createUserStorage, SHARED_WITH_ME } from "@fdrive/local";
+import { createMemoryStorage, entryStat } from "@fdrive/testkit";
 import { afterEach, expect, it, vi } from "vitest";
 import { activityFixture } from "../../test/activity-fixture.js";
+import { testFileOperations, testTrashItems } from "../../test/file-operations.js";
 import { memoryRepo } from "../../test/helpers/desktop-repo.js";
+import { memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
-import type { Principal } from "../auth/principal.js";
+import type { Principal, PrincipalExtras } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
 import { ApiHttpError } from "../errors.js";
+import { fileActor } from "../files/operations.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
 import { createTokenService } from "../tokens/service.js";
+import type { DesktopChanges } from "./changes.js";
 import { createDesktopFiles } from "./files.js";
 import { createDesktopPairing } from "./pairing.js";
 import { registerDesktopRoutes } from "./routes.js";
-import { createDesktopWrites, type DesktopWriteGate, NO_WRITES } from "./writes.js";
+import { createDesktopWrites, NO_WRITES } from "./writes.js";
+
+const ALL_WRITES = { create: true, update: true, move: true, trash: true, restore: true };
+function required<T>(value: T | null | undefined): T {
+  if (value == null) throw Error("Missing fixture value");
+  return value;
+}
 
 it("runs the complete v2 routes with explicit grants, streamed content, receipts and revocation", async () => {
   const f = await fixture(true);
@@ -37,7 +48,7 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
     (
       await f.request(
         `/pairings/${request.id}/approve`,
-        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { access: "full" },
         { cookie: "fdrive_session=test" },
       )
     ).status,
@@ -129,7 +140,30 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
       })
     ).status,
   ).toBe(200);
-  expect((await call(`/operations/${movedId}/commit`, {})).status).toBe(200);
+  const renamed = (await (await call(`/operations/${movedId}/commit`, {})).json()) as {
+    item: { id: string; version: { content: string; metadata: string } };
+  };
+  // Finder's Trash is fdrive's: moved there, listed there, and Empty Trash deletes for good.
+  const trashId = randomUUID();
+  await call("/moves", {
+    operationId: trashId,
+    itemId: renamed.item.id,
+    parentId: "trash",
+    name: "renamed-folder",
+    base: renamed.item.version,
+  });
+  expect((await call(`/operations/${trashId}/commit`, {})).status).toBe(200);
+  const trashed = async () =>
+    (
+      (await (await call("/entries?path=/.fdrive-desktop/trash")).json()) as {
+        entries: { id: string }[];
+      }
+    ).entries.map((entry) => entry.id);
+  expect(await trashed()).toEqual([renamed.item.id]);
+  expect((await call("/purges", { itemId: "not-a-handle" })).status).toBe(400);
+  expect((await call("/purges", { itemId: folder.item.id, extra: true })).status).toBe(400);
+  expect(await (await call("/purges", { itemId: renamed.item.id })).json()).toEqual({ ok: true });
+  expect(await trashed()).toEqual([]);
   const operationId = randomUUID();
   const digest = createHash("sha256").update("").digest("hex");
   expect(
@@ -171,53 +205,294 @@ it("runs the complete v2 routes with explicit grants, streamed content, receipts
   expect((await call(`/pairings/${next.id}/poll`, { secret: next.secret })).status).toBe(404);
 });
 
+/** Pairs a write-protocol location through the routes and returns a caller for it. */
+async function pairWritable(f: Awaited<ReturnType<typeof fixture>>) {
+  const base = "/api/v2/desktop";
+  const json = { "x-requested-with": "fdrive", "content-type": "application/json" };
+  const created = await f.app.request(`${base}/pairings`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ deviceName: "Mac" }),
+  });
+  const request = DesktopPairing.parse(await created.json());
+  await f.request(
+    `/pairings/${request.id}/approve`,
+    { access: "full" },
+    { cookie: "fdrive_session=test" },
+  );
+  const polled = await f.app.request(`${base}/pairings/${request.id}/poll`, {
+    method: "POST",
+    headers: json,
+    body: JSON.stringify({ secret: request.secret }),
+  });
+  const token = ((await polled.json()) as { credentials: Array<{ token: string }> }).credentials[0]
+    ?.token;
+  if (!token) throw Error("Missing token");
+  return (route: string, authorized = true) =>
+    f.app.request(base + route, {
+      headers: { ...json, ...(authorized ? { authorization: `Bearer ${token}` } : {}) },
+    });
+}
+
+it("keeps Finder's Trash working for FDrive for Mac 0.5.4's requests, on Trash's rows", async () => {
+  const f = await fixture(true);
+  const { token } = await f.connect("full", 2);
+  // As 0.5.4's APIClient sends them: JSON bodies with sorted keys, bearer and requested-with.
+  const call = async (route: string, body?: Record<string, unknown>) => {
+    const sorted =
+      body === undefined
+        ? undefined
+        : JSON.stringify(
+            Object.fromEntries(Object.entries(body).sort(([a], [b]) => (a < b ? -1 : 1))),
+          );
+    const response = await f.app.request(`/api/v2/desktop/${route}`, {
+      method: body === undefined ? "GET" : "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "x-requested-with": "fdrive",
+        "content-type": "application/json",
+      },
+      ...(sorted === undefined ? {} : { body: sorted }),
+    });
+    expect(response.status, route).toBe(200);
+    return (await response.json()) as Record<string, unknown>;
+  };
+  type Entry = {
+    id: string;
+    parentId: string;
+    path: string;
+    name: string;
+    trashed: boolean;
+    version: { content: string; metadata: string };
+  };
+  const entries = async (path: string) =>
+    (await call(`entries?path=${encodeURIComponent(path)}`)).entries as Entry[];
+  const move = async (item: Entry, parentId: string, name: string) => {
+    const operationId = randomUUID();
+    await call("moves", { operationId, itemId: item.id, parentId, name, base: item.version });
+    return (await call(`operations/${operationId}/commit`, {})) as {
+      state: string;
+      item: Entry;
+      recoveryId: null;
+    };
+  };
+  /** What 0.5.4 accepts as an entry of its Trash (`RemoteEntry.hasValidListingName`). */
+  const validInTrash = (entry: Entry) =>
+    entry.trashed &&
+    entry.parentId === "trash" &&
+    entry.path === `/.fdrive-desktop/trash/${entry.id}` &&
+    /^[0-9a-f-]{36}$/.test(entry.id);
+  const rows = () => [...f.trashRepo.rows.values()];
+  const docs = required((await entries("/")).find((entry) => entry.name === "docs"));
+  const file = required((await entries("/docs")).find((entry) => entry.name === "a.txt"));
+  const shown = `a (deleted ${file.id.slice(0, 8)}).txt`;
+
+  // Move to Trash: the handle goes with the item, named as before in Finder's Trash.
+  const trashed = await move(file, "trash", "a.txt");
+  expect(trashed).toMatchObject({
+    state: "completed",
+    recoveryId: null,
+    item: { id: file.id, parentId: "trash", path: `/.fdrive-desktop/trash/${file.id}` },
+  });
+  expect(trashed.item).toMatchObject({ name: shown, trashed: true });
+  // Trash holds it in a folder of its own, its row confirmed with where it came from.
+  expect(rows()).toMatchObject([
+    { originalPath: "/docs/a.txt", name: "a.txt", kind: "file", movingFrom: null },
+  ]);
+  const { id } = required(rows()[0]);
+  expect(await new Response((await f.storage.open(`/.trash/${id}/a.txt`)).stream()).text()).toBe(
+    "alpha",
+  );
+  const listed = await entries("/.fdrive-desktop/trash");
+  // The stray file loose in the Trash folder is no Trash item.
+  expect(listed.map((entry) => [entry.id, entry.name])).toEqual([[file.id, shown]]);
+  expect(listed.every(validInTrash)).toBe(true);
+  expect(await call(`entry?path=${encodeURIComponent(trashed.item.path)}`)).toMatchObject({
+    id: file.id,
+    name: shown,
+    trashed: true,
+  });
+
+  // Restore, by dragging it out under its name in Finder's Trash: it takes back its own.
+  const restored = await move(required(listed[0]), docs.id, shown);
+  expect(restored.item).toMatchObject({
+    id: file.id,
+    parentId: docs.id,
+    path: "/docs/a.txt",
+    name: "a.txt",
+    trashed: false,
+  });
+  expect(rows()).toEqual([]);
+  expect(await entries("/.fdrive-desktop/trash")).toEqual([]);
+  await expect(f.storage.stat(`/.trash/${id}`)).rejects.toMatchObject({ kind: "not_found" });
+
+  // Empty Trash: a purge by handle deletes it for good, and asking again is done.
+  const again = await move(restored.item, "trash", "a.txt");
+  expect(validInTrash(again.item)).toBe(true);
+  expect(rows()).toHaveLength(1);
+  const second = required(rows()[0]).id;
+  expect(await call("purges", { itemId: file.id })).toEqual({ ok: true });
+  expect(rows()).toEqual([]);
+  expect(await entries("/.fdrive-desktop/trash")).toEqual([]);
+  await expect(f.storage.stat(`/.trash/${second}/a.txt`)).rejects.toMatchObject({
+    kind: "not_found",
+  });
+  expect(await call("purges", { itemId: file.id })).toEqual({ ok: true });
+});
+
+it("publishes nothing once the pairing is revoked or downgraded while a save hashes its base", async () => {
+  const base = "/api/v2/desktop";
+  const json = { "x-requested-with": "fdrive", "content-type": "application/json" };
+  const sha = (value: string) => createHash("sha256").update(value).digest("hex");
+  for (const change of ["revoked", "downgraded"] as const) {
+    const f = await fixture(true);
+    const created = await f.app.request(`${base}/pairings`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ deviceName: "Mac" }),
+    });
+    const request = DesktopPairing.parse(await created.json());
+    await f.request(
+      `/pairings/${request.id}/approve`,
+      { access: "full" },
+      { cookie: "fdrive_session=test" },
+    );
+    const polled = await f.app.request(`${base}/pairings/${request.id}/poll`, {
+      method: "POST",
+      headers: json,
+      body: JSON.stringify({ secret: request.secret }),
+    });
+    const token = ((await polled.json()) as { credentials: Array<{ token: string }> })
+      .credentials[0]?.token;
+    if (!token) throw Error("Missing token");
+    const headers = { ...json, authorization: `Bearer ${token}` };
+    const call = (route: string, body?: unknown) =>
+      f.app.request(base + route, {
+        method: body === undefined ? "GET" : "POST",
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    const entry = (await (await call("/entry?path=/docs/a.txt")).json()) as {
+      id: string;
+      parentId: string;
+      version: { content: string; metadata: string };
+    };
+    const operationId = randomUUID();
+    const prepared = await call("/uploads", {
+      operationId,
+      parentId: entry.parentId,
+      itemId: entry.id,
+      name: "a.txt",
+      base: { ...entry.version, content: sha("alpha") },
+      size: 5,
+      sha256: sha("saved"),
+    });
+    expect(prepared.status).toBe(200);
+    const sent = await f.app.request(`${base}/operations/${operationId}/content`, {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/octet-stream" },
+      body: "saved",
+    });
+    expect(sent.status).toBe(200);
+    // The token changes while the commit reads the file its save replaces.
+    const [stored] = await f.repos.apiTokens.listByAccount(f.account.id);
+    if (!stored) throw Error("Missing stored token");
+    const findByHash = f.repos.apiTokens.findByHash.bind(f.repos.apiTokens);
+    let changed = false;
+    vi.spyOn(f.repos.apiTokens, "findByHash").mockImplementation(async (hash) => {
+      const found = await findByHash(hash);
+      return changed && found ? { ...found, access: { mode: "read", paths: ["/"] } } : found;
+    });
+    const open = f.storage.open.bind(f.storage);
+    vi.spyOn(f.storage, "open").mockImplementation(async (path) => {
+      if (path === "/docs/a.txt" && !changed) {
+        changed = true;
+        if (change === "revoked") await f.repos.apiTokens.delete(stored.id, f.account.id);
+      }
+      return open(path);
+    });
+    const commit = await call(`/operations/${operationId}/commit`, {});
+    expect(commit.status, change).toBe(401);
+    expect(changed).toBe(true);
+    expect(await new Response((await open("/docs/a.txt")).stream()).text()).toBe("alpha");
+  }
+});
+
+it("advertises the change feed and answers it", async () => {
+  // Without a feed: nothing advertised, nothing served.
+  const plain = await fixture(true);
+  const plainCall = await pairWritable(plain);
+  expect(await (await plainCall("/location")).json()).not.toHaveProperty("changeFeed");
+  expect((await plainCall("/changes")).status).toBe(404);
+
+  const read = vi.fn(async (_principal: Principal, since: string | undefined) => ({
+    status: "resync" as const,
+    anchor: since ?? "v1.start",
+  }));
+  const f = await fixture(true, { read });
+  const call = await pairWritable(f);
+  expect(await (await call("/location")).json()).toMatchObject({
+    listingChecks: true,
+    changeFeed: true,
+  });
+  expect(await (await call("/changes")).json()).toEqual({ status: "resync", anchor: "v1.start" });
+  expect(await (await call("/changes?since=v1.mine")).json()).toEqual({
+    status: "resync",
+    anchor: "v1.mine",
+  });
+  expect(read.mock.calls.map(([principal, since]) => [principal.identityId, since])).toEqual([
+    [f.identity.id, undefined],
+    [f.identity.id, "v1.mine"],
+  ]);
+  for (const since of ["", "a".repeat(257)])
+    expect((await call(`/changes?since=${since}`)).status).toBe(400);
+  expect((await call("/changes", false)).status).toBe(401);
+});
+
 const desktopDirectories: string[] = [];
 afterEach(async () => {
   await Promise.all(
     desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "status">) {
+async function fixture(writable = false, changes?: DesktopChanges) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
   const activity = activityFixture(clock);
-  const account = await repos.accounts.create({ displayName: "Alice" });
-  const provider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://files.invalid",
-  });
-  const secondProvider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://dav.invalid",
-  });
-  const identity = await repos.identities.create({
-    accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
-  });
-  const second = await repos.identities.create({
-    accountId: account.id,
-    providerId: secondProvider.id,
-    externalUsername: "alice",
-  });
+  // The files folder's id, which every location names as its `providerId`.
+  const storageId = "00000000-0000-4000-8000-0000000000aa";
+  const user = (username: string) =>
+    repos.logins.createUser({
+      username,
+      passwordHash: "h",
+      isAdmin: false,
+      at: now,
+    });
+  const identity = await user("alice");
+  const account = { id: identity.accountId };
+  // Another person's login, on an account of its own.
+  const second = await user("bob");
   const storage: StorageProvider = createMemoryStorage({
     "/docs/a.txt": "alpha",
     "/.trash/old": "trash",
     "/hidden/b.txt": "private",
   });
-  if (writable) {
-    const raw = { ...storage };
-    storage.withWriteLease = async (action) => action(raw);
-  }
-  const stateDir = writable ? await mkdtemp(join(tmpdir(), "desktop-routes-")) : undefined;
-  if (stateDir) desktopDirectories.push(stateDir);
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
+    storage: { id: storageId, name: async () => "Family files" },
     clock,
-    storageFactory: vi.fn(async (id: string) => (id === identity.id ? storage : otherStorage)),
-    trashPathForStorage: () => "/.trash",
+    principalFor: vi.fn(
+      async (login: Login, extras?: PrincipalExtras): Promise<Principal> => ({
+        accountId: login.accountId,
+        identityId: login.identityId,
+        username: login.username,
+        isAdmin: login.isAdmin,
+        storage: login.identityId === identity.id ? storage : otherStorage,
+        ...extras,
+      }),
+    ),
   };
   const principal: Principal = {
     accountId: account.id,
@@ -229,27 +504,39 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
   };
   const pairing = createDesktopPairing(deps);
   const files = createDesktopFiles(deps);
+  // Trash's rows, over alice's files; Empty Trash deletes through the file operations.
+  const trashRepo = memoryTrashItemRepo();
+  const homeOf = async () => storage;
+  const trashFiles = testFileOperations({ trashRepo, homeOf });
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
     }),
     logger: { info() {}, warn() {}, error() {}, debug() {}, fatal() {}, trace() {} } as never,
     version: "test",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "files.invalid" }],
-    }),
+    setupRequired: async () => false,
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
     registerRoutes: (groups) =>
       registerDesktopRoutes(groups, {
         ...deps,
-        ...(recovery ? { recovery } : {}),
+        ...(changes ? { changes } : {}),
         activity: activity.service,
         clientIp: () => "test",
-        ...(stateDir
-          ? { writes: createDesktopWrites({ ...deps, repo: memoryRepo().repo, stateDir }) }
+        ...(writable
+          ? {
+              writes: createDesktopWrites({
+                ...deps,
+                repo: memoryRepo(trashRepo).repo,
+                storageForIdentity: async () => storage,
+                purge: async (principal, id) => {
+                  await trashFiles.purge(fileActor(principal, { source: "native" }), id);
+                },
+                trash: testTrashItems({ repo: trashRepo, homeOf }).items,
+              }),
+            }
           : {}),
       }),
   });
@@ -260,27 +547,40 @@ async function fixture(writable = false, recovery?: Pick<DesktopEffectsRepo, "st
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   }
+  const owner = { accountId: account.id, identityId: identity.id };
+  /** Pairs a Mac for alice through the pairing service and returns its one credential. */
+  async function connect(access: "read" | "full" = "read", protocolVersion: 1 | 2 = 1) {
+    const pair = pairing.create("Mac", "connect", protocolVersion);
+    await pairing.approve(pair.id, owner, access);
+    const result = await pairing.poll(pair.id, pair.secret);
+    const credential = result.status === "connected" ? result.credentials[0] : undefined;
+    if (!credential) throw new Error("Expected a credential");
+    return credential;
+  }
   return {
     repos,
     deps,
     activity,
     account,
-    provider,
+    storageId,
     identity,
     second,
+    owner,
+    connect,
     storage,
     principal,
     pairing,
     files,
     app,
     request,
+    trashRepo,
     advance: (ms: number) => {
       now = new Date(now.getTime() + ms);
     },
   };
 }
 
-it("pairs selected identities once, confines desktop credentials, and revokes only the chosen location", async () => {
+it("pairs the signed-in login once, confines desktop credentials, and revokes only the chosen location", async () => {
   const f = await fixture();
   const pair = DesktopPairing.parse(
     await (await f.request("/pairings", { deviceName: "My Mac" })).json(),
@@ -302,7 +602,7 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
     (
       await f.request(
         `/pairings/${pair.id}/approve`,
-        { identityIds: [f.identity.id] },
+        { access: "read" },
         { cookie: "fdrive_session=test", authorization: "Bearer nope" },
       )
     ).status,
@@ -312,7 +612,7 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
       await f.app.request(`${DESKTOP_API}/pairings/${pair.id}/approve`, {
         method: "POST",
         headers: { cookie: "fdrive_session=test", "content-type": "application/json" },
-        body: JSON.stringify({ identityIds: [f.identity.id] }),
+        body: JSON.stringify({ access: "read" }),
       })
     ).status,
   ).toBe(403);
@@ -320,7 +620,7 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
     (
       await f.request(
         `/pairings/${pair.id}/approve`,
-        { identityIds: [f.identity.id, f.second.id] },
+        { access: "read" },
         { cookie: "fdrive_session=test" },
       )
     ).status,
@@ -334,13 +634,14 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
   );
   expect(first).toEqual(retry);
   if (first?.status !== "connected") throw new Error("Expected credentials");
-  expect(first.credentials).toHaveLength(2);
+  // One location, in the list every Mac app reads.
+  expect(first.credentials).toHaveLength(1);
   const one = first.credentials[0];
-  const two = first.credentials[1];
-  if (!one || !two) throw new Error("Expected two credentials");
+  if (!one) throw new Error("Expected a credential");
+  const two = await f.connect();
   const headers = { authorization: `Bearer ${one.token}` };
   expect(await createResolveTokenPrincipal(f.deps)(one.token)).toBeNull();
-  const mcp = await createTokenService(f.deps).create(f.account.id, { name: "MCP" });
+  const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
   expect(
     (await f.request("/location", undefined, { authorization: `Bearer ${mcp.token}` })).status,
   ).toBe(401);
@@ -372,7 +673,7 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
         authorization: `Bearer ${two.token}`,
       })
     ).text(),
-  ).toBe("bravo");
+  ).toBe("alpha");
   expect((await f.request("/entries?path=/", undefined, headers)).status).toBe(200);
   expect((await f.request("/entry?path=relative", undefined, headers)).status).toBe(400);
   expect((await f.request("/content?path=/.trash/old", undefined, headers)).status).toBe(403);
@@ -398,16 +699,57 @@ it("pairs selected identities once, confines desktop credentials, and revokes on
   ).toBe(401);
 });
 
+it("says credential_gone only for a desktop credential the server no longer holds", async () => {
+  const f = await fixture(true);
+  /** The refusal's `error.details.code`; undefined for a plain 401. */
+  async function refusal(version: 1 | 2, route: string, authorization?: string) {
+    const response = await f.app.request(`/api/v${version}/desktop${route}`, {
+      headers: { "x-requested-with": "fdrive", ...(authorization ? { authorization } : {}) },
+    });
+    expect(response.status, route).toBe(401);
+    const body = (await response.json()) as {
+      error: { kind: string; details?: { code?: string } };
+    };
+    expect(body.error.kind).toBe("unauthorized");
+    return body.error.details?.code;
+  }
+  // Revoked by its Mac: every desktop route, on either protocol, says it is gone.
+  const disconnected = await f.connect("full", 2);
+  expect(
+    (await f.request("/disconnect", {}, { authorization: `Bearer ${disconnected.token}` })).status,
+  ).toBe(200);
+  for (const route of ["/location", "/entries?path=/", "/content?path=/docs/a.txt"]) {
+    for (const version of [1, 2] as const)
+      expect(await refusal(version, route, `Bearer ${disconnected.token}`)).toBe("credential_gone");
+  }
+  // Revoked from the web, and one this server never issued (or a restore cleared).
+  const fromWeb = await f.connect();
+  await createTokenService(f.deps).revoke(fromWeb.tokenId, f.account.id);
+  expect(await refusal(1, "/location", `Bearer ${fromWeb.token}`)).toBe("credential_gone");
+  expect(await refusal(2, "/location", `Bearer fdd_${"A".repeat(43)}`)).toBe("credential_gone");
+  // Expired: the server still holds it, so the Mac only signs out and can reconnect.
+  const expiring = await f.connect("full", 2);
+  f.advance(366 * 86_400_000);
+  expect(await refusal(2, "/location", `Bearer ${expiring.token}`)).toBeUndefined();
+  // A live credential on a route its grant does not reach, a foreign or malformed bearer, none.
+  const full = await f.connect("full", 2);
+  expect(await refusal(1, "/location", `Bearer ${full.token}`)).toBeUndefined();
+  const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
+  expect(await refusal(2, "/location", `Bearer ${mcp.token}`)).toBeUndefined();
+  expect(
+    await refusal(2, "/location", `Bearer ${full.token.replace("fdd_", "fdr_")}`),
+  ).toBeUndefined();
+  expect(await refusal(2, "/location", "Bearer fdd_short")).toBeUndefined();
+  expect(await refusal(2, "/location")).toBeUndefined();
+});
+
 it("requires the app secret, cancels issued credentials, expires pending requests and bounds admission", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
   await expect(f.pairing.poll(pair.id, "wrong")).rejects.toMatchObject({ kind: "unauthorized" });
   await expect(f.pairing.cancel(pair.id, "wrong")).rejects.toMatchObject({ kind: "unauthorized" });
-  await expect(
-    f.pairing.approve(pair.id, "different-account", [f.identity.id]),
-  ).rejects.toMatchObject({ kind: "forbidden" });
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.identity.id]);
-  await expect(f.pairing.approve(pair.id, f.account.id, [f.identity.id])).rejects.toMatchObject({
+  await f.pairing.approve(pair.id, f.owner, "read");
+  await expect(f.pairing.approve(pair.id, f.owner, "read")).rejects.toMatchObject({
     kind: "conflict",
   });
   const connected = await f.pairing.poll(pair.id, pair.secret);
@@ -432,7 +774,7 @@ it("revokes issued credentials the app never confirms and keeps confirmed ones",
   await expect(f.pairing.confirm(pair.id, pair.secret)).rejects.toMatchObject({
     kind: "conflict",
   });
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+  await f.pairing.approve(pair.id, f.owner, "read");
   await expect(f.pairing.confirm(pair.id, "wrong")).rejects.toMatchObject({
     kind: "unauthorized",
   });
@@ -452,7 +794,7 @@ it("revokes issued credentials the app never confirms and keeps confirmed ones",
   );
   await f.request(
     `/pairings/${routed.id}/approve`,
-    { identityIds: [f.identity.id] },
+    { access: "read" },
     { cookie: "fdrive_session=test" },
   );
   await f.request(`/pairings/${routed.id}/poll`, { secret: routed.secret });
@@ -462,7 +804,7 @@ it("revokes issued credentials the app never confirms and keeps confirmed ones",
   ).toBe(200);
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(2);
   const orphan = f.pairing.create("Mac", "owner");
-  await f.pairing.approve(orphan.id, f.account.id, [f.identity.id]);
+  await f.pairing.approve(orphan.id, f.owner, "read");
   expect((await f.pairing.poll(orphan.id, orphan.secret)).status).toBe("connected");
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(3);
   f.advance(300_000);
@@ -480,19 +822,13 @@ it("revokes issued credentials the app never confirms and keeps confirmed ones",
   expect(v2.status).toBe(404);
 });
 
-it("revokes only the supplied desktop credential without resolving disabled storage", async () => {
+it("revokes only the supplied desktop credential without building storage", async () => {
   const f = await fixture();
-  const pair = f.pairing.create("Mac", "owner");
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.second.id]);
-  const result = await f.pairing.poll(pair.id, pair.secret);
-  if (result.status !== "connected") throw new Error("Expected credentials");
-  const credential = result.credentials[0];
-  const other = result.credentials[1];
-  if (!credential || !other) throw new Error("Expected two locations");
-  const mcp = await createTokenService(f.deps).create(f.account.id, { name: "MCP" });
-  await f.repos.providers.update(f.provider.id, { enabled: false });
-  f.deps.storageFactory.mockClear();
-  f.deps.storageFactory.mockRejectedValue(
+  const credential = await f.connect();
+  const other = await f.connect();
+  const mcp = await createTokenService(f.deps).create(f.owner, { name: "MCP" });
+  f.deps.principalFor.mockClear();
+  f.deps.principalFor.mockRejectedValue(
     new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
   );
   for (const token of ["", mcp.token, mcp.token.replace("fdr_", "fdd_")]) {
@@ -512,7 +848,7 @@ it("revokes only the supplied desktop credential without resolving disabled stor
   expect(
     (await f.repos.apiTokens.listByAccount(f.account.id)).map((token) => token.id).sort(),
   ).toEqual([other.tokenId, mcp.item.id].sort());
-  expect(f.deps.storageFactory).not.toHaveBeenCalled();
+  expect(f.deps.principalFor).not.toHaveBeenCalled();
   // Expiration should not prevent cleanup of a credential whose hash is still stored.
   f.advance(366 * 86_400_000);
   expect(
@@ -520,29 +856,19 @@ it("revokes only the supplied desktop credential without resolving disabled stor
   ).toBe(200);
 });
 
-it("asks to sign in again when a location's storage is gone, instead of a server error", async () => {
+it("refuses the location of a user an administrator disabled since connecting", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+  await f.pairing.approve(pair.id, f.owner, "read");
   const result = await f.pairing.poll(pair.id, pair.secret);
   if (result.status !== "connected") throw new Error("Expected credentials");
   const credential = result.credentials[0];
   if (!credential) throw new Error("Expected a location");
-  await f.repos.providers.update(f.provider.id, { enabled: false });
-  f.deps.storageFactory.mockRejectedValue(
-    new ApiHttpError("upstream_unavailable", "storage provider unavailable"),
-  );
-  const response = await f.request("/location", undefined, {
-    authorization: `Bearer ${credential.token}`,
+  expect(credential.location).toMatchObject({
+    providerId: f.storageId,
+    displayName: "Family files",
   });
-  expect(response.status).toBe(401);
-  expect(await response.json()).toMatchObject({
-    error: { kind: "unauthorized", message: "Storage login is no longer available" },
-  });
-  // Any other failure to build storage is still the error it was.
-  f.deps.storageFactory.mockRejectedValue(
-    new ApiHttpError("forbidden", "this user may not sign in"),
-  );
+  await f.repos.localUsers.update("alice", { disabled: true });
   expect(
     (await f.request("/location", undefined, { authorization: `Bearer ${credential.token}` }))
       .status,
@@ -569,19 +895,16 @@ it("bounds one IPv6 subscriber to eight pairing slots and preserves admission fo
   expect(() => f.pairing.create("Mac", "2001:db8:1234:5678::1")).not.toThrow();
 });
 
-it("rolls back partial issuance and rejects ownership changes during pairing", async () => {
+it("rolls back a failed issuance and approves a pairing once", async () => {
   const f = await fixture();
   const pair = f.pairing.create("Mac", "owner");
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.second.id]);
-  f.deps.storageFactory.mockRejectedValueOnce(new Error("upstream offline"));
+  await f.pairing.approve(pair.id, f.owner, "read");
+  f.deps.principalFor.mockRejectedValueOnce(new Error("upstream offline"));
   await expect(f.pairing.poll(pair.id, pair.secret)).rejects.toThrow();
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(0);
-  await expect(f.pairing.location({ ...f.principal, accountId: "other" })).rejects.toMatchObject({
-    kind: "unauthorized",
-  });
   const race = f.pairing.create("Mac", "owner");
   const approvals = await Promise.allSettled(
-    [1, 2].map(() => f.pairing.approve(race.id, f.account.id, [f.identity.id])),
+    [1, 2].map(() => f.pairing.approve(race.id, f.owner, "read")),
   );
   expect(approvals.filter((result) => result.status === "fulfilled")).toHaveLength(1);
 });
@@ -609,7 +932,7 @@ it("lists 10,000 metadata entries consistently, binding cursors to token, identi
     ext: "txt",
   }));
   const list = vi.spyOn(f.storage, "list").mockResolvedValue(entries);
-  const download = vi.spyOn(f.storage, "download");
+  const open = vi.spyOn(f.storage, "open");
   f.storage.probeDirectoryRead = vi.fn(async () => {});
   const first = await f.files.list(f.principal, "/", "token");
   const cursor = first.nextCursor ?? "";
@@ -633,7 +956,7 @@ it("lists 10,000 metadata entries consistently, binding cursors to token, identi
   expect(all).toHaveLength(10_000);
   expect(new Set(all.map((entry) => entry.path)).size).toBe(10_000);
   expect(list).toHaveBeenCalledTimes(1);
-  expect(download).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
   list.mockResolvedValue(entries);
   const expired = await f.files.list(f.principal, "/", "token");
   f.advance(120_000);
@@ -658,24 +981,25 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
   expect(
     (await f.files.list(principal, "/docs", "token")).entries.map((entry) => entry.name),
   ).toEqual(["a.txt"]);
-  await expect(
-    f.files.content(principal, "/hidden/b.txt", new AbortController().signal),
-  ).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.content(principal, "/hidden/b.txt")).rejects.toMatchObject({
+    kind: "forbidden",
+  });
   await expect(f.files.list(f.principal, "/docs/a.txt", "token")).rejects.toMatchObject({
     kind: "bad_request",
   });
-  await expect(
-    f.files.content(f.principal, "/docs", new AbortController().signal),
-  ).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(f.files.content(f.principal, "/docs")).rejects.toMatchObject({
+    kind: "bad_request",
+  });
   await expect(f.files.stat(f.principal, "/absent")).rejects.toMatchObject({ kind: "not_found" });
-  await expect(
-    f.files.stat(f.principal, `/${Array(129).fill("a").join("/")}`),
-  ).rejects.toMatchObject({ kind: "bad_request" });
   vi.spyOn(f.storage, "list").mockResolvedValue([
     { path: "/link", name: "link", kind: "symlink", size: 0, modifiedAt: new Date(), ext: "" },
   ]);
   expect((await f.files.list(f.principal, "/", "token")).entries[0]?.readable).toBe(false);
-  await expect(f.files.stat(f.principal, "/link/secret")).rejects.toMatchObject({
+  // Storage refuses a path through a link, and the connection says so.
+  vi.spyOn(f.storage, "stat").mockRejectedValueOnce(
+    new StorageError("forbidden", "symbolic links are not followed: /link"),
+  );
+  await expect(f.files.stat(f.principal, "/link")).rejects.toMatchObject({
     kind: "forbidden",
   });
   vi.mocked(f.storage.list).mockRejectedValue(new StorageError("forbidden", "revoked"));
@@ -684,26 +1008,154 @@ it("preserves ancestor visibility while enforcing grants, Trash exclusion, live 
   });
 });
 
+it("reads every entry with one stat and never lists its ancestors", async () => {
+  const f = await fixture();
+  const deep = "/docs/deep/er/c.txt";
+  await f.storage.upload(deep, new TextEncoder().encode("charlie"), { mkdirParents: true });
+  const list = vi.spyOn(f.storage, "list");
+  const stat = vi.spyOn(f.storage, "stat");
+  const signal = new AbortController().signal;
+  expect(await f.files.stat(f.principal, deep)).toMatchObject({
+    path: deep,
+    kind: "file",
+    size: 7,
+  });
+  await f.files.content(f.principal, deep);
+  await f.files.versions(f.principal, [deep, "/docs/a.txt"], signal);
+  expect(list).not.toHaveBeenCalled();
+  expect(stat.mock.calls).toEqual([[deep], [deep], [deep], ["/docs/a.txt"]]);
+  // A listing reads the folder itself and nothing above it.
+  await f.files.list(f.principal, "/docs/deep/er", "token");
+  expect(list.mock.calls).toEqual([["/docs/deep/er"]]);
+  // Another spelling of a stored name, as a disk that ignores case finds it, is not that item.
+  stat.mockResolvedValueOnce(entryStat("/docs/a.txt", { size: 5 }));
+  await expect(f.files.stat(f.principal, "/docs/A.txt")).rejects.toMatchObject({
+    kind: "not_found",
+  });
+});
+
+it("refuses every read that reaches its item through a symbolic link, at any segment", async () => {
+  const f = await fixture();
+  const root = await realpath(await mkdtemp(join(tmpdir(), "desktop-links-")));
+  desktopDirectories.push(root);
+  const home = join(root, "alice");
+  await mkdir(join(home, "docs", "sub"), { recursive: true });
+  await mkdir(join(home, ".fdrive-desktop", "state"), { recursive: true });
+  await writeFile(join(home, "docs", "a.txt"), "alpha");
+  await writeFile(join(home, "docs", "sub", "b.txt"), "bravo");
+  await writeFile(join(home, ".fdrive-desktop", "state", "secret.txt"), "secret");
+  await writeFile(join(root, "outside.txt"), "outside");
+  // Into a folder fdrive keeps to itself, into an ordinary folder, and as the last segment.
+  await symlink(join(home, ".fdrive-desktop"), join(home, "docs", "desk"));
+  await symlink(join(home, "docs"), join(home, "alias"));
+  await symlink(join(home, "docs", "sub"), join(home, "docs", "inner"));
+  await symlink(join(home, "docs", "a.txt"), join(home, "a-link.txt"));
+  await symlink(join(root, "outside.txt"), join(home, "out.txt"));
+  await symlink(join(root, "nowhere"), join(home, "dangling"));
+  const signal = new AbortController().signal;
+  const full = { mode: "full" as const, paths: ["/"] };
+  const writes = createDesktopWrites({
+    ...f.deps,
+    repo: memoryRepo().repo,
+    // Only reads here; nothing is staged or deleted.
+    storageForIdentity: async () => createMemoryStorage({}),
+    purge: async () => {},
+    trash: testTrashItems().items,
+  });
+  const refuses = async (principal: Principal, folders: string[], files: string[]) => {
+    const writer = { ...principal, tokenAccess: full };
+    for (const path of [...folders, ...files])
+      await expect(f.files.stat(principal, path)).rejects.toMatchObject({ kind: "forbidden" });
+    for (const path of folders) {
+      await expect(f.files.list(principal, path, "token")).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      expect((await writes.check(writer, [{ path, token: "v1:x" }], signal)).folders).toEqual([
+        { path, status: "forbidden" },
+      ]);
+    }
+    for (const path of files) {
+      await expect(f.files.content(principal, path)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+      await expect(f.files.versions(principal, [path], signal)).rejects.toMatchObject({
+        kind: "forbidden",
+      });
+    }
+  };
+  const own = { ...f.principal, storage: createLocalStorage({ home }) };
+  await refuses(
+    own,
+    ["/docs/desk", "/docs/desk/state", "/alias", "/alias/sub", "/docs/inner"],
+    ["/docs/desk/state/secret.txt", "/alias/a.txt", "/docs/inner/b.txt", "/a-link.txt"],
+  );
+  await expect(f.files.stat(own, "/out.txt")).rejects.toMatchObject({ kind: "forbidden" });
+  await expect(f.files.stat(own, "/dangling")).rejects.toMatchObject({ kind: "forbidden" });
+  // Listings show every link as one, unreadable, and the real paths still read.
+  const kinds = async (principal: Principal, path: string) =>
+    Object.fromEntries(
+      (await f.files.list(principal, path, "token")).entries.map((entry) => [
+        entry.name,
+        `${entry.kind}${entry.readable ? "" : " (unreadable)"}`,
+      ]),
+    );
+  expect(await kinds(own, "/")).toEqual({
+    "a-link.txt": "symlink (unreadable)",
+    alias: "symlink (unreadable)",
+    dangling: "symlink (unreadable)",
+    docs: "dir",
+    "out.txt": "symlink (unreadable)",
+  });
+  expect(await kinds(own, "/docs")).toEqual({
+    "a.txt": "file",
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
+  });
+  expect(await new Response((await f.files.content(own, "/docs/sub/b.txt")).stream()).text()).toBe(
+    "bravo",
+  );
+  // The same holds inside a folder someone shares.
+  await mkdir(join(root, "bob"));
+  const shared = {
+    ...f.principal,
+    storage: createUserStorage({
+      home: join(root, "bob"),
+      shared: async () => [
+        { name: "Docs", owner: "alice", dir: join(home, "docs"), ownerHome: home, writable: false },
+      ],
+    }),
+  };
+  const docs = `/${SHARED_WITH_ME}/Docs`;
+  await refuses(shared, [`${docs}/inner`, `${docs}/desk`], [`${docs}/inner/b.txt`]);
+  expect(await kinds(shared, docs)).toMatchObject({
+    desk: "symlink (unreadable)",
+    inner: "symlink (unreadable)",
+    sub: "dir",
+  });
+  expect(await f.files.stat(shared, `${docs}/sub/b.txt`)).toMatchObject({ kind: "file" });
+});
+
 it("detects equal-size replacements, rejects short streams and releases validation after cancellation", async () => {
   const f = await fixture();
   const signal = new AbortController().signal;
   const first = await f.files.versions(f.principal, ["/docs/a.txt"], signal);
-  await f.storage.upload("/docs/a.txt", new TextEncoder().encode("bravo"));
+  await f.storage.upload("/docs/a.txt", new TextEncoder().encode("bravo"), { overwrite: true });
   expect((await f.files.versions(f.principal, ["/docs/a.txt"], signal)).items[0]?.version).not.toBe(
     first.items[0]?.version,
   );
   await expect(f.files.versions(f.principal, ["/docs"], signal)).rejects.toMatchObject({
     kind: "bad_request",
   });
-  const original = f.storage.download;
-  vi.spyOn(f.storage, "download").mockImplementation(async (path, options) => ({
-    ...(await original(path, options)),
-    contentLength: 999,
+  const original = f.storage.open;
+  vi.spyOn(f.storage, "open").mockImplementation(async (path) => ({
+    ...(await original(path)),
+    size: 999,
   }));
   await expect(f.files.versions(f.principal, ["/docs/a.txt"], signal)).rejects.toMatchObject({
     kind: "upstream_unavailable",
   });
-  vi.mocked(f.storage.download).mockImplementation(original);
+  vi.mocked(f.storage.open).mockImplementation(original);
   const abort = new AbortController();
   abort.abort();
   await expect(f.files.versions(f.principal, ["/docs/a.txt"], abort.signal)).rejects.toThrow();
@@ -714,33 +1166,22 @@ it("detects equal-size replacements, rejects short streams and releases validati
   expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
 });
 
-it("requires explicit per-identity write approval and never upgrades protocol-1 credentials", async () => {
+it("requires explicit write approval and never upgrades protocol-1 credentials", async () => {
   const f = await fixture();
   const legacy = f.pairing.create("Old Mac", "legacy");
-  await expect(
-    f.pairing.approve(legacy.id, f.account.id, [f.identity.id], {
-      [f.identity.id]: "full",
-    }),
-  ).rejects.toMatchObject({ kind: "bad_request" });
+  await expect(f.pairing.approve(legacy.id, f.owner, "full")).rejects.toMatchObject({
+    kind: "bad_request",
+  });
   const modern = f.pairing.create("New Mac", "modern", 2);
   expect(f.pairing.info(modern.id)).toMatchObject({ supportsWrites: true });
-  await expect(
-    f.pairing.approve(modern.id, f.account.id, [f.identity.id], {
-      [f.second.id]: "full",
-    }),
-  ).rejects.toMatchObject({ kind: "bad_request" });
-  await f.pairing.approve(modern.id, f.account.id, [f.identity.id, f.second.id], {
-    [f.identity.id]: "full",
-  });
+  await f.pairing.approve(modern.id, f.owner, "full");
   const result = await f.pairing.poll(modern.id, modern.secret);
   if (result.status !== "connected") throw new Error("Expected credentials");
   const first = result.credentials[0];
-  const second = result.credentials[1];
-  if (!first || !second) throw new Error("Expected both identities");
-  const one = await f.pairing.resolve(first.token);
-  const two = await f.pairing.resolve(second.token);
-  expect(one?.tokenAccess?.mode).toBe("full");
-  expect(two?.tokenAccess?.mode).toBe("read");
+  if (!first) throw new Error("Expected a credential");
+  expect((await f.pairing.resolve(first.token))?.tokenAccess?.mode).toBe("full");
+  const read = await f.connect("read", 2);
+  expect((await f.pairing.resolve(read.token))?.tokenAccess?.mode).toBe("read");
   // A requested write grant does not manufacture unsupported backend capabilities.
   expect(first.location).toMatchObject({ protocolVersion: 2, readOnly: true });
   expect(
@@ -749,27 +1190,18 @@ it("requires explicit per-identity write approval and never upgrades protocol-1 
   expect(await createResolveTokenPrincipal(f.deps)(first.token)).toBeNull();
 });
 
-it("rolls back every write credential when pairing expires or its identity disappears during issuance", async () => {
-  for (const fault of ["creation", "between-identities", "identity"] as const) {
+it("rolls back the write credential when pairing expires or its login disappears during issuance", async () => {
+  for (const fault of ["creation", "identity"] as const) {
     const f = await fixture(true);
     const pair = f.pairing.create("Mac", "test", 2);
-    await f.pairing.approve(pair.id, f.account.id, [f.identity.id, f.second.id], {
-      [f.identity.id]: "full",
+    await f.pairing.approve(pair.id, f.owner, "full");
+    const create = f.repos.apiTokens.create.bind(f.repos.apiTokens);
+    vi.spyOn(f.repos.apiTokens, "create").mockImplementation(async (input) => {
+      const token = await create(input);
+      if (fault === "creation") f.advance(16 * 60_000);
+      else vi.spyOn(f.repos.identities, "get").mockResolvedValue(null);
+      return token;
     });
-    if (fault === "between-identities") {
-      f.deps.storageFactory.mockImplementation(async () => {
-        f.advance(16 * 60_000);
-        return f.storage;
-      });
-    } else {
-      const create = f.repos.apiTokens.create.bind(f.repos.apiTokens);
-      vi.spyOn(f.repos.apiTokens, "create").mockImplementation(async (input) => {
-        const token = await create(input);
-        if (fault === "creation") f.advance(16 * 60_000);
-        else vi.spyOn(f.repos.identities, "get").mockResolvedValue(null);
-        return token;
-      });
-    }
     await expect(f.pairing.poll(pair.id, pair.secret)).rejects.toMatchObject({
       kind: fault === "identity" ? "unauthorized" : "not_found",
     });
@@ -780,7 +1212,7 @@ it("rolls back every write credential when pairing expires or its identity disap
 it("cancels an in-flight write credential issuance and tolerates a broken validation stream", async () => {
   const f = await fixture(true);
   const pair = f.pairing.create("Mac", "cancel", 2);
-  await f.pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
+  await f.pairing.approve(pair.id, f.owner, "full");
   let release: (() => void) | undefined;
   let announce: (() => void) | undefined;
   const entered = new Promise<void>((resolve) => {
@@ -803,14 +1235,15 @@ it("cancels an in-flight write credential issuance and tolerates a broken valida
   await cancellation;
   await rejection;
   expect(await f.repos.apiTokens.listByAccount(f.account.id)).toEqual([]);
-  const download = f.storage.download.bind(f.storage);
-  vi.spyOn(f.storage, "download").mockImplementation(async (...args) => ({
-    ...(await download(...args)),
-    body: new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.error(new Error("Broken content stream"));
-      },
-    }),
+  const open = f.storage.open.bind(f.storage);
+  vi.spyOn(f.storage, "open").mockImplementation(async (path) => ({
+    ...(await open(path)),
+    stream: () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error("Broken content stream"));
+        },
+      }),
   }));
   await expect(
     f.files.versions(f.principal, ["/docs/a.txt"], new AbortController().signal),
@@ -845,7 +1278,7 @@ it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests u
     (
       await f.request(
         `/pairings/${pair.id}/approve`,
-        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { access: "full" },
         { cookie: "fdrive_session=test" },
       )
     ).status,
@@ -880,71 +1313,16 @@ it("applies CSRF and browser ownership to v2 pairing while keeping v1 requests u
   ).toBe(401);
 });
 
-it("limits recovery status to administrators and returns safe bounded job details", async () => {
-  const status = vi.fn(async () => [
-    {
-      identityId: randomUUID(),
-      operationId: randomUUID(),
-      attempts: 1,
-      lastError: "Retry scheduled",
-      createdAt: new Date(0),
-      nextAttemptAt: new Date(5000),
-    },
-  ]);
-  const f = await fixture(false, { status });
-  expect((await f.request("/recovery")).status).toBe(401);
-  expect((await f.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status).toBe(
-    403,
-  );
-  expect(status).not.toHaveBeenCalled();
+it("keeps no administrator recovery routes: commits resolve themselves", async () => {
+  const f = await fixture(true);
   Object.assign(f.principal, { isAdmin: true, tokenAccess: undefined });
-  const response = await f.request("/recovery", undefined, { cookie: "fdrive_session=test" });
-  expect(response.status).toBe(200);
-  expect(response.headers.get("cache-control")).toBe("no-store");
-  expect(await response.json()).toMatchObject({
-    pending: [{ attempts: 1, nextAttemptAt: new Date(5000).toISOString() }],
-  });
-  const unavailable = await fixture();
-  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
-  expect(
-    (await unavailable.request("/recovery", undefined, { cookie: "fdrive_session=test" })).status,
-  ).toBe(502);
-  // Uncertain commits are listed for administrators and resolved only through storage evidence.
-  const writable = await fixture(true, { status: vi.fn(async () => []) });
   const admin = { cookie: "fdrive_session=test" };
-  const resolve = `/recovery/${writable.identity.id}/${randomUUID()}/resolve`;
-  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(403);
-  Object.assign(writable.principal, { isAdmin: true, tokenAccess: undefined });
-  expect((await writable.request(resolve, { outcome: "later" }, admin)).status).toBe(400);
-  expect((await writable.request(resolve, { outcome: "discarded" }, admin)).status).toBe(404);
+  expect((await f.request("/recovery", undefined, admin)).status).toBe(404);
   expect(
     (
-      await writable.request(
-        `/recovery/${randomUUID()}/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
-        admin,
-      )
-    ).status,
-  ).toBe(404);
-  expect(await (await writable.request("/recovery", undefined, admin)).json()).toEqual({
-    pending: [],
-    uncertain: [],
-  });
-  expect(
-    (
-      await writable.request(
-        `/recovery/not-a-uuid/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
-        admin,
-      )
-    ).status,
-  ).toBe(400);
-  Object.assign(unavailable.principal, { isAdmin: true, tokenAccess: undefined });
-  expect(
-    (
-      await unavailable.request(
-        `/recovery/${unavailable.identity.id}/${randomUUID()}/resolve`,
-        { outcome: "discarded" },
+      await f.request(
+        `/recovery/${f.identity.id}/${randomUUID()}/resolve`,
+        { outcome: "published" },
         admin,
       )
     ).status,
@@ -967,7 +1345,7 @@ it("confirms a write-capable pairing through the v2 routes", async () => {
     (
       await f.request(
         `/pairings/${request.id}/approve`,
-        { identityIds: [f.identity.id], access: { [f.identity.id]: "full" } },
+        { access: "full" },
         { cookie: "fdrive_session=test" },
       )
     ).status,
@@ -986,7 +1364,7 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   try {
     const f = await fixture();
     const pair = f.pairing.create("Mac", "owner");
-    await f.pairing.approve(pair.id, f.account.id, [f.identity.id]);
+    await f.pairing.approve(pair.id, f.owner, "read");
     expect((await f.pairing.poll(pair.id, pair.secret)).status).toBe("connected");
     expect(await f.repos.apiTokens.listByAccount(f.account.id)).toHaveLength(1);
     f.advance(300_000);
@@ -998,59 +1376,43 @@ it("expires unconfirmed pairings on its own timer without another request", asyn
   }
 });
 
-it("explains a read-only full grant by every unmet gate", async () => {
+it("writes with a full grant and nothing else, and reads with a read grant", async () => {
   const f = await fixture();
-  async function reason(
-    identityId: string,
-    missing: readonly DesktopWriteGate[] | null,
-    mode: "full" | "read" = "full",
-  ) {
+  async function location(mode: "full" | "read", wired = true) {
     const pairing = createDesktopPairing({
       ...f.deps,
-      ...(missing ? { writeAvailability: async () => ({ capabilities: NO_WRITES, missing }) } : {}),
+      ...(wired
+        ? {
+            writeCapabilities: (principal: Principal) =>
+              principal.tokenAccess?.mode === "full" ? ALL_WRITES : NO_WRITES,
+          }
+        : {}),
     });
-    const pair = pairing.create("Mac", "reasons", 2);
-    await pairing.approve(pair.id, f.account.id, [identityId], { [identityId]: mode });
+    const pair = pairing.create("Mac", "access", 2);
+    await pairing.approve(pair.id, f.owner, mode);
     const result = await pairing.poll(pair.id, pair.secret);
     if (result.status !== "connected") throw new Error("Expected credentials");
-    const location = result.credentials[0]?.location;
-    expect(location).toMatchObject({ protocolVersion: 2, readOnly: true });
-    return location && "writeUnavailableReason" in location
-      ? location.writeUnavailableReason
-      : undefined;
+    return result.credentials[0]?.location;
   }
-  expect(await reason(f.identity.id, ["state_dir"])).toBe(
-    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server.",
-  );
-  expect(await reason(f.identity.id, ["publish_lock"])).toBe(
-    "Read-only until an administrator configures the desktop publish lock on this server.",
-  );
-  // Both gates unmet: naming only one would promise writes it cannot deliver.
-  expect(await reason(f.second.id, ["state_dir", "publish_lock"])).toBe(
-    "Read-only until an administrator sets FDRIVE_DESKTOP_STATE_DIR on this server and configures the desktop publish lock on this server.",
-  );
-  // A deployment without desktop writes wired says so without guessing at a cause.
-  expect(await reason(f.identity.id, null)).toBe(
-    "Finder writes are turned off on this server. Files stay read-only.",
-  );
-  // A read grant is read-only by choice and carries no reason.
-  expect(await reason(f.identity.id, ["state_dir"], "read")).toBeUndefined();
+  expect(await location("full")).toMatchObject({
+    protocolVersion: 2,
+    readOnly: false,
+    capabilities: ALL_WRITES,
+    listingChecks: true,
+  });
+  expect(await location("read")).toMatchObject({ readOnly: true, capabilities: NO_WRITES });
+  // A deployment without desktop writes wired lands read-only and checks no listings.
+  const unwired = await location("full", false);
+  expect(unwired).toMatchObject({ readOnly: true, capabilities: NO_WRITES });
+  expect(unwired).not.toHaveProperty("listingChecks");
+  expect(unwired).not.toHaveProperty("writeUnavailableReason");
 });
 
-it("advertises the smaller of fdrive's upload ceiling and what the storage can publish", async () => {
+it("advertises fdrive's 16 GiB upload limit to every writable location", async () => {
   const f = await fixture();
-  async function advertised(maxPublishBytes?: number) {
-    const bounded = maxPublishBytes === undefined ? f.storage : { ...f.storage, maxPublishBytes };
-    const pairing = createDesktopPairing({ ...f.deps, storageFactory: vi.fn(async () => bounded) });
-    const pair = pairing.create("Mac", "limits", 2);
-    await pairing.approve(pair.id, f.account.id, [f.identity.id], { [f.identity.id]: "full" });
-    const result = await pairing.poll(pair.id, pair.secret);
-    if (result.status !== "connected") throw new Error("Expected credentials");
-    const location = result.credentials[0]?.location;
-    return location && "maxUploadBytes" in location ? location.maxUploadBytes : undefined;
-  }
-  expect(await advertised()).toBe(16 * 1024 ** 3);
-  // A backend's copy ceiling. Telling the Mac app 16 GiB would spend a whole transfer
-  // before publication refused it and left the commit needing an administrator.
-  expect(await advertised(5 * 1024 ** 3)).toBe(5 * 1024 ** 3);
+  const pair = f.pairing.create("Mac", "limits", 2);
+  await f.pairing.approve(pair.id, f.owner, "full");
+  const result = await f.pairing.poll(pair.id, pair.secret);
+  if (result.status !== "connected") throw new Error("Expected credentials");
+  expect(result.credentials[0]?.location).toMatchObject({ maxUploadBytes: 16 * 1024 ** 3 });
 });

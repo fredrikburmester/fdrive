@@ -20,7 +20,7 @@ export const ROUTES = {
     login: "/api/v1/auth/login",
     /** POST: end the current session. */
     logout: "/api/v1/auth/logout",
-    /** GET: the signed-in account and its identities -> `MeResponse`. */
+    /** GET: the signed-in account and its login -> `MeResponse`. */
     me: "/api/v1/auth/me",
     /** POST: the active local login changes its password -> `OkResponse`. */
     password: "/api/v1/auth/password",
@@ -32,6 +32,10 @@ export const ROUTES = {
     stat: "/api/v1/fs/stat",
     /** GET or HEAD: stream (or probe) file contents. */
     download: "/api/v1/fs/download",
+    /** GET: a video transcoded on the fly to H.264/AAC fragmented MP4, for browsers that cannot play it. */
+    transcode: "/api/v1/fs/transcode",
+    /** GET: a `.srt` or `.vtt` subtitle file as WebVTT. */
+    subtitles: "/api/v1/fs/subtitles",
     /** POST: stream a zip of the given paths. */
     zip: "/api/v1/fs/zip",
     /** PUT: stream a file's contents to `path`. */
@@ -68,31 +72,37 @@ export const ROUTES = {
    * POST: create a tag -> `Tag`. 409 on a duplicate name.
    * `:id` PATCH: update a tag -> `Tag`. 404 for a tag owned by another account.
    * `:id` DELETE: delete a tag -> `OkResponse`. A no-op (200) when already gone.
-   * `:id/files` GET: every path (for the caller's active identity) with that tag -> `TagFilesResponse`.
+   * `:id/files` GET: every path (for the caller's login) with that tag -> `TagFilesResponse`.
    */
   tags: "/api/v1/tags",
   favorites: {
     /**
-     * Active-identity scoped favorites CRUD:
-     * GET: the caller's active identity favorites -> `FavoritesResponse`.
+     * GET: the caller's favorites -> `FavoritesResponse`.
      * POST: favorite a path -> `OkResponse`.
      * DELETE: unfavorite a path (body `{ path }`) -> `OkResponse`.
-     * For account-wide aggregated favorites, see `account.favorites`.
      */
     base: "/api/v1/favorites",
   },
   folderViews: {
     /** GET one folder pin (`?path=`), PUT a mode, DELETE one pin (`{ path }`). */
     base: "/api/v1/folder-views",
-    /** DELETE: reset every folder pin across the caller's linked identities. */
+    /** DELETE: reset every folder pin of the caller's login. */
     all: "/api/v1/folder-views/all",
   },
+  /**
+   * GET: the caller's saved searches, oldest first -> `SavedSearchesResponse`.
+   * POST: save a search -> `SavedSearch` (201).
+   * `:id` DELETE: remove one -> `OkResponse`. A no-op (200) when gone or another account's.
+   */
+  savedSearches: "/api/v1/saved-searches",
   recents: {
     /** GET: the caller's recently opened paths -> `RecentsResponse`. */
     list: "/api/v1/recents",
     /** POST: record a path as opened now -> `OkResponse`. */
     touch: "/api/v1/recents/touch",
   },
+  /** GET: how much the signed-in login's own folder holds -> `StorageUsageResponse`. */
+  storage: "/api/v1/storage",
   search: {
     /** GET: hybrid search (semantic + full-text + filename) -> `SearchResponse`. 400 for an empty `q`. */
     query: "/api/v1/search",
@@ -103,12 +113,18 @@ export const ROUTES = {
   },
   /** GET: stream a cached WebP thumbnail for a file. 404 when none exists. */
   thumb: "/api/v1/thumb",
+  photos: {
+    /** GET: every image the caller can read, newest first, a page at a time -> `PhotosResponse`. */
+    list: "/api/v1/photos",
+    /** GET: one image's EXIF details -> `PhotoDetailsResponse`. 404 when it is not indexed. */
+    details: "/api/v1/photos/details",
+  },
   /** GET, Server-Sent Events: a stream of `SseEvent`s. */
   events: "/api/v1/events",
   trash: {
-    /** GET: whether the active identity's storage exposes a trash -> `TrashStatusResponse`. */
-    status: "/api/v1/trash/status",
-    /** GET: the trash's entries -> `TrashListResponse`. 404 when no trash is configured. */
+    /** GET: how long Trash keeps an item -> `TrashSettings`. */
+    settings: "/api/v1/trash/settings",
+    /** GET: the trash's entries -> `TrashListResponse`. */
     list: "/api/v1/trash",
     /** POST: restore one or more entries -> `TrashRestoreResponse`. */
     restore: "/api/v1/trash/restore",
@@ -122,11 +138,9 @@ export const ROUTES = {
     feed: "/api/v1/activity",
     /** POST: report one gesture only the browser can see -> `{ id }` (202). */
     clientEvents: "/api/v1/activity/client-events",
-    /** GET: the storages the caller has history on -> `ActivityLocationsResponse`. */
-    locations: "/api/v1/activity/locations",
-    /** GET: the history ID for one `identityId` and `path` -> `{ id }`. 404 before anything is recorded. */
+    /** GET: the history ID for one `path` of the caller's login -> `{ id }`. 404 before anything is recorded. */
     resolveFile: "/api/v1/activity/files/resolve",
-    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage`, `/:id/revisions` and `POST /:id/recheck` hang off it. */
+    /** GET: one file's journey -> `ActivityFileResponse`. `/:id/events`, `/:id/lineage` and `/:id/revisions` hang off it. */
     files: "/api/v1/activity/files",
     /** GET: `/:id/events` for one batch -> `PersonalActivityResponse` with a `batchSummary`. */
     batches: "/api/v1/activity/batches",
@@ -145,10 +159,8 @@ export const ROUTES = {
     /** GET: the caller's recent chats -> `ChatListResponse`. POST: start a chat -> `Chat` (201). */
     chats: "/api/v1/ai/chats",
   },
-  /** GET: version and configured providers -> `AboutResponse`. */
+  /** GET: version and whether setup is required -> `AboutResponse`. */
   about: "/api/v1/about",
-  /** GET, public: the enabled providers and their credential forms -> `ProvidersResponse`. */
-  providers: "/api/v1/providers",
   setup: {
     /** GET, public: whether setup is required -> `SetupStatusResponse`. */
     status: "/api/v1/setup/status",
@@ -156,8 +168,6 @@ export const ROUTES = {
     complete: "/api/v1/setup/complete",
   },
   admin: {
-    /** GET, admin only: the storage (the files folder) -> `AdminProvidersResponse`. */
-    providers: "/api/v1/admin/providers",
     /** GET, admin only: the local users -> `AdminUsersResponse`; POST: add one -> `AdminUser`. */
     users: "/api/v1/admin/users",
   },
@@ -172,13 +182,15 @@ export const ROUTES = {
     features: "/api/v1/system/features",
     /** GET/PUT, admin only: the address everyone opens fdrive at -> `PublicUrlSettings`. */
     publicUrl: "/api/v1/system/public-url",
+    /** GET/PATCH, admin only: the files folder's name and health -> `SystemStorage`. */
+    storage: "/api/v1/system/storage",
     /** GET/PUT, admin only: Office activation and editing permission. */
     office: "/api/v1/system/office",
     /** GET/PUT, admin only: the AI provider, model and key -> `SystemAiResponse`. */
     ai: "/api/v1/system/ai",
     /** POST, admin only: send one short request with the saved AI settings -> `AiConnectionTestResponse`. */
     aiTest: "/api/v1/system/ai/test",
-    /** GET/PUT, admin only: provider-bound Trash configuration. */
+    /** PUT, admin only: how long Trash keeps an item -> `TrashSettings`. */
     trash: "/api/v1/system/trash",
     /** GET, admin only: indexer health, stats, and settings -> `SystemIndexerResponse`. */
     indexer: "/api/v1/system/indexer",
@@ -220,10 +232,6 @@ export const ROUTES = {
     thumbnailsClear: "/api/v1/system/thumbnails/clear",
   },
   account: {
-    identities: "/api/v1/account/identities",
-    activeIdentity: "/api/v1/account/active-identity",
-    /** GET: aggregated favorites across all identities linked to the account -> `AccountFavoritesResponse`. */
-    favorites: "/api/v1/account/favorites",
     /**
      * GET: the caller's API tokens (never their secrets) -> `ApiTokensResponse`.
      * POST: create a token, shown once -> `CreateApiTokenResponse`.
@@ -247,11 +255,6 @@ export function grantRoute(id: string): string {
 /** `PATCH`/`DELETE`, admin only: one local user -> `AdminUser` / `OkResponse`. */
 export function adminUserRoute(username: string): string {
   return `${ROUTES.admin.users}/${encodeURIComponent(username)}`;
-}
-
-/** `PATCH`/`DELETE`, admin only: one configured provider. */
-export function adminProviderRoute(id: string): string {
-  return `${ROUTES.admin.providers}/${encodeURIComponent(id)}`;
 }
 
 /** GET: one job -> `JobStatus`. 404 for a job that belongs to another identity. */
@@ -314,11 +317,10 @@ export function tagFilesRoute(id: string): string {
   return `${tagRoute(id)}/files`;
 }
 
-/**
- * Optional request header selecting which linked identity a request acts
- * as. When absent, the session's active identity is used.
- */
-export const IDENTITY_HEADER = "x-identity-id";
+/** DELETE: one saved search by id -> `OkResponse`. */
+export function savedSearchRoute(id: string): string {
+  return `${ROUTES.savedSearches}/${encodeURIComponent(id)}`;
+}
 
 /** Upload request header carrying the file's mtime, in ms since epoch. */
 export const MODIFIED_AT_HEADER = "x-modified-at";
@@ -333,6 +335,7 @@ export const PUBLIC_SHARE_SUFFIXES = {
   entries: "/entries",
   archiveEntries: "/archive-entries",
   download: "/download",
+  preview: "/preview",
   archive: "/archive",
   thumb: "/thumb",
   upload: "/upload",
@@ -344,8 +347,3 @@ export function publicShareRoute(
 ): string {
   return `${ROUTES.publicShares}/${encodeURIComponent(id)}${PUBLIC_SHARE_SUFFIXES[action]}`;
 }
-
-/** GET/HEAD identity selection for URLs that cannot send headers (images/downloads).
- * This selects an owned identity within the authenticated session; it is not a credential.
- * Repeated values and disagreement with IDENTITY_HEADER are rejected. */
-export const IDENTITY_QUERY_PARAM = "identity";

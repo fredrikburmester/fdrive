@@ -1,19 +1,18 @@
 # Remaining features
 
-Extracted from the unfinished recovery/extensions scope. These features are not delivered.
-Provider-managed Trash, image search, settings persistence and the provider registry already
-exist; this backlog describes only the missing extensions.
+These features are not delivered. Trash, image search and settings persistence already exist;
+this backlog describes only what is missing.
 
 ## File snapshots and version history
 
 Implement explicit file snapshots, optionally captured for fdrive writes. This is history
 created by fdrive, not a complete record of writes made by external clients.
 
-- Use bounded upstream copies/streams and identity/provider-bound metadata; snapshots follow
-  renames. Pin the storage layout and write/lock contract before implementation.
+- Use bounded copies/streams and identity-bound metadata; snapshots follow renames. Pin the
+  storage layout and write/lock contract before implementation.
 - Require current original-file read authorization to expose history. Do not reuse the old
-  application-owned Trash design; Trash remains a separate provider capability. Stored snapshot
-  bytes must not bypass history authorization through browse/search/share/Office paths.
+  application-owned Trash design; Trash stays separate. Stored snapshot bytes must not bypass
+  history authorization through browse/search/share/Office paths.
 - Restore first creates a safety snapshot of the current file, rejects conflicting Office
   writes and replaces bytes only once the complete restore source is available. Publish normal
   file-update events after restore.
@@ -29,7 +28,7 @@ visually similar files using versioned perceptual hashes, independent of the emb
 
 - Compute bounded raster-image hashes with EXIF orientation normalization and stored dimensions.
   Keep exact SHA-256 duplicates separate. Document the Hamming-distance threshold.
-- Use bounded scoped candidate lookup, mapping round trips and live read checks. No per-request
+- Use bounded scoped candidate lookup and mapping round trips. No per-request
   unbounded all-pairs scan, remote image fetching or automatic deletion.
 - Provide comparison/reveal UI using existing explicit file actions. Explain false positives.
 - Complete with transformed/cropped/unrelated fixtures, permission isolation, browser comparison

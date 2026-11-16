@@ -1,20 +1,19 @@
 # Plans
 
-Only unfinished work lives here. Reviewed against source and delivery history on 2026-09-11.
+Only unfinished work lives here. Reviewed against source on 2026-11-14, after SFTPGo, WebDAV
+and S3 storage were removed.
 
 | Document | Purpose |
 | --- | --- |
-| [Backup verification](BACKUPS.md) | Remaining gates for installation backups and isolated recovery |
+| [Backup verification](BACKUPS.md) | Real S3 and host cutover checks and two capture follow-ups for installation backups |
 | [Roadmap](ROADMAP.md) | Remaining requested features and acceptance criteria |
 | [Followups](FOLLOWUPS.md) | Known fixes and outstanding verification |
 | [Deferred](DEFERRED.md) | Explicitly deferred ideas and review recommendations |
 | [Processing failures](PROCESSING-FAILURES.md) | Persistent per-file failures, accurate counters and targeted retries |
-| [macOS writes](MACOS-WRITES.md) | Retention, recovery administration and native write beta qualification |
+| [macOS writes](MACOS-WRITES.md) | Deployment and release qualification of native writes |
 | [macOS beta qualification](MACOS-APP.md) | Signing, lifecycle and scale qualification for the native Finder app |
 | [AI chat](AI-CHAT.md) | A docked, persistent chat panel that files are dropped into, with approval-gated tools, building on AI organize |
-| [Personal activity](RECENT-ACTIVITY.md) | A durable personal history answering where an upload went and what has happened to a file since, with [events](RECENT-ACTIVITY-EVENTS.md), [schema](RECENT-ACTIVITY-SCHEMA.md) and [coverage](RECENT-ACTIVITY-COVERAGE.md) |
-| [Owned shares](OWNED-SHARES.md) | fdrive-served share links: done; server-side gallery gating for unindexed logins remains |
-| [Local storage](LOCAL-STORAGE.md) | fdrive serves a folder on its own disk with its own users, its only storage since SFTPGo, WebDAV and S3 went: decisions and what comes later |
+| [Owned shares](OWNED-SHARES.md) | Server-side gallery gating for share links from unindexed logins |
 | [ML server follow-ups](ML-SERVER.md) | What is left after moving embeddings and document extraction into one Rust server: amd64 measurements, memory, extraction gaps |
 | [Encryption](ENCRYPTION.md) | Host encryption at rest, and end-to-end encrypted folders with one password in the web app and FDrive for Mac; decided, not started |
 
@@ -31,7 +30,7 @@ These are a backlog, not a claim that an agent is working on every item.
 - Superseded designs are not backlog. Git history retains removed plans; do not maintain a
   second archive of obsolete implementation instructions.
 
-Current behavior: [architecture](../ARCHITECTURE.md), [storage port](../STORAGE-PROVIDERS.md),
-[scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md)
-and [System activity](../SYSTEM-ACTIVITY.md).
+Current behavior: [architecture](../ARCHITECTURE.md), [storage port](../STORAGE.md),
+[scoping](../SCOPING.md), [authentication](../AUTH.md), [Office](../OFFICE-DEVELOPMENT.md),
+[System activity](../SYSTEM-ACTIVITY.md) and [personal activity](../ACTIVITY.md).
 Workflow: [AGENTS](../../AGENTS.md).

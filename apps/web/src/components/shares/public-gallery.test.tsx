@@ -17,7 +17,7 @@ afterEach(() => {
   document.body.style.overflow = "";
 });
 
-it("falls back a single tile to the download URL when its thumbnail 404s, leaving other tiles untouched", () => {
+it("shows an icon for a tile whose thumbnail 404s, never the original, leaving other tiles untouched", () => {
   render(<PublicGallery images={images} thumbUrl={thumbUrl} downloadUrl={downloadUrl} />);
   const tileA = screen.getByRole("img", { name: "a.png" });
   const tileB = screen.getByRole("img", { name: "b.jpg" });
@@ -25,7 +25,8 @@ it("falls back a single tile to the download URL when its thumbnail 404s, leavin
   expect(tileA.getAttribute("loading")).toBe("lazy");
   expect(tileA.getAttribute("decoding")).toBe("async");
   fireEvent.error(tileA);
-  expect(tileA.getAttribute("src")).toBe(downloadUrl("/a.png"));
+  expect(screen.queryByRole("img", { name: "a.png" })).toBeNull();
+  expect(screen.getByRole("button", { name: "a.png" }).querySelector("svg")).not.toBeNull();
   expect(tileB.getAttribute("src")).toBe(thumbUrl("/b.jpg", 256));
 });
 

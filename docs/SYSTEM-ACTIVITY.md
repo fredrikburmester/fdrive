@@ -6,9 +6,9 @@ Idle services are quiet. Hover or keyboard focus exposes the phase and counts; r
 motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
 warning. Background job state survives navigation and reload.
 
-The section never follows the login being browsed. Activity, counts and actions cover every
-indexed root. The group label carries an "Admins only" caption and every System page header states its scope with
-shared copy from `lib/system/pages`. Scoping the sidebar to the active login made it disagree
+The section never follows the login being browsed. Activity, counts and actions cover the
+whole files folder. The group label carries an "Admins only" caption and every System page header states its scope with
+shared copy from `lib/system/pages`. Scoping the sidebar to the signed-in login made it disagree
 with the pages and was reverted.
 
 Features sits last, with a separate expand/collapse button nesting
@@ -37,7 +37,7 @@ startup/settings changes, not individual editor sessions.
 
 ## Worker accounting
 
-The indexer tracks per-root scan operations, queued reindex requests, concurrent watcher work,
+The indexer tracks scan operations, queued reindex requests, concurrent watcher work,
 and explicit rebuild/clear jobs. OCR tracks both scheduled and manual passes through its
 existing run lock. Snapshots are bounded, thread-safe in-memory records; reads do not query
 storage. Each process has a fresh instance ID and each run has an operation ID. Counters
@@ -69,8 +69,9 @@ counts describe a run's attempts; the durable count describes files awaiting rec
 
 Successful processing resolves a record; repeated failures update the same root/path/feature
 record. Recurrence starts a new attempt count. All unresolved records remain; resolved
-history is pruned after 30 days and capped at 10,000 records. Deleted files resolve their
-records during pruning. Details lost before this feature was installed cannot be recovered.
+history is pruned after 30 days and capped at 10,000 records. A completed scan resolves the
+records of paths the index has no row for that it did not report again: files that are gone.
+Details lost before this feature was installed cannot be recovered.
 
 Admin-only `GET /api/v1/system/processing-failures/:feature` supports `status`, `code`,
 `limit` and an ID-based `before` cursor. Reads do not call workers and remain available
@@ -92,7 +93,7 @@ Maintenance `/stats` records now include `outcome` (`completed`, `failed`, `stop
 An interrupted finite rebuild is never labelled completed in its settings summary.
 
 Scan totals remain unknown during traversal, then freeze at the scheduled count while
-remaining workers finish. Watcher arrivals and changes the API queued belong to a separate open-ended operation;
+remaining workers finish. Watcher arrivals and changes the API journaled belong to a separate open-ended operation;
 their text and image embeddings run on threads of their own, so Semantic search and Image
 search can trail.
 Compatible simultaneous operations are weighted by their counts. Mixed kinds/units, zero

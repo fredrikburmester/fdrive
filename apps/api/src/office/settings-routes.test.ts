@@ -9,13 +9,11 @@ import { loadConfig } from "../config.js";
 import { createOfficeSettingsService } from "./settings.js";
 import { registerOfficeSettingsRoutes } from "./settings-routes.js";
 
-const PROVIDER_ID = "123e4567-e89b-42d3-a456-426614174000";
 const IDENTITY_ID = "223e4567-e89b-42d3-a456-426614174000";
 const identity: Identity = {
   id: IDENTITY_ID,
   accountId: "323e4567-e89b-42d3-a456-426614174000",
-  providerId: PROVIDER_ID,
-  externalUsername: "alice",
+  username: "alice",
   createdAt: new Date(0),
   lastLoginAt: null,
 };
@@ -35,29 +33,30 @@ function buildApp(isAdmin: boolean, workerToken = "worker-secret") {
     product: "onlyoffice",
     publicUrl: async () => "https://drive.example",
     probeStatus: async () => "ready",
+    usernames: async () => ["alice"],
   });
   const principal: Principal = {
     accountId: identity.accountId,
     identityId: identity.id,
-    username: identity.externalUsername,
+    username: identity.username,
     storage: {} as StorageProvider,
     isAdmin,
   };
   return createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://localhost/fdrive",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
     }),
     logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } as unknown as Logger,
     version: "test",
     startedAt: new Date(0),
     principalResolver: async () => principal,
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     registerRoutes: (groups) =>
       registerOfficeSettingsRoutes(groups, {
         service,
         workerToken,
-        activeProvider: async () => ({ id: PROVIDER_ID, label: "Primary" }),
       }),
   });
 }
@@ -72,8 +71,6 @@ describe("Office settings routes", () => {
       configuration: { revision: 0, enabled: false },
       product: "onlyoffice",
       status: "off",
-      activeProviderId: PROVIDER_ID,
-      activeProviderLabel: "Primary",
     });
     const response = await app.request(ROUTES.system.office, {
       method: "PUT",

@@ -30,13 +30,12 @@ describe("local users administered through the API", () => {
         files: {},
       }),
     ]);
-    await seedLocalUsers(postgres.connectionString, storage);
+    await seedLocalUsers(postgres.connectionString, storage, ["alice"]);
     composed = await composeApp(
       loadConfig({
         DATABASE_URL: postgres.connectionString,
         FDRIVE_STORAGE_ROOT: storage.root,
         FDRIVE_MASTER_KEY: Buffer.alloc(32, 29).toString("base64"),
-        FDRIVE_ADMIN_USERS: "alice",
       }),
       silentLogger(),
     );
@@ -48,6 +47,11 @@ describe("local users administered through the API", () => {
     await postgres?.stop();
   }, 180_000);
 
+  /**
+   * The address each test calls from: every password check counts failures
+   * per address, and each test's own wrong passwords are its own business.
+   */
+  let address = "";
   async function call(
     path: string,
     options: { method?: string; cookie?: string; body?: unknown } = {},
@@ -56,6 +60,7 @@ describe("local users administered through the API", () => {
       method: options.method ?? "GET",
       headers: {
         "x-requested-with": "fdrive",
+        "x-forwarded-for": address,
         ...(options.cookie ? { cookie: options.cookie } : {}),
         ...(options.body === undefined ? {} : { "content-type": "application/json" }),
       },
@@ -63,7 +68,7 @@ describe("local users administered through the API", () => {
     });
   }
   const signIn = (username: string, password: string) =>
-    call(ROUTES.auth.login, { method: "POST", body: { credential: { username, password } } });
+    call(ROUTES.auth.login, { method: "POST", body: { username, password } });
   async function login(username: string, password: string): Promise<string> {
     const response = await signIn(username, password);
     expect(response.status, username).toBe(200);
@@ -77,11 +82,11 @@ describe("local users administered through the API", () => {
   };
 
   it("adds, disables, re-enables, promotes and removes users, and ends their sessions", async () => {
+    address = "198.51.100.1";
     const alice = await login("alice", "alice-password");
     const bob = await login("bob", "bob-password");
 
     const listed = await users(alice);
-    expect(listed.available).toBe(true);
     expect(
       listed.users.map(({ username, disabled, isAdmin, isYou }) => ({
         username,
@@ -185,6 +190,7 @@ describe("local users administered through the API", () => {
   });
 
   it("lets a user change their own password from a signed-in browser only", async () => {
+    address = "198.51.100.2";
     const bob = await login("bob", "bob-password");
     const other = await login("bob", "bob-password");
     const change = (cookie: string, currentPassword: string, newPassword: string) =>

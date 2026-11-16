@@ -13,30 +13,27 @@ const NO_RECEIVED: readonly ReceivedGrant[] = [];
 
 /**
  * The active login's shared folders: what it shares with others (`owned`)
- * and what others share with it (`received`). Pass `enabled: false` for a
- * login whose storage cannot share folders, so nothing is asked.
+ * and what others share with it (`received`).
  */
-export function useGrants(enabled = true) {
+export function useGrants() {
   return useQuery({
     queryKey: queryKeys.grants.list(),
     queryFn: () => apiClient.grants(),
     staleTime: GRANTS_STALE_TIME_MS,
-    enabled,
   });
 }
 
 /** The folders shared with the active login, or none while unknown or unavailable. */
-export function useReceivedGrants(enabled = true): readonly ReceivedGrant[] {
-  return useGrants(enabled).data?.received ?? NO_RECEIVED;
+export function useReceivedGrants(): readonly ReceivedGrant[] {
+  return useGrants().data?.received ?? NO_RECEIVED;
 }
 
 /** The other active users a folder can be shared with. */
-export function useGrantPeople(enabled = true) {
+export function useGrantPeople() {
   return useQuery({
     queryKey: queryKeys.grants.people(),
     queryFn: () => apiClient.grantPeople(),
     staleTime: GRANTS_STALE_TIME_MS,
-    enabled,
   });
 }
 

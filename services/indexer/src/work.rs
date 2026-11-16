@@ -1,7 +1,10 @@
-//! Changes fdrive's API made on disk, read from `idx.work` and applied as soon as the API
-//! sends `NOTIFY idx_work`: before the watcher's debounce, and whether or not the watcher can
-//! see the change at all. Rows are hints. What is on disk when one is applied decides what
-//! happens, as for the watcher, and the periodic scan still covers anything lost.
+//! The indexer as a reader of the change journal (`idx.changes`): changes fdrive's API and OCR
+//! made on disk, applied as soon as a writer sends `NOTIFY idx_changes`: before the watcher's
+//! debounce, and whether or not the watcher can see the change at all. The indexer keeps its
+//! position per root in `idx.change_cursors` and saves it after each applied batch. Rows are
+//! hints. What is on disk when one is applied decides what happens, as for the watcher, so a
+//! batch applied twice after a restart does no harm, and the periodic scan still covers
+//! anything lost. See docs/INDEXER.md#how-changes-arrive.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -14,31 +17,38 @@ use rustix::fs::{AtFlags, FileType, statat};
 use rustix::io::Errno;
 
 use crate::config::{SKIP_DIRS, SKIP_NAMES};
-use crate::db::{self, WorkRow};
+use crate::db::{self, ChangeRow};
 use crate::failures::describe;
 use crate::indexer::{
-    ContentHint, FileStat, RootContext, folder_chain, record_folders, unchanged_in_db, walk_tree, watch_index_with,
-    watch_mark_deleted, watch_rename,
+    ContentHint, FileStat, Renamed, RootContext, Version, carry_stamp, folder_chain, record_folders, unchanged_in_db,
+    walk_tree, watch_delete, watch_index_with, watch_rename,
 };
+use crate::journal::Source;
 use crate::log::log;
 use crate::rules::{should_index_name, should_walk_dir};
 use crate::runner::Handler;
 use crate::watcher::WatchHandler;
 
-/// The channel the API notifies after queueing changes; the payload is the root's name.
-pub const CHANNEL: &str = "idx_work";
+/// The channel writers notify after appending; the payload is the root's name.
+pub const CHANNEL: &str = db::CHANGES_CHANNEL;
+/// The indexer's name in `idx.change_cursors`.
+pub const CONSUMER: &str = "indexer";
 /// Rows read per round trip.
 pub const BATCH: i64 = 500;
-/// How long to wait for a notification before looking at the queue anyway.
+/// How long to wait for a notification before looking at the journal anyway.
 pub const POLL: Duration = Duration::from_secs(30);
 
-/// One queued change, checked.
+/// One journaled change, checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     /// Look at `path` again: a file, a folder, or nothing any more.
     Path { path: String, hint: Option<ContentHint> },
-    /// `from` was moved to `to`.
-    Moved { from: String, to: String },
+    /// `from` was moved to `to`; `renamed` describes a file the API renamed in place.
+    Moved {
+        from: String,
+        to: String,
+        renamed: Option<Renamed>,
+    },
 }
 
 /// A root-relative path without leading or trailing slashes and without an empty, `.` or
@@ -53,21 +63,28 @@ pub fn clean_path(path: &str) -> Option<String> {
 }
 
 /// The change a row describes, or `None` for a malformed one. A hint needs all five of
-/// its columns and a well-formed digest, or the file is hashed as usual.
-pub fn parse(row: &WorkRow) -> Option<Change> {
+/// its columns and a well-formed digest, or the file is hashed as usual; a move's `renamed`
+/// needs the four besides the digest and `previous_ctime_ns`.
+pub fn parse(row: &ChangeRow) -> Option<Change> {
     let path = clean_path(&row.path)?;
+    let version = Version::from_columns(row.size, row.mtime_ns, row.inode, row.ctime_ns);
     match &row.target_path {
         Some(target) => Some(Change::Moved {
             from: path,
             to: clean_path(target)?,
+            renamed: version
+                .zip(row.previous_ctime_ns)
+                .map(|(version, previous_ctime_ns)| Renamed {
+                    version,
+                    previous_ctime_ns,
+                }),
         }),
         None => {
-            let hint = match (&row.sha256, row.size, row.mtime_ns, row.inode, row.ctime_ns) {
-                (Some(sha), Some(size), Some(mtime_ns), Some(inode), Some(ctime_ns)) => {
-                    ContentHint::new(sha, size, mtime_ns, inode, ctime_ns)
-                }
-                _ => None,
-            };
+            let hint = row
+                .sha256
+                .as_deref()
+                .zip(version)
+                .and_then(|(sha, version)| ContentHint::new(sha, version));
             Some(Change::Path { path, hint })
         }
     }
@@ -131,7 +148,8 @@ pub fn entry(root: &Path, path: &str) -> Entry {
 
 type Job = Box<dyn FnOnce() + Send>;
 
-/// Workers for queued files. Moves and deletes wait for them, so rows change in queue order.
+/// Workers for journaled files. Moves and deletes wait for them, so rows change in journal
+/// order.
 struct Pool {
     sender: crossbeam_channel::Sender<Job>,
     pending: Arc<(Mutex<usize>, Condvar)>,
@@ -190,7 +208,15 @@ impl Pool {
     }
 }
 
-/// Applies one root's queued changes.
+/// Whether the indexer applies a row: not one it wrote itself. Watcher and scan rows describe
+/// changes it applied before it wrote them; applying them again would find nothing to do but
+/// cost a stat per file and a walk per folder. A source it does not know is applied, which is
+/// harmless: what is on disk decides.
+pub fn applies(row: &ChangeRow) -> bool {
+    !Source::parse(&row.source).is_some_and(Source::is_indexers)
+}
+
+/// Applies one root's journaled changes from its saved position.
 pub struct Applier {
     ctx: Arc<RootContext>,
     pool: Pool,
@@ -202,33 +228,80 @@ impl Applier {
         Self { ctx, pool }
     }
 
-    /// Apply every queued change of the root, oldest first, removing each batch once its
-    /// files are done, unless the files folder is not verified. Returns how many rows were
-    /// handled.
+    /// The saved position for this root. On first start it is the journal's end: a root
+    /// without a position is scanned at start (`RootLoop::new`), which covers whatever came
+    /// before.
+    pub fn position(&self) -> Result<i64> {
+        let ctx = &self.ctx;
+        if let Some(position) = ctx.db.with(|c| db::change_cursor(c, CONSUMER, ctx.root_id))? {
+            return Ok(position);
+        }
+        let (_, newest) = ctx.db.with(db::journal_bounds)?;
+        self.save(newest)?;
+        log(&format!(
+            "[{}] journal: starting at position {newest}; the startup scan covers earlier changes",
+            ctx.name
+        ));
+        Ok(newest)
+    }
+
+    fn save(&self, position: i64) -> Result<()> {
+        let ctx = &self.ctx;
+        ctx.db
+            .with(|c| db::save_change_cursor(c, CONSUMER, ctx.root_id, position))
+    }
+
+    /// Apply the root's rows after its position, oldest first, saving the position after each
+    /// batch is done, unless the files folder is not verified. Rows the indexer wrote itself
+    /// are passed over. When rows after the position were pruned, a scan is requested and the
+    /// position moves to the end. Returns how many of the root's rows were handled.
     pub fn drain(&self) -> Result<usize> {
         let mut handled = 0;
         loop {
-            let rows = self.ctx.db.with(|c| db::work_batch(c, self.ctx.root_id, BATCH))?;
-            // Rows wait while the folder is not this installation's: applying them there would
-            // read the files they name as deleted. The API prunes rows a day old.
-            if rows.is_empty() || !self.ctx.files_folder_verified() {
+            let position = self.position()?;
+            let (oldest, newest) = self.ctx.db.with(db::journal_bounds)?;
+            if newest <= position {
                 return Ok(handled);
             }
+            // Rows wait while the folder is not this installation's: applying them there would
+            // read the files they name as deleted.
+            if !self.ctx.files_folder_verified() {
+                return Ok(handled);
+            }
+            if oldest.is_some_and(|oldest| position < oldest - 1) {
+                log(&format!(
+                    "[{}] journal: changes after position {position} were pruned before they were read; \
+                     scanning instead",
+                    self.ctx.name
+                ));
+                self.ctx.request_scan();
+                self.save(newest)?;
+                continue;
+            }
+            let rows = self
+                .ctx
+                .db
+                .with(|c| db::changes_after(c, self.ctx.root_id, position, BATCH))?;
+            // Positions up to `newest` are committed in order, so nothing of this root can
+            // still arrive below it: the rest belong to other roots.
+            let Some(last) = rows.last().map(|row| row.id) else {
+                self.save(newest)?;
+                return Ok(handled);
+            };
             self.ctx.maybe_refresh_features();
-            // While indexing is off the rows are dropped: turning it on starts a scan.
+            // While indexing is off the rows are passed over: turning it on starts a scan.
             if self.ctx.values().indexer_enabled() {
-                for row in &rows {
+                for row in rows.iter().filter(|row| applies(row)) {
                     self.apply_row(row);
                 }
                 self.pool.wait_idle();
             }
-            let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
-            self.ctx.db.with(|c| db::delete_work(c, &ids))?;
+            self.save(last)?;
             handled += rows.len();
         }
     }
 
-    fn apply_row(&self, row: &WorkRow) {
+    fn apply_row(&self, row: &ChangeRow) {
         let Some(change) = parse(row) else {
             log(&format!("[{}] work: ignoring malformed row {}", self.ctx.name, row.id));
             return;
@@ -242,7 +315,7 @@ impl Applier {
     pub fn apply(&self, change: &Change) {
         match change {
             Change::Path { path, hint } => self.look_again(path, hint.clone()),
-            Change::Moved { from, to } => self.moved(from, to),
+            Change::Moved { from, to, renamed } => self.moved(from, to, renamed.as_ref()),
         }
     }
 
@@ -258,7 +331,7 @@ impl Applier {
             Entry::Gone => {
                 self.pool.wait_idle();
                 // A file or a folder: rows at the path and below it.
-                watch_mark_deleted(&self.ctx, path, true);
+                watch_delete(&self.ctx, path, true);
             }
             Entry::Unknown => log(&format!(
                 "[{}] work: cannot read {path}; leaving it to the next scan",
@@ -267,14 +340,19 @@ impl Applier {
         }
     }
 
-    fn moved(&self, from: &str, to: &str) {
+    fn moved(&self, from: &str, to: &str, renamed: Option<&Renamed>) {
         self.pool.wait_idle();
         match entry(&self.ctx.abs_path, to) {
             found @ (Entry::File(_) | Entry::Dir) => {
-                // Rows follow the move without re-extracting anything; then the destination
-                // is compared with the disk, which also covers a restore from somewhere the
-                // index never looked and anything an overwrite left behind.
+                // Rows follow the move without re-extracting anything, and a file's stamp
+                // follows it when nothing but the API's rename touched it; then the
+                // destination is compared with the disk, which also covers a restore from
+                // somewhere the index never looked and anything an overwrite left behind.
                 watch_rename(&self.ctx, from, to, found == Entry::Dir);
+                if let (Entry::File(_), Some(renamed)) = (found, renamed) {
+                    // Best effort: a stamp left behind costs one read once the file settles.
+                    let _ = carry_stamp(&self.ctx, to, renamed);
+                }
                 self.look_again(to, None);
             }
             // Moved where nothing is indexed (or on again): only the source matters.
@@ -344,18 +422,26 @@ impl Applier {
         record_folders(ctx, &folders, complete.then_some((path, started_at)));
         if complete && !unseen.is_empty() {
             let unseen: Vec<String> = unseen.into_iter().collect();
-            if let Err(e) = ctx.db.with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at)) {
-                log(&format!(
+            match ctx
+                .db
+                .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
+            {
+                Ok(swept) => {
+                    for gone in &swept {
+                        ctx.names_touched(gone, false);
+                    }
+                }
+                Err(e) => log(&format!(
                     "[{}] work: sweep under {path} failed: {}",
                     ctx.name,
                     describe(&e)
-                ));
+                )),
             }
         }
     }
 }
 
-/// One root's queue: apply what is there, then wait for the API's next notification.
+/// One root's journal: apply what is there, then wait for a writer's next notification.
 pub struct WorkLoop {
     applier: Applier,
     listener: Option<postgres::Client>,
@@ -387,7 +473,7 @@ impl WorkLoop {
             Err(e) if !self.listening_failed => {
                 self.listening_failed = true;
                 log(&format!(
-                    "[{}] work: cannot listen for queued changes ({}); looking every {}s instead",
+                    "[{}] work: cannot listen for journaled changes ({}); looking every {}s instead",
                     ctx.name,
                     describe(&e),
                     POLL.as_secs()
@@ -397,15 +483,15 @@ impl WorkLoop {
         }
     }
 
-    /// Apply the queue, then wait up to `timeout` for a notification. Listening starts
-    /// before the queue is read, so a row added meanwhile still ends the wait.
+    /// Apply the journal, then wait up to `timeout` for a notification. Listening starts
+    /// before the journal is read, so a row added meanwhile still ends the wait.
     pub fn step(&mut self, timeout: Duration) -> usize {
         if self.listener.is_none() {
             self.listen();
         }
         let handled = self.applier.drain().unwrap_or_else(|e| {
             log(&format!(
-                "[{}] work: queue unavailable: {}",
+                "[{}] work: journal unavailable: {}",
                 self.applier.ctx.name,
                 describe(&e)
             ));
@@ -428,7 +514,7 @@ impl WorkLoop {
         handled
     }
 
-    /// Wait for a notification; one look at the queue answers every one already delivered.
+    /// Wait for a notification; one look at the journal answers every one already delivered.
     fn wait(client: &mut postgres::Client, timeout: Duration) -> Result<(), postgres::Error> {
         let mut notifications = client.notifications();
         notifications.timeout_iter(timeout).next()?;
@@ -438,7 +524,7 @@ impl WorkLoop {
     }
 }
 
-/// One root's queue loop; never returns.
+/// One root's journal loop; never returns.
 pub fn run_work(ctx: Arc<RootContext>) {
     let mut work = WorkLoop::new(ctx);
     loop {

@@ -1,23 +1,20 @@
 import { expect, it } from "vitest";
 import { DesktopPairApproval } from "./desktop.js";
 import {
+  DesktopChangeAnchor,
+  DesktopChangesResponse,
   DesktopFolderCheckRequest,
   DesktopFolderCheckResponse,
   DesktopFolderRequest,
   DesktopName,
   DesktopUploadRequest,
-  DesktopWriteApproval,
 } from "./desktop-writes.js";
 
 const id = "00000000-0000-4000-8000-000000000001";
-it("validates explicit per-identity grants without changing legacy defaults", () => {
-  expect(DesktopPairApproval.parse({ identityIds: [id] }).access).toBeUndefined();
-  expect(
-    DesktopWriteApproval.parse({ identityIds: [id], access: { [id]: "full" } }).access?.[id],
-  ).toBe("full");
-  expect(
-    DesktopWriteApproval.safeParse({ identityIds: [id], access: { [id]: "admin" } }).success,
-  ).toBe(false);
+it("approves read or full access and nothing else", () => {
+  expect(DesktopPairApproval.parse({ access: "read" }).access).toBe("read");
+  expect(DesktopPairApproval.parse({ access: "full" }).access).toBe("full");
+  expect(DesktopPairApproval.safeParse({ access: "admin" }).success).toBe(false);
 });
 it("rejects escaping, control, ambiguous and overlong filenames", () => {
   for (const name of ["", ".", "..", "a/b", "a:b", "a\u0000b", "a\u007fb", "🚀".repeat(64)])
@@ -66,4 +63,26 @@ it("bounds folder checks to unique, valid folders and known answers", () => {
   expect(
     DesktopFolderCheckResponse.safeParse({ folders: [{ path: "/a", status: "renamed" }] }).success,
   ).toBe(false);
+});
+
+it("answers changes with paths and an anchor, or a resync", () => {
+  const changes = {
+    status: "changes",
+    paths: ["/docs/a.txt"],
+    folders: ["/docs", "/"],
+    anchor: "v1.anchor",
+    more: false,
+  };
+  expect(DesktopChangesResponse.parse(changes)).toEqual(changes);
+  expect(DesktopChangesResponse.parse({ status: "resync", anchor: "v1.anchor" }).status).toBe(
+    "resync",
+  );
+  for (const invalid of [
+    { ...changes, paths: ["relative"] },
+    { ...changes, anchor: "" },
+    { ...changes, more: undefined },
+    { status: "gap", anchor: "v1.anchor" },
+  ])
+    expect(DesktopChangesResponse.safeParse(invalid).success).toBe(false);
+  expect(DesktopChangeAnchor.safeParse("a".repeat(257)).success).toBe(false);
 });

@@ -1,9 +1,18 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FILES_FOLDER_REASONS, FILES_MARKER } from "@fdrive/local";
+import type { ChangeInput } from "@fdrive/db";
+import { createMemoryRepos } from "@fdrive/db/testing";
+import { createFilesFolderGuard, FILES_FOLDER_REASONS, FILES_MARKER } from "@fdrive/local";
 import { describe, expect, it, vi } from "vitest";
-import { createDeploymentFilesFolderGuard, filesFolderHealth } from "./files-folder.js";
-import { temporaryStorageRoot } from "./test-fixtures/index.ts";
+import { createChangeQueue } from "./change-queue.js";
+import {
+  createDeploymentFilesFolderGuard,
+  deploymentFilesFolder,
+  ensureStorageId,
+  filesFolderHealth,
+  STORAGE_ID_SETTINGS_KEY,
+} from "./files-folder.js";
+import { seedLocalUsers, temporaryStorageRoot } from "./test-fixtures/index.ts";
 
 const ID = "3e5d2b8a-7c41-4f0e-a9d6-1b2c3d4e5f60";
 
@@ -14,6 +23,22 @@ function facts(holds: boolean) {
 function log() {
   return { info: vi.fn(), error: vi.fn() };
 }
+
+describe("ensureStorageId", () => {
+  it("gives a fresh install an id on its first start and the same one on every later start", async () => {
+    const { settings } = createMemoryRepos();
+    const id = await ensureStorageId(settings);
+    expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(await settings.get(STORAGE_ID_SETTINGS_KEY)).toEqual({ id });
+    await expect(ensureStorageId(settings)).resolves.toBe(id);
+  });
+
+  it("keeps the id an upgrade carried over from the files folder's old row", async () => {
+    const { settings } = createMemoryRepos();
+    await settings.set(STORAGE_ID_SETTINGS_KEY, { id: ID });
+    await expect(ensureStorageId(settings)).resolves.toBe(ID);
+  });
+});
 
 describe("createDeploymentFilesFolderGuard", () => {
   it("logs an adoption once, then a verified folder, and reports it healthy", async () => {
@@ -45,5 +70,110 @@ describe("createDeploymentFilesFolderGuard", () => {
     );
     expect(guard.refusal()).toBe(FILES_FOLDER_REASONS.empty);
     expect(lines.info).not.toHaveBeenCalled();
+  });
+});
+
+describe("deploymentFilesFolder", () => {
+  it("serves the files folder over the stored users", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
+    const storageRoot = temporaryStorageRoot();
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: storageRoot }, repos);
+    expect(await folder.health()).toMatchObject({ ok: true });
+    await expect(folder.admit("alice")).resolves.toBeUndefined();
+    await expect(folder.admit("nobody")).rejects.toMatchObject({ kind: "forbidden" });
+  });
+
+  it("refuses a write over a user's storage limit, counted from their folder's usage", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [{ username: "alice", password: "alice-pass" }]);
+    await repos.localUsers.update("alice", { storageLimit: 10 });
+    const usage = vi.fn(async () => 8);
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos, {
+      usage,
+    });
+    const alice = folder.storage("alice");
+    await alice.upload("/two.txt", new TextEncoder().encode("ok"));
+    await expect(alice.upload("/three.txt", new TextEncoder().encode("abc"))).rejects.toMatchObject(
+      { kind: "storage_limit_reached" },
+    );
+    expect(usage).toHaveBeenCalledWith("alice");
+  });
+
+  it("refuses a share in the owner's Trash", async () => {
+    const repos = createMemoryRepos();
+    await seedLocalUsers(repos, [
+      { username: "alice", password: "alice-pass" },
+      { username: "bob", password: "bob-pass" },
+    ]);
+    for (const path of ["/.trash/old", "/Projects"]) {
+      await repos.localGrants.put({
+        ownerUsername: "alice",
+        path,
+        granteeUsername: "bob",
+        access: "read",
+      });
+    }
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: temporaryStorageRoot() }, repos);
+    const alice = folder.storage("alice");
+    await alice.mkdir("/.trash/old", { parents: true });
+    await alice.mkdir("/Projects");
+    const bob = folder.storage("bob");
+    expect((await bob.list("/Shared with me")).map((entry) => entry.name)).toEqual(["Projects"]);
+  });
+
+  it("refuses storage in a folder its guard refuses", async () => {
+    const storageRoot = temporaryStorageRoot();
+    const guard = createFilesFolderGuard({
+      root: storageRoot,
+      facts: { installationId: async () => "id", holdsFiles: async () => true },
+    });
+    const folder = deploymentFilesFolder({ fdriveStorageRoot: storageRoot }, createMemoryRepos(), {
+      guard,
+    });
+    await expect(folder.storage("alice").list("/")).rejects.toMatchObject({
+      kind: "upstream_unavailable",
+      message: FILES_FOLDER_REASONS.empty,
+    });
+    expect(await folder.health()).toEqual({ ok: false, detail: FILES_FOLDER_REASONS.empty });
+  });
+
+  describe("with a change queue", () => {
+    function queue() {
+      const writes: ChangeInput[][] = [];
+      const changes = createChangeQueue({
+        write: async (items) => {
+          writes.push([...items]);
+        },
+        onError: vi.fn(),
+      });
+      return { writes, changes };
+    }
+
+    it("records the changes fdrive makes, by their path in the files folder", async () => {
+      const storageRoot = temporaryStorageRoot();
+      const { writes, changes } = queue();
+      const storage = deploymentFilesFolder(
+        { fdriveStorageRoot: storageRoot },
+        createMemoryRepos(),
+        {
+          changes,
+        },
+      ).storage("alice");
+      await storage.upload("/a.txt", new TextEncoder().encode("a"));
+      await storage.move("/a.txt", "/b.txt");
+      await vi.waitFor(async () => {
+        await changes.flush();
+        expect(writes.flat()).toHaveLength(2);
+      });
+      expect(writes.flat()).toEqual([
+        { path: "alice/a.txt", content: expect.objectContaining({ size: 1 }) },
+        {
+          path: "alice/a.txt",
+          targetPath: "alice/b.txt",
+          stamp: expect.objectContaining({ size: 1 }),
+        },
+      ]);
+    });
   });
 });

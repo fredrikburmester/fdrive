@@ -1,0 +1,1 @@
+ALTER TABLE "idx"."changes" ADD COLUMN "previous_ctime_ns" bigint;

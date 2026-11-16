@@ -2,9 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { Context } from "hono";
-import { activityStorage } from "../activity/storage.js";
 import type { AppHono } from "../app.js";
-import { trashPathFor } from "./access.js";
 import { authenticateMcpRequest, type McpAuthDeps } from "./auth.js";
 import { boundedBytes } from "./content.ts";
 import type { McpToolDeps } from "./handlers.js";
@@ -76,32 +74,12 @@ async function handleMcpRequest(c: Context, deps: McpRoutesDeps): Promise<Respon
   const operationId = requestId ?? randomUUID();
   const credential = c.req.header("authorization") ?? c.req.param("token") ?? operationId;
   const context = createHash("sha256").update(credential).digest("hex");
-  const tool = (parsedBody as { params?: { name?: string } } | undefined)?.params?.name;
-  let principal = auth.principal;
   let child = 0;
-  if (deps.toolDeps.activity)
-    principal = {
-      ...principal,
-      storage: activityStorage(
-        principal,
-        deps.toolDeps.activity,
-        () => ({
-          source: "mcp",
-          operationId: `${context}:${operationId}:${child++}`,
-          uploadAction:
-            tool === "edit_file"
-              ? "file.save"
-              : tool === "upload_file"
-                ? "file.upload"
-                : "file.create",
-        }),
-        trashPathFor(deps.toolDeps, principal),
-      ),
-    };
-  registerMcpTools(server, principal, {
+  registerMcpTools(server, auth.principal, {
     ...deps.toolDeps,
     activityContext: context,
     activityRequestId: operationId,
+    nextOperationId: () => `${context}:${operationId}:${child++}`,
   });
 
   // A fresh server and transport per request: the SDK's documented pattern

@@ -50,7 +50,6 @@ export const PersonalActivitySource = z.enum([
   "mcp",
   "native",
   "indexer",
-  "refresh",
 ]);
 export const PersonalActivityOutcome = z.enum([
   "success",
@@ -68,8 +67,6 @@ export const PersonalActivityEvidence = z.enum([
   "watcher_move",
   "watcher_change",
   "sha256_relink",
-  "provider_version",
-  "refresh_comparison",
   "reconciled",
 ]);
 export type PersonalActivitySource = z.infer<typeof PersonalActivitySource>;
@@ -90,15 +87,8 @@ export const ActivityFacts = z
       .string()
       .regex(/^[a-f0-9]{64}$/)
       .optional(),
-    version: z.string().max(256).optional(),
     variant: z.enum(["duplicate", "save_as", "stored", "stream", "all", "single"]).optional(),
     trashLeaf: virtualPath.optional(),
-    /**
-     * How the item reached Trash, on events recorded before fdrive's own move
-     * was the only way (`sftpgo_rule` was SFTPGo's recycle rule). Accepted
-     * so those events still read; nothing records it now.
-     */
-    trashStrategy: z.enum(["sftpgo_rule", "fdrive_move"]).optional(),
     favorite: z.boolean().optional(),
     tags: z
       .array(
@@ -129,6 +119,8 @@ export const ActivityFacts = z
         "recovered",
         "interrupted",
         "history_pending",
+        /** Trash deleted the item for good once it had kept it as long as set. */
+        "retention",
       ])
       .optional(),
     completedCount: z.number().int().nonnegative().optional(),
@@ -188,7 +180,6 @@ export const PersonalActivityEvent = z.object({
 export type PersonalActivityEvent = z.infer<typeof PersonalActivityEvent>;
 export const PersonalActivityFilters = z
   .object({
-    identityId: CanonicalUuid.optional(),
     action: PersonalActivityAction.optional(),
     source: PersonalActivitySource.optional(),
     outcome: PersonalActivityOutcome.optional(),
@@ -214,18 +205,12 @@ export const PersonalActivityResponse = z.object({
   historyStartsAt: instant.nullable(),
   retainedFrom: instant.nullable(),
   batchSummary: ActivityBatchSummary.optional(),
-  coverage: z.object({
-    mutations: z.boolean(),
-    reads: z.boolean(),
-    observations: z.enum(["watcher_and_refresh", "refresh", "unavailable"]),
-    observationGap: z.boolean(),
-  }),
 });
 export type PersonalActivityResponse = z.infer<typeof PersonalActivityResponse>;
 
+/** A gesture of the signed-in login; the session names the login, never the body. */
 export const ClientActivityRequest = z
   .object({
-    identityId: CanonicalUuid,
     requestId: CanonicalUuid,
     at: instant,
     action: z.enum([
@@ -274,11 +259,7 @@ export const ActivityRevisionsResponse = z.object({
       eventId: CanonicalUuid,
       size: z.number().nullable(),
       sha256: z.string().nullable(),
-      providerVersion: z.string().nullable(),
     }),
   ),
   nextCursor: z.string().nullable(),
-});
-export const ActivityLocationsResponse = z.object({
-  items: z.array(z.object({ identityId: CanonicalUuid, label: z.string() })),
 });

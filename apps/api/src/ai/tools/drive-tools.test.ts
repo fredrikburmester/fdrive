@@ -5,7 +5,6 @@ import type { IndexedFile, IndexQueries } from "@fdrive/db";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import {
   createDriveTools,
   EXCERPT_CHARS,
@@ -22,9 +21,7 @@ vi.mock("../../mcp/handlers.js", async (importOriginal) => ({
   runSimilarFiles: vi.fn(),
 }));
 
-const HOME_SCOPES: readonly Scope[] = [
-  { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" },
-];
+const HOME_SCOPES: readonly Scope[] = [{ fsPrefix: "/alice", virtualPrefix: "/" }];
 
 function principalWith(storage: StorageProvider): Principal {
   return {
@@ -38,15 +35,14 @@ function principalWith(storage: StorageProvider): Principal {
 
 function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
   return {
-    indexQueries: { rootIdsByName: async () => ({ files: 1 }) } as unknown as IndexQueries,
+    indexQueries: {} as unknown as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected search")) },
     scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: true, scopes: HOME_SCOPES }),
+      scopesFor: async () => HOME_SCOPES,
     },
-    identities: { get: async () => buildIdentity() },
+    indexed: async () => true,
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -322,41 +318,35 @@ describe("folder_tree", () => {
     );
   });
 
-  it("hides Trash from the tree and refuses to start inside it", async () => {
-    const storage = createMemoryStorage({ "/.Trash/old.txt": "x", "/Docs/a.txt": "x" });
-    const list = vi.spyOn(storage, "list");
-    const { tool } = toolsFor({ storage, mcp: { trashPathForStorage: () => "/.Trash" } });
-
-    expect(await runTool(tool("folder_tree"), {})).toBe(
-      ["/ 1 folders, 0 files", "  Docs/ 0 folders, 1 files: a.txt"].join("\n"),
-    );
-    expect(list.mock.calls.map(([path]) => path)).not.toContain("/.Trash");
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash" })).rejects.toThrow(
-      new AiToolError("That folder is the Trash."),
-    );
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash/nested" })).rejects.toBeInstanceOf(
-      AiToolError,
-    );
-  });
-
-  it("falls back to the configured Trash path when the storage has none of its own", async () => {
-    const storage = createMemoryStorage({ "/.Trash/old.txt": "x" });
-    const { tool } = toolsFor({
-      storage,
-      mcp: { trashPathForStorage: () => null, trashPath: "/.Trash" },
+  it("hides fdrive's own folders from the tree and refuses to start inside one", async () => {
+    const storage = createMemoryStorage({
+      "/.trash/old.txt": "x",
+      "/.fdrive-desktop/staging/s.txt": "x",
+      "/Docs/a.txt": "x",
+      "/Docs/old/.trash/b.txt": "x",
     });
-
-    await expect(runTool(tool("folder_tree"), { path: "/.Trash" })).rejects.toThrow(
-      "That folder is the Trash.",
-    );
-  });
-
-  it("opens a folder named like Trash when no Trash is configured", async () => {
-    const storage = createMemoryStorage({ "/.Trash/old.txt": "x" });
+    const list = vi.spyOn(storage, "list");
     const { tool } = toolsFor({ storage });
 
-    expect(await runTool(tool("folder_tree"), { path: "/.Trash" })).toBe(
-      "/.Trash/ 0 folders, 1 files: old.txt",
+    expect(await runTool(tool("folder_tree"), { depth: 3 })).toBe(
+      [
+        "/ 1 folders, 0 files",
+        "  Docs/ 1 folders, 1 files: a.txt",
+        "    old/ 1 folders, 0 files",
+        "      .trash/",
+      ].join("\n"),
+    );
+    const listed = list.mock.calls.map(([path]) => path);
+    expect(listed).not.toContain("/.trash");
+    expect(listed).not.toContain("/.fdrive-desktop");
+    await expect(runTool(tool("folder_tree"), { path: "/.trash" })).rejects.toThrow(
+      new AiToolError("That folder is fdrive's own, like the Trash."),
+    );
+    await expect(runTool(tool("folder_tree"), { path: "/.fdrive-desktop" })).rejects.toThrow(
+      new AiToolError("That folder is fdrive's own, like the Trash."),
+    );
+    await expect(runTool(tool("folder_tree"), { path: "/.trash/nested" })).rejects.toBeInstanceOf(
+      AiToolError,
     );
   });
 
@@ -490,20 +480,22 @@ describe("list_folder", () => {
     );
   });
 
-  it("leaves Trash out and refuses to list it", async () => {
+  it("leaves fdrive's own folders out and refuses to list one", async () => {
     const storage = createMemoryStorage({
-      "/.Trash/old.txt": "x",
+      "/.trash/old.txt": "x",
+      "/.fdrive-desktop/staging/s.txt": "x",
       "/Docs/a.txt": "x",
       "/top.txt": "x",
     });
-    const { tool } = toolsFor({ storage, mcp: { trashPath: "/.Trash" } });
+    const { tool } = toolsFor({ storage });
 
     expect(await runTool(tool("list_folder"), { path: "/" })).toBe(
       ["/: 2 entries", "Docs/", "top.txt (1 B, 1970-01-01)"].join("\n"),
     );
-    await expect(runTool(tool("list_folder"), { path: "/.Trash/x" })).rejects.toThrow(
-      new AiToolError("That folder is the Trash."),
-    );
+    for (const path of ["/.trash/x", "/.fdrive-desktop/staging"])
+      await expect(runTool(tool("list_folder"), { path })).rejects.toThrow(
+        new AiToolError("That folder is fdrive's own, like the Trash."),
+      );
   });
 
   it("pages long folders", async () => {
@@ -548,8 +540,8 @@ describe("list_folder", () => {
 describe("read_excerpts", () => {
   /** "/Inbox" maps onto alice's indexed home; "/Archive" onto a root the index has not seen. */
   const EXCERPT_SCOPES: readonly Scope[] = [
-    { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/Inbox" },
-    { rootName: "archive", fsPrefix: "/", virtualPrefix: "/Archive" },
+    { fsPrefix: "/alice", virtualPrefix: "/Inbox" },
+    { fsPrefix: "/", virtualPrefix: "/Archive" },
   ];
 
   const SELECTED = [
@@ -578,7 +570,6 @@ describe("read_excerpts", () => {
       textChars: 0,
       error: null,
       indexedAt: null,
-      deletedAt: null,
     };
   }
 
@@ -586,7 +577,6 @@ describe("read_excerpts", () => {
     "alice/scan.pdf": indexedFile(1, "alice/scan.pdf"),
     "alice/blank.pdf": indexedFile(2, "alice/blank.pdf", "empty"),
     "alice/Folder/inner.txt": indexedFile(3, "alice/Folder/inner.txt"),
-    "alice/private.pdf": indexedFile(4, "alice/private.pdf"),
     // The row that answers for this path claims to live elsewhere.
     "alice/moved.pdf": indexedFile(5, "alice/elsewhere/moved.pdf"),
   };
@@ -595,7 +585,6 @@ describe("read_excerpts", () => {
     1: "  Invoice from ACME  ",
     2: "   ",
     3: "inner text",
-    4: "secret",
   };
 
   function excerptSetup(overrides: Partial<McpToolDeps> = {}) {
@@ -603,16 +592,9 @@ describe("read_excerpts", () => {
       "/Inbox/scan.pdf": "x",
       "/Inbox/blank.pdf": "x",
       "/Inbox/Folder/inner.txt": "x",
-      "/Inbox/private.pdf": "x",
       "/Inbox/moved.pdf": "x",
     });
-    const storage: StorageProvider = {
-      ...memory,
-      download: async (path, opts) => {
-        if (path === "/Inbox/private.pdf") throw new StorageError("forbidden", "denied");
-        return memory.download(path, opts);
-      },
-    };
+    const storage: StorageProvider = memory;
     const fileByPath = vi.fn(async (rootId: number, path: string) => {
       expect(rootId).toBe(1);
       return FILES[path] ?? null;
@@ -621,24 +603,20 @@ describe("read_excerpts", () => {
       expect(chars).toBe(EXCERPT_CHARS);
       return TEXT[id] ?? "";
     });
-    const identitiesGet = vi.fn(async () => buildIdentity());
+    const scopesFor = vi.fn(async (_username: string) => EXCERPT_SCOPES);
     const setup = toolsFor({
       storage,
       selected: SELECTED,
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix,
         } as unknown as IndexQueries,
-        identities: { get: identitiesGet },
-        scopeResolver: {
-          verifiedIndexScopes: async () => ({ available: true, scopes: EXCERPT_SCOPES }),
-        },
+        scopeResolver: { scopesFor },
         ...overrides,
       },
     });
-    return { ...setup, fileByPath, fileTextPrefix, identitiesGet };
+    return { ...setup, fileByPath, fileTextPrefix, scopesFor };
   }
 
   it("accepts between 1 and 25 paths and describes what it reads", () => {
@@ -680,12 +658,11 @@ describe("read_excerpts", () => {
       selected: [stored],
       mcp: {
         indexQueries: {
-          rootIdsByName: async () => ({ files: 1 }),
           fileByPath,
           fileTextPrefix: async () => "Protokoll",
         } as unknown as IndexQueries,
         scopeResolver: {
-          verifiedIndexScopes: async () => ({ available: true, scopes: EXCERPT_SCOPES }),
+          scopesFor: async () => EXCERPT_SCOPES,
         },
       },
     });
@@ -720,17 +697,11 @@ describe("read_excerpts", () => {
     );
   });
 
-  it("reports selected files it cannot tie to a readable index row as not indexed", async () => {
+  it("reports selected files it cannot tie to an index row as not indexed", async () => {
     const { tool, fileTextPrefix } = excerptSetup();
 
     const output = await runTool(tool("read_excerpts"), {
-      paths: [
-        "/Loose.pdf",
-        "/Archive/old.pdf",
-        "/Inbox/unindexed.pdf",
-        "/Inbox/moved.pdf",
-        "/Inbox/private.pdf",
-      ],
+      paths: ["/Loose.pdf", "/Archive/old.pdf", "/Inbox/unindexed.pdf", "/Inbox/moved.pdf"],
     });
 
     expect(output).toBe(
@@ -739,50 +710,34 @@ describe("read_excerpts", () => {
         "### /Archive/old.pdf\n(Not indexed.)",
         "### /Inbox/unindexed.pdf\n(Not indexed.)",
         "### /Inbox/moved.pdf\n(Not indexed.)",
-        "### /Inbox/private.pdf\n(Not indexed.)",
       ].join("\n\n"),
     );
     expect(fileTextPrefix).not.toHaveBeenCalled();
   });
 
-  it("resolves the identity's scope once across calls", async () => {
-    const { tool, identitiesGet } = excerptSetup();
+  it("resolves the login's scope once across calls", async () => {
+    const { tool, scopesFor } = excerptSetup();
     const readExcerpts = tool("read_excerpts");
 
     await runTool(readExcerpts, { paths: ["/Inbox/scan.pdf"] });
     await runTool(readExcerpts, { paths: ["/Inbox/blank.pdf"] });
 
-    expect(identitiesGet).toHaveBeenCalledTimes(1);
+    expect(scopesFor).toHaveBeenCalledTimes(1);
   });
 
   const UNAVAILABLE = "Extracted text is not available for this drive.";
 
-  it("is not available when the identity no longer exists", async () => {
-    const verifiedIndexScopes = vi.fn();
-    const { tool, fileByPath } = excerptSetup({
-      identities: { get: async () => null },
-      scopeResolver: { verifiedIndexScopes },
-    });
-
-    expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
-    expect(verifiedIndexScopes).not.toHaveBeenCalled();
-    expect(fileByPath).not.toHaveBeenCalled();
-  });
-
   it("is not available when the identity's index scopes are unverified", async () => {
     const { tool } = excerptSetup({
-      scopeResolver: {
-        verifiedIndexScopes: async () => ({ available: false, reason: "indexer_unreachable" }),
-      },
+      scopeResolver: { scopesFor: async () => [] },
+      indexed: async () => false,
     });
 
     expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
   });
 
-  it("is not available when none of the scopes land on an indexed root", async () => {
-    const { tool } = excerptSetup({
-      indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
-    });
+  it("is not available when no scope is left", async () => {
+    const { tool } = excerptSetup({ scopeResolver: { scopesFor: async () => [] } });
 
     expect(await runTool(tool("read_excerpts"), { paths: ["/Inbox/scan.pdf"] })).toBe(UNAVAILABLE);
   });

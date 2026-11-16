@@ -1,4 +1,6 @@
-import { rename } from "node:fs/promises";
+import { mkdtemp, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   EntryResponse,
   MeResponse,
@@ -6,33 +8,43 @@ import {
   ROUTES,
   TrashListResponse,
 } from "@fdrive/contracts";
-import { createDb, createRepos } from "@fdrive/db";
 import { startLocalStorage, startPostgres } from "@fdrive/testkit";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { composeApp } from "../../src/composition.js";
 import { loadConfig } from "../../src/config.js";
-import { trashSettingsKey } from "../../src/trash/settings.js";
 import { seedLocalUsers, silentLogger } from "./helpers/local-storage.ts";
 
-const TRASH_PATH = "/.trash";
+/** Whether the temporary folder's disk ignores case, as a Mac's does by default. */
+async function ignoresCase(): Promise<boolean> {
+  const dir = await mkdtemp(join(tmpdir(), "fdrive-case-"));
+  try {
+    await writeFile(join(dir, "probe"), "");
+    return await stat(join(dir, "PROBE")).then(
+      () => true,
+      () => false,
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+const IGNORES_CASE = await ignoresCase();
 
 const cookieFrom = (response: Response) => response.headers.get("set-cookie")?.split(";")[0] ?? "";
 
 /**
- * Exercises the fs and trash routes' conflict guards (`requireTargetFree`
- * in `fs/routes.ts`, and `@fdrive/core`'s `createRecycleFolderTrash.restore`,
- * which moves with `overwrite: false`) against a real local folder, where a
- * plain `rename` would silently replace whatever already sits at the
- * target: the routes must reject these with 409 and leave the target as it
- * was. Follows `trash-local.test.ts`'s composition pattern: one Postgres,
- * one local folder, one composed app with provider-bound Trash settings
- * persisted, and plain `app.request` calls.
+ * Exercises the fs and trash routes' conflict handling against a real local
+ * folder: storage refuses a taken target for move, rename and copy, and
+ * `@fdrive/core`'s `createRecycleFolderTrash.restore` moves with
+ * `overwrite: false`. The routes must answer these with 409 and leave the
+ * target as it was, and must not mistake a case-only rename on a disk that
+ * ignores case for one. Follows `trash-local.test.ts`'s composition pattern: one Postgres,
+ * one local folder, one composed app, and plain `app.request` calls.
  */
 describe("fs and trash conflict guards against a local folder", () => {
   let postgres: Awaited<ReturnType<typeof startPostgres>>;
   let storage: Awaited<ReturnType<typeof startLocalStorage>>;
   let composed: Awaited<ReturnType<typeof composeApp>>;
-  let database: ReturnType<typeof createDb>;
 
   beforeAll(async () => {
     [postgres, storage] = await Promise.all([
@@ -46,21 +58,10 @@ describe("fs and trash conflict guards against a local folder", () => {
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 11).toString("base64"),
     });
     composed = await composeApp(config, silentLogger());
-    database = createDb(postgres.connectionString);
-    const repos = createRepos(database.db);
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "local" });
-    await repos.settings.set(trashSettingsKey(provider.id), {
-      providerId: provider.id,
-      revision: 1,
-      enabled: true,
-      path: TRASH_PATH,
-      retentionHours: 72,
-    });
   }, 180000);
 
   afterAll(async () => {
     await composed?.close();
-    await database?.close();
     await storage?.stop();
     await postgres?.stop();
   }, 180000);
@@ -92,7 +93,7 @@ describe("fs and trash conflict guards against a local folder", () => {
   async function login(username: string) {
     const response = await call(ROUTES.auth.login, {
       method: "POST",
-      body: { credential: { username, password: `${username}-pass` } },
+      body: { username, password: `${username}-pass` },
     });
     expect(response.status).toBe(200);
     return { cookie: cookieFrom(response), me: MeResponse.parse(await response.json()) };
@@ -173,6 +174,30 @@ describe("fs and trash conflict guards against a local folder", () => {
     expect(copyRes.status).toBe(409);
     expect(await download(cookie, "/copy-target.txt")).toBe("original copy target content");
   }, 180000);
+
+  // Only a disk that ignores case (a Mac's) has "case.txt" and "CASE.txt" as one name.
+  it.skipIf(!IGNORES_CASE)(
+    "renames to another case on a disk that ignores case",
+    async () => {
+      const { cookie } = await login("alice");
+      await upload(cookie, "/case/case.txt", "case");
+
+      for (const [path, newName] of [
+        ["/case/case.txt", "CASE.txt"],
+        ["/case", "Case"],
+      ] as const) {
+        const response = await call(ROUTES.fs.rename, {
+          method: "POST",
+          cookie,
+          body: { path, newName },
+        });
+        expect(response.status).toBe(200);
+      }
+      expect(await download(cookie, "/Case/CASE.txt")).toBe("case");
+      expect(await readdir(join(storage.path("alice"), "Case"))).toEqual(["CASE.txt"]);
+    },
+    180000,
+  );
 
   it("rejects a trash restore onto an existing file with 409 and failedId, leaving the trash leaf present", async () => {
     const alice = await login("alice");

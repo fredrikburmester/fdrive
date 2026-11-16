@@ -8,8 +8,9 @@ durability properties: the replacement is staged in the destination directory,
 hashed while it is copied, fsynced, given the destination's ownership and the
 recorded mtime, and only then swapped in with `os.replace`, all inside the same
 `db.backup_checkpoint` gate a rewrite takes. It then records a `restored` row in
-the done-log for the restored file's own key, without which the next pass would
-immediately OCR the file straight back again.
+the done-log for the restored bytes' digest, without which the next pass would
+immediately OCR the file straight back again, and journals the path in
+`idx.changes` for the indexer, as a rewrite does.
 """
 
 from __future__ import annotations
@@ -287,8 +288,8 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
     """Joins a recorded relative path onto its root, refusing anything that does
     not stay inside it. The sidecar is service-written, but it is also the only
     caller-reachable path input here, so containment is enforced rather than
-    assumed: absolute paths, `..` traversal, and a parent directory that resolves
-    through a symlink out of the root are all rejected."""
+    assumed: absolute paths, `..` traversal, and a parent directory reached
+    through a symlink below the root, wherever it leads, are all rejected."""
     if not rel_path or rel_path.startswith("/") or "\0" in rel_path:
         return None
     root_normalized = os.path.normpath(root_abs)
@@ -296,8 +297,8 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
     if candidate != root_normalized and not candidate.startswith(root_normalized + os.sep):
         return None
     root_real = os.path.realpath(root_normalized)
-    parent_real = os.path.realpath(os.path.dirname(candidate))
-    if parent_real != root_real and not parent_real.startswith(root_real + os.sep):
+    parent = os.path.relpath(os.path.dirname(candidate), root_normalized)
+    if os.path.realpath(os.path.dirname(candidate)) != os.path.normpath(os.path.join(root_real, parent)):
         return None
     return candidate
 
@@ -305,7 +306,7 @@ def resolve_target_path(root_abs: str, rel_path: str) -> str | None:
 def list_originals(
     conn: psycopg.Connection,
     state_dir: str,
-    targets: list[RootTarget],
+    target: RootTarget,
     index: OriginalsIndex,
     query: str = "",
     offset: int = 0,
@@ -333,28 +334,17 @@ def list_originals(
     if backfilled:
         index.invalidate()
 
-    targets_by_name = {target.name: target for target in targets}
-    paths_by_root: dict[str, list[str]] = {}
-    for _entry, mapping in resolved:
-        if mapping is not None and mapping.root in targets_by_name:
-            paths_by_root.setdefault(mapping.root, []).append(mapping.path)
-    ocred: dict[str, dict[str, frozenset[tuple[int, int]]]] = {
-        root: db.ocred_keys_for_paths(conn, targets_by_name[root].root_id, paths)
-        for root, paths in paths_by_root.items()
-    }
+    paths = [mapping.path for _entry, mapping in resolved if mapping is not None and mapping.root == target.name]
+    ocred = db.ocred_keys_for_paths(conn, target.root_id, paths)
 
     listed: list[ListedOriginal] = []
     for entry, mapping in resolved:
         state: str | None = None
-        if mapping is not None:
-            target = targets_by_name.get(mapping.root)
-            abs_path = None if target is None else resolve_target_path(target.abs_path, mapping.path)
+        if mapping is not None and mapping.root == target.name:
+            abs_path = resolve_target_path(target.abs_path, mapping.path)
             if abs_path is not None:
                 state = classify_state(
-                    _target_stat(abs_path),
-                    mapping.size,
-                    mapping.mtime_ns,
-                    ocred.get(mapping.root, {}).get(mapping.path, frozenset()),
+                    _target_stat(abs_path), mapping.size, mapping.mtime_ns, ocred.get(mapping.path, frozenset())
                 )
         listed.append(
             ListedOriginal(
@@ -425,7 +415,7 @@ def _file_version(info: os.stat_result | None) -> tuple[int, ...] | None:
 def restore_original(
     conn: psycopg.Connection,
     state_dir: str,
-    targets: list[RootTarget],
+    target: RootTarget,
     index: OriginalsIndex,
     original_id: str,
     allow_recreate: bool,
@@ -459,8 +449,7 @@ def restore_original(
     if mapping is None:
         return RestoreOutcome(False, REASON_UNRESOLVED)
 
-    target = next((item for item in targets if item.name == mapping.root), None)
-    if target is None:
+    if mapping.root != target.name:
         return RestoreOutcome(False, REASON_UNKNOWN_ROOT, root=mapping.root, path=mapping.path)
     with db.ocr_file_lock(conn, target.root_id, mapping.path), db.backup_checkpoint(conn):
         abs_path = resolve_target_path(target.abs_path, mapping.path)
@@ -512,9 +501,11 @@ def restore_original(
                 os.remove(pending)
         _fsync_directory(parent)
         db.record_ocr_log(
-            conn, target.root_id, mapping.path, mapping.size, mapping.mtime_ns, STATUS_RESTORED, "original restored"
+            conn, target.root_id, mapping.path, mapping.size, mapping.mtime_ns, digest, STATUS_RESTORED,
+            "original restored",
         )
     index.invalidate()
+    db.journal_change(conn, target.root_id, target.name, mapping.path, log)
     log(f"[{mapping.root}] restored original: {mapping.path}")
     return RestoreOutcome(True, state=state, root=mapping.root, path=mapping.path)
 

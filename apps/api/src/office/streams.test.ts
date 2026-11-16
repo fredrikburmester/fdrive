@@ -1,28 +1,42 @@
-import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { createMemoryStorage } from "@fdrive/testkit";
 import { describe, expect, it, vi } from "vitest";
-import { boundedStream, contentVersion, withStagedUpload } from "./streams.ts";
+import { type BoundedProgress, boundedStream } from "./streams.ts";
 
 describe("bounded office streams", () => {
-  it("streams at the exact cap and hashes bytes without buffering files", async () => {
-    const storage = createMemoryStorage({ "/a": "hello" });
-    const result = await contentVersion(storage, "/a", 5, new AbortController().signal);
-    expect(result.size).toBe(5);
-    expect(result.version).toBe("0:5:2cf24dba5fb0a30e");
-    await expect(
-      contentVersion(storage, "/a", 4, new AbortController().signal),
-    ).rejects.toMatchObject({ status: 413 });
+  it("passes the exact cap, refuses one byte more and keeps why it stopped", async () => {
+    const progress: BoundedProgress = { size: 0 };
+    const exact = boundedStream(
+      new Response("hello").body as ReadableStream<Uint8Array>,
+      5,
+      new AbortController().signal,
+      progress,
+    );
+    expect(await new Response(exact).text()).toBe("hello");
+    expect(progress).toEqual({ size: 5 });
+    const over: BoundedProgress = { size: 0 };
+    const larger = boundedStream(
+      new Response("hello!").body as ReadableStream<Uint8Array>,
+      5,
+      new AbortController().signal,
+      over,
+    );
+    await expect(new Response(larger).text()).rejects.toMatchObject({ status: 413 });
+    expect(over.failure).toMatchObject({ status: 413 });
   });
   it("cancels pending reads on abort and ignores repeated aborts", async () => {
     const abort = new AbortController();
     const cancel = vi.fn();
-    const reader = boundedStream(new ReadableStream({ cancel }), 5, abort.signal).getReader();
+    const progress: BoundedProgress = { size: 0 };
+    const reader = boundedStream(
+      new ReadableStream({ cancel }),
+      5,
+      abort.signal,
+      progress,
+    ).getReader();
     const read = reader.read();
     abort.abort();
     abort.abort();
     await expect(read).rejects.toMatchObject({ status: 408 });
+    expect(progress.failure).toMatchObject({ status: 408 });
     expect(cancel).toHaveBeenCalledOnce();
   });
   it("rejects already aborted requests and handles cancellation errors", async () => {
@@ -41,9 +55,17 @@ describe("bounded office streams", () => {
   });
   it("forwards consumer cancellation and stream errors", async () => {
     const cancel = vi.fn();
-    const stream = boundedStream(new ReadableStream({ cancel }), 5, new AbortController().signal);
+    const progress: BoundedProgress = { size: 0 };
+    const stream = boundedStream(
+      new ReadableStream({ cancel }),
+      5,
+      new AbortController().signal,
+      progress,
+    );
     await stream.cancel("closed");
     expect(cancel).toHaveBeenCalledWith("closed");
+    // The consumer gave up: the stream itself did not fail.
+    expect(progress.failure).toBeUndefined();
     const failing = new ReadableStream<Uint8Array>({
       start(c) {
         c.error(new Error("failed"));
@@ -62,70 +84,5 @@ describe("bounded office streams", () => {
       },
     });
     await expect(new Response(boundedStream(source, 5, abort.signal)).text()).rejects.toThrow();
-  });
-});
-
-describe("private staged uploads", () => {
-  it("stages complete bounded bytes on private disk and cleans up after success or failure", async () => {
-    const root = await mkdtemp(join(tmpdir(), "office-stage-test-"));
-    const signal = new AbortController().signal;
-    try {
-      const result = await withStagedUpload(
-        new Response("hello").body as ReadableStream<Uint8Array>,
-        5,
-        signal,
-        async (body, size) => {
-          expect(size).toBe(5);
-          const directories = await readdir(root);
-          expect(directories).toHaveLength(1);
-          const directory = join(root, directories[0] ?? "missing");
-          expect((await stat(directory)).mode & 0o777).toBe(0o700);
-          expect((await stat(join(directory, "upload"))).mode & 0o777).toBe(0o600);
-          return new Response(body).text();
-        },
-        root,
-      );
-      expect(result).toBe("hello");
-      expect(await readdir(root)).toEqual([]);
-      const consume = vi.fn(async () => {
-        throw new Error("upstream failed");
-      });
-      await expect(
-        withStagedUpload(
-          new Response("hello").body as ReadableStream<Uint8Array>,
-          5,
-          signal,
-          consume,
-          root,
-        ),
-      ).rejects.toThrow("upstream failed");
-      expect(await readdir(root)).toEqual([]);
-      consume.mockClear();
-      await expect(
-        withStagedUpload(
-          new Response("too large").body as ReadableStream<Uint8Array>,
-          5,
-          signal,
-          consume,
-          root,
-        ),
-      ).rejects.toMatchObject({ status: 413 });
-      expect(consume).not.toHaveBeenCalled();
-      expect(await readdir(root)).toEqual([]);
-      const abort = new AbortController();
-      abort.abort();
-      await expect(
-        withStagedUpload(
-          new Response("hello").body as ReadableStream<Uint8Array>,
-          5,
-          abort.signal,
-          consume,
-          root,
-        ),
-      ).rejects.toMatchObject({ status: 408 });
-      expect(await readdir(root)).toEqual([]);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
   });
 });

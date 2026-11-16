@@ -4,7 +4,7 @@ Current design: [Architecture](ARCHITECTURE.md). Unfinished work: [Plans](plans/
 
 This guide covers running fdrive locally for development with hot reloading, seeded test accounts, and integration test environments.
 
-The API reaches the files folder through an internal [storage port](STORAGE-PROVIDERS.md).
+The API reaches the files folder through an internal [storage port](STORAGE.md).
 
 ---
 
@@ -13,6 +13,8 @@ The API reaches the files folder through an internal [storage port](STORAGE-PROV
 - **Node.js**: Node 24 (pinned in `.node-version` / `.nvmrc`)
 - **Package manager**: `pnpm` (version 10+)
 - **Docker**: Docker Desktop or Docker Engine running
+- **ffmpeg** on the API's `PATH` (`brew install ffmpeg`): the preview plays videos browsers
+  cannot (MKV, AVI and the like) by transcoding them as they stream; the API image ships it
 
 ---
 
@@ -48,7 +50,7 @@ Visit **`http://localhost:3000`** and log in with any of the seeded development 
 
 | Username | Password | Role / Setup |
 | :--- | :--- | :--- |
-| **`dev`** | `dev` | **Administrator** (`FDRIVE_ADMIN_USERS`), sample photos, documents, and spreadsheets. |
+| **`dev`** | `dev` | **Administrator** (made one by `pnpm dev:users`), sample photos, documents, and spreadsheets. |
 | **`alice`** | `alice-password` | Standard user with documents and a photo. |
 | **`bob`** | `bob-password` | Standard user with `inbox` and `public` folders. |
 | **`carol`** | `carol-password` | Standard user with one file; share a folder with her to try **Shared with me**. |
@@ -115,8 +117,8 @@ pnpm --filter @fdrive/web test:e2e
   ```bash
   pnpm dev:env:down
   ```
-- **Wipe all development data and re-seed from scratch** (a fresh database, a fresh copy of
-  the dev files and the dev users again):
+- **Wipe all development data and re-seed from scratch** (fresh `.env` files and database, a
+  fresh copy of the dev files and the dev users again):
   ```bash
   pnpm dev:env:reset
   ```
@@ -126,12 +128,25 @@ pnpm --filter @fdrive/web test:e2e
 Set `FDRIVE_DEV_API_PORT`, `FDRIVE_DEV_DB_PORT`, `FDRIVE_DEV_INDEXER_HTTP_PORT`,
 `FDRIVE_DEV_OCR_HTTP_PORT` and `FDRIVE_DEV_ML_PORT` before generating a fresh environment.
 `pnpm dev:env` uses those same overrides for the API/web URLs and
-compose publishes. Existing environment assignments are preserved; update them
-when changing ports in an already configured checkout.
+compose publishes. It writes `apps/api/.env.dev` and `apps/web/.env.local` only
+when they are missing; after changing ports in a configured checkout, edit them
+or run `pnpm dev:env:reset`, which writes them again.
 
 The dev stack keeps every unit of the ml service on (`FDRIVE_ML_STATIC_UNITS`), and
-`FDRIVE_EMBED_URL`, `FDRIVE_IMAGE_EMBED_URL` and `FDRIVE_TIKA_URL` point at its `/text`,
-`/image` and `/extract` prefixes on the published port. Production compose also supplies
-`FDRIVE_EMBED_RUNTIME_URL`, `FDRIVE_IMAGE_EMBED_RUNTIME_URL` and `FDRIVE_TIKA_RUNTIME_URL`,
-where the server follows the owner's feature settings and must acknowledge their revision.
-Units that are always on have no configuration revision.
+`FDRIVE_ML_URL` points at it on the published port; the API reaches its `/text`, `/image` and
+`/extract` units below it and reads each unit's `/runtime` status. In production the server
+follows the owner's feature settings and must acknowledge their revision; units that are always
+on have no configuration revision.
+
+`pnpm dev:env` migrates the database (through `pnpm dev:users`), so the index profile's indexer
+and OCR start against the schema. In production compose they start only once the API, which
+migrates before it serves, is healthy.
+
+## Database migrations
+
+Migrations live in `packages/db/drizzle`, and `pnpm --filter @fdrive/db db:generate` writes the
+next one from `packages/db/src/schema`. History starts at `0000_baseline`, the whole schema, and
+`0001_squash_history`, which moves a database the replaced migrations 0000–0047 left onto it. A
+database from before v0.7.0-rc.11 is refused unchanged; `pnpm dev:env:reset` replaces a dev one.
+Keep each table's columns in `src/schema` in the order the database holds them, a new one last:
+a squash generates its baseline in that order, and a restore compares it.

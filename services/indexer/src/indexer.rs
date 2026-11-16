@@ -3,12 +3,13 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::io::Seek;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 use std::thread::LocalKey;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -17,19 +18,21 @@ use crate::activity::{Op, RootActivity};
 use crate::backoff::{Backoff, is_outage};
 use crate::chunking::{chunk, is_document, is_image, is_pdf, is_textual, max_chunks_for};
 use crate::config::{Config, SKIP_DIRS, SKIP_NAMES};
-use crate::db::{self, Db, ManifestRow, NewFile};
-use crate::events::{EventKind, build};
+use crate::db::{self, Db, FileRow, ManifestRow, NewChange, NewFile, Stamp, StampUpdate};
 use crate::extract::{Extractor, embed_passages};
 use crate::failures::{self, FileResult, Report, attempt, describe, report};
 use crate::features::{FeatureConfiguration, FeatureValues};
 use crate::image_embed::{self, Health};
+use crate::journal::{self, Source};
 use crate::log::log;
 use crate::paths::{basename, ext_of};
+use crate::photo::{self, Photo};
 use crate::promise::{Outcome, Promise};
 use crate::rules::{Globs, should_index_name, should_walk_dir};
 use crate::settings::{self, Settings};
-use crate::thumbs::{SIZES, kind_for_ext, skip_reason, storage_path};
+use crate::thumbs::{Kind, SIZES, kind_for_ext, skip_reason, storage_path};
 use crate::thumbs_io;
+pub use crate::walk::{walk, walk_tree};
 
 /// Classified files a scan holds before traversal waits for workers.
 pub const SCAN_BACKLOG_LIMIT: usize = 20_000;
@@ -50,51 +53,140 @@ impl FileStat {
     }
 }
 
-/// What fdrive's API knew about an upload when it published it: the bytes' digest and the
-/// file they became. The file need not be read again to hash it while it is still that file.
-/// A client chooses an upload's modification time, so a hint also names the inode and its
-/// change time, which no client can set: another file with the same size and time never
-/// passes for it, and its digest never keys thumbnails or embeddings made from other bytes.
+/// How long after a file last changed a read of it may stamp its row (`db::Stamp`). A write
+/// within the same tick of the filesystem's clock as the change before it leaves the change
+/// time as it was, so a read that began within that tick may have missed one; a read that
+/// began later cannot, since any write after it moves the change time on. One second covers
+/// filesystems that keep whole seconds, and stays under the watcher's two-second debounce,
+/// so a change the watcher reports is stamped when it is indexed.
+pub const STAMP_SETTLE: Duration = Duration::from_secs(1);
+
+impl Stamp {
+    pub fn of(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            inode: metadata.ino() as i64,
+            ctime_ns: metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec(),
+        }
+    }
+}
+
+/// Whether a file whose change time is `ctime_ns` had settled `settle` before `at`.
+pub fn settled(ctime_ns: i64, at: SystemTime, settle: Duration) -> bool {
+    let at_ns = at.duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos() as i64;
+    ctime_ns <= at_ns - settle.as_nanos() as i64
+}
+
+/// The stamp a read of a file earns: the file had settled when the read began (`before`
+/// was taken after `started`), it is still that inode with that change time afterwards, and
+/// it is the version the row records (`stat`). `None` otherwise.
+pub fn earned_stamp(
+    stat: FileStat,
+    before: &std::fs::Metadata,
+    after: &std::fs::Metadata,
+    started: SystemTime,
+    settle: Duration,
+) -> Option<Stamp> {
+    let stamp = Stamp::of(before);
+    let unchanged = FileStat::of(before) == stat && FileStat::of(after) == stat && Stamp::of(after) == stamp;
+    (unchanged && settled(stamp.ctime_ns, started, settle)).then_some(stamp)
+}
+
+/// Hash an open file from where it is, and the stamp the read earns (`earned_stamp`).
+pub fn read_digest(file: &mut std::fs::File, stat: FileStat, settle: Duration) -> Result<(String, Option<Stamp>)> {
+    let started = SystemTime::now();
+    let before = file.metadata()?;
+    let sha = crate::fsx::sha256_of_file(file)?;
+    let after = file.metadata()?;
+    let stamp = earned_stamp(stat, &before, &after, started, settle);
+    Ok((sha, stamp))
+}
+
+/// A file as a stat shows it: the version a row records (`FileStat`) and the inode and change
+/// time that stamp the row's digest (`Stamp`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Version {
+    pub stat: FileStat,
+    pub stamp: Stamp,
+}
+
+impl Version {
+    pub fn of(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            stat: FileStat::of(metadata),
+            stamp: Stamp::of(metadata),
+        }
+    }
+
+    /// A journal row's `size`, `mtime_ns`, `inode` and `ctime_ns`, when all four are set and
+    /// the size is not negative. `inode` is the unsigned inode number's 64 bits, as stored.
+    pub fn from_columns(
+        size: Option<i64>,
+        mtime_ns: Option<i64>,
+        inode: Option<i64>,
+        ctime_ns: Option<i64>,
+    ) -> Option<Self> {
+        let (size, mtime_ns, inode, ctime_ns) = (size?, mtime_ns?, inode?, ctime_ns?);
+        (size >= 0).then_some(Self {
+            stat: FileStat {
+                size: size as u64,
+                mtime_ns,
+            },
+            stamp: Stamp { inode, ctime_ns },
+        })
+    }
+}
+
+/// A file fdrive's API renamed in place: exactly as a stat showed it right after the rename
+/// (`version`), and its change time just before (`previous_ctime_ns`, with the same inode, size
+/// and modification time). A rename moves the change time on and keeps the bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Renamed {
+    pub version: Version,
+    pub previous_ctime_ns: i64,
+}
+
+impl Renamed {
+    /// The file's stamp just before the rename.
+    pub fn previous(&self) -> Stamp {
+        Stamp {
+            inode: self.version.stamp.inode,
+            ctime_ns: self.previous_ctime_ns,
+        }
+    }
+}
+
+/// What fdrive's API knew about an upload when it published it: the digest of the bytes it
+/// wrote and the file they became, exactly as a stat showed it once published. While a stat still shows that file, the digest describes
+/// it, so the file is neither hashed again nor read to stamp its row. A client chooses an
+/// upload's modification time, so a hint also names the inode and its change time, which no
+/// client can set: another file with the same size and time never passes for it, and its
+/// digest never keys thumbnails or embeddings made from other bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentHint {
     pub sha256: String,
-    pub size: u64,
-    pub mtime_ns: i64,
-    pub inode: u64,
-    pub ctime_ns: i64,
+    pub version: Version,
 }
 
 impl ContentHint {
     /// A hint with a well-formed digest (64 lowercase hex digits), or none: thumbnails are
-    /// stored under the digest, so anything else must never be used as one. `inode` is the
-    /// unsigned inode number's 64 bits, as stored.
-    pub fn new(sha256: &str, size: i64, mtime_ns: i64, inode: i64, ctime_ns: i64) -> Option<Self> {
+    /// stored under the digest, so anything else must never be used as one.
+    pub fn new(sha256: &str, version: Version) -> Option<Self> {
         let well_formed =
             sha256.len() == 64 && sha256.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-        (well_formed && size >= 0).then(|| Self {
+        well_formed.then(|| Self {
             sha256: sha256.to_owned(),
-            size: size as u64,
-            mtime_ns,
-            inode: inode as u64,
-            ctime_ns,
+            version,
         })
     }
 
-    /// The digest, when the opened file is still the one the hint describes.
-    fn digest_for(&self, file: &std::fs::File) -> Option<String> {
-        let metadata = file.metadata().ok()?;
-        let same = FileStat::of(&metadata)
-            == FileStat {
-                size: self.size,
-                mtime_ns: self.mtime_ns,
-            }
-            && metadata.ino() == self.inode
-            && metadata.ctime() * 1_000_000_000 + metadata.ctime_nsec() == self.ctime_ns;
-        same.then(|| self.sha256.clone())
+    /// Whether the opened file is still the one the hint describes, in the version `stat`
+    /// records.
+    fn describes(&self, stat: FileStat, file: &std::fs::File) -> bool {
+        self.version.stat == stat && file.metadata().is_ok_and(|m| Version::of(&m) == self.version)
     }
 }
 
-/// Counts foreground work (watcher changes and the API's queue) while it is pending, so
+/// Counts foreground work (watcher changes and the change journal) while it is pending, so
 /// scan workers wait for it; dropping the guard ends it.
 pub struct Foreground(Arc<AtomicUsize>);
 
@@ -138,6 +230,14 @@ pub struct RootContext {
     files_folder: Mutex<Option<(Instant, Result<(), &'static str>)>>,
     /// How long that verdict is reused before the marker is read again.
     pub files_folder_recheck: Duration,
+    /// How long after a file last changed a read of it may stamp its row: `STAMP_SETTLE`.
+    pub stamp_settle: Duration,
+    /// Set when the root needs a scan before its next one is due: the journal's reader
+    /// found rows it never read were pruned.
+    scan_requested: AtomicBool,
+    /// The name index every name row this root writes is reported to; unset where nothing
+    /// searches names, as in most tests.
+    pub names: OnceLock<Arc<crate::names::NameIndex>>,
 }
 
 /// How long a verdict on the files folder's marker is reused by default.
@@ -156,7 +256,7 @@ pub fn build_extractor(name: &str, cfg: &Config, settings: &Settings) -> Extract
         plain_text_cap: cfg.plain_text_cap,
         tesseract_langs: settings.tesseract_langs.clone(),
         ocr_image_globs: Globs::new(&settings.ocr_image_globs),
-        tika_url: cfg.tika_url.clone(),
+        extract_url: cfg.extract_url(),
     }
 }
 
@@ -187,6 +287,9 @@ impl RootContext {
             activity: RootActivity::default(),
             files_folder: Mutex::new(None),
             files_folder_recheck: FILES_FOLDER_RECHECK,
+            stamp_settle: STAMP_SETTLE,
+            scan_requested: AtomicBool::new(false),
+            names: OnceLock::new(),
             cfg,
         }
     }
@@ -300,7 +403,7 @@ impl RootContext {
         {
             return Some(health.clone());
         }
-        let health = image_embed::health(&self.cfg.image_embed_url, Duration::from_secs(5))
+        let health = image_embed::health(&self.cfg.image_url(), Duration::from_secs(5))
             .or_else(|| cached.map(|(_, health)| health));
         *lock(&self.image_health) = health
             .clone()
@@ -347,13 +450,35 @@ impl RootContext {
     fn report(&self, path: &str, feature: &str, result: Report<'_>) {
         report(&self.db, self.root_id, path, feature, result);
     }
+
+    /// Ask the root's loop for a scan at its next step.
+    pub fn request_scan(&self) {
+        self.scan_requested.store(true, Ordering::SeqCst);
+    }
+
+    /// Whether a scan was requested since the last call.
+    pub fn take_scan_request(&self) -> bool {
+        self.scan_requested.swap(false, Ordering::SeqCst)
+    }
+
+    /// Tell the name index this root's rows at `path` changed (with `subtree`, also those below it).
+    pub fn names_touched(&self, path: &str, subtree: bool) {
+        if let Some(names) = self.names.get() {
+            names.touch(self.root_id, path, subtree);
+        }
+    }
+
+    /// Tell the name index to read every row of this root again.
+    pub fn names_rebuild(&self) {
+        if let Some(names) = self.names.get() {
+            names.rebuild(self.root_id);
+        }
+    }
 }
 
 /// The DB row matches what is on disk and needs no work.
 pub fn unchanged_in_db(row: Option<&ManifestRow>, stat: FileStat) -> bool {
-    row.is_some_and(|r| {
-        r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && r.status != "pending" && !r.deleted
-    })
+    row.is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && r.status != "pending")
 }
 
 /// Whether a feature transition makes an unchanged row actionable. Each status must stop
@@ -401,12 +526,13 @@ pub fn work_features(features: &FeatureValues, ext: Option<&str>, embed_only: bo
     result
 }
 
-pub fn emit_event(ctx: &RootContext, kind: EventKind, rel_path: &str, target: Option<&str>) {
-    let event = build(kind, &ctx.name, rel_path, target);
-    if let Err(error) = ctx.db.with(|c| db::record_event(c, ctx.root_id, &event)) {
+/// Tell the API the index took in a change, so browsers refresh what it backs (folder sizes).
+/// What changed is in the change journal; a failure is logged and changes nothing else.
+pub fn notify_indexed(ctx: &RootContext) {
+    if let Err(error) = ctx.db.with(|c| db::notify_indexed(c, &ctx.name)) {
         log(&format!(
-            "event: failed to record {} for {rel_path}: {}",
-            kind.as_str(),
+            "indexed: failed to notify for {}: {}",
+            ctx.name,
             describe(&error)
         ));
     }
@@ -418,7 +544,7 @@ pub fn process_file(ctx: &Arc<RootContext>, abs_path: &Path, rel_path: &str, sta
     process_file_with(ctx, abs_path, rel_path, stat, None)
 }
 
-/// `process_file` for a file the API described: `hint` spares hashing it again. The file
+/// `process_file` for a file the API described: `hint` spares reading it again. The file
 /// is reopened from the root rather than through `_abs_path`.
 pub fn process_file_with(
     ctx: &Arc<RootContext>,
@@ -433,54 +559,139 @@ pub fn process_file_with(
         return Ok(false);
     }
     let row = ctx.db.with(|c| db::file_row(c, ctx.root_id, rel_path))?;
+    let status = row
+        .as_ref()
+        .map(|r| db::retry_status(r.status.clone(), r.error.as_deref()))
+        .unwrap_or_default();
     let manifest = row.as_ref().map(|r| ManifestRow {
         size: r.size,
         mtime_ns: r.mtime_ns,
-        status: r.status.clone(),
-        deleted: r.deleted,
+        status: status.clone(),
         sha256: r.sha256.clone(),
         image_embedded: false,
         thumbnail_failed: false,
     });
-    let status = match &row {
-        Some(r) if r.error.as_deref() == Some("excluded:image_dir") => "excluded:image_dir".to_owned(),
-        Some(r) => r.status.clone(),
-        None => String::new(),
-    };
     let unchanged = unchanged_in_db(manifest.as_ref(), stat);
-    if unchanged {
-        if status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size) {
-            return Ok(false);
-        }
-        if !should_retry_unchanged(&status, &ctx.values()) {
-            return Ok(false);
+    if let Some(row) = row.as_ref().filter(|_| unchanged) {
+        let excluded = status.starts_with("excluded") && exclusion_still_applies(ctx, rel_path, stat.size);
+        if excluded || !should_retry_unchanged(&status, &ctx.values()) {
+            return restamp(ctx, rel_path, stat, row, hint);
         }
     }
-    let was_new = row.is_none();
     let same_version = row
         .as_ref()
-        .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns && !r.deleted);
+        .is_some_and(|r| r.size == stat.size as i64 && r.mtime_ns == stat.mtime_ns);
     // A feature transition may re-extract an unchanged file; its digest is still valid.
-    let known_sha = if unchanged { row.and_then(|r| r.sha256) } else { None };
-    // Listeners hear about the file once it has a row and a preview, not after its text:
-    // they check access and refresh listings for every event, and need nothing more.
-    // Re-deriving the same version changes nothing they show.
+    let known = if unchanged {
+        row.and_then(|r| r.sha256).map(|sha| (sha, StampUpdate::Keep))
+    } else {
+        None
+    };
+    // The API hears of the file once it has a row and a preview, not after its text: what
+    // browsers refresh needs nothing more. Re-deriving the same version changes nothing they
+    // show, and is no change to journal.
     let visible = || {
         if !same_version {
-            emit_event(
-                ctx,
-                if was_new {
-                    EventKind::Created
-                } else {
-                    EventKind::Changed
-                },
-                rel_path,
-                None,
-            );
+            notify_indexed(ctx);
+            journal::record(ctx, vec![NewChange::path(rel_path)]);
         }
     };
-    process_stages(ctx, rel_path, stat, known_sha, hint, None, visible)?;
+    process_stages(ctx, rel_path, stat, known, hint, None, visible)?;
     Ok(true)
+}
+
+/// An unchanged row whose stamp does not describe its file (any more, or ever): take the
+/// file's digest from `hint` while the file matches it, or else read the file again once it
+/// has settled. The same digest stamps the row; another one means the bytes changed under the
+/// same size and modification time, and the file is indexed again. True when it was.
+fn restamp(
+    ctx: &Arc<RootContext>,
+    rel_path: &str,
+    stat: FileStat,
+    row: &FileRow,
+    hint: Option<&ContentHint>,
+) -> Result<bool> {
+    let Some(known) = row.sha256.as_deref() else {
+        return Ok(false);
+    };
+    // Best effort: a file that cannot be read now keeps its row as it is, as before.
+    let Ok(Some((sha, stamp))) = reread(ctx, rel_path, stat, row, hint) else {
+        return Ok(false);
+    };
+    if sha == known {
+        if let Some(stamp) = stamp {
+            ctx.db
+                .with(|c| db::set_stamp(c, ctx.root_id, rel_path, &sha, stat.size as i64, stat.mtime_ns, stamp))?;
+        }
+        return Ok(false);
+    }
+    let changed = || {
+        notify_indexed(ctx);
+        journal::record(ctx, vec![NewChange::path(rel_path)]);
+    };
+    process_stages(
+        ctx,
+        rel_path,
+        stat,
+        Some((sha, StampUpdate::Set(stamp))),
+        None,
+        None,
+        changed,
+    )?;
+    Ok(true)
+}
+
+/// An unchanged file's digest and the stamp that comes with it: the hint's, while the file
+/// matches it, or else what a read earns. `None` when the row's stamp already proves the
+/// digest, or the file has not settled yet (the next look tries again).
+fn reread(
+    ctx: &RootContext,
+    rel_path: &str,
+    stat: FileStat,
+    row: &FileRow,
+    hint: Option<&ContentHint>,
+) -> Result<Option<(String, Option<Stamp>)>> {
+    let mut source = open_source(ctx, rel_path)?;
+    let now = Stamp::of(&source.file.metadata()?);
+    if row.stamp == Some(now) {
+        return Ok(None);
+    }
+    if let Some(hint) = hint.filter(|h| h.describes(stat, &source.file)) {
+        return Ok(Some((hint.sha256.clone(), Some(hint.version.stamp))));
+    }
+    if !settled(now.ctime_ns, SystemTime::now(), ctx.stamp_settle) {
+        return Ok(None);
+    }
+    read_digest(&mut source.file, stat, ctx.stamp_settle).map(Some)
+}
+
+/// After fdrive's API renamed a file to `rel_path`. When the row's stamp vouched for the file
+/// exactly as it was just before the rename, and a fresh stat shows it exactly as the rename
+/// left it, all four of size, modification time, inode and change time, nothing but the
+/// rename touched it: the stamp follows the file to the change time the rename left.
+/// Otherwise the row keeps its stamp, which no longer matches the file, and the next look
+/// reads the file once it has settled. True when the row took it.
+pub fn carry_stamp(ctx: &RootContext, rel_path: &str, renamed: &Renamed) -> Result<bool> {
+    let _guard = ctx.path_locks.get(rel_path);
+    let Some(row) = ctx.db.with(|c| db::file_row(c, ctx.root_id, rel_path))? else {
+        return Ok(false);
+    };
+    let recorded = FileStat {
+        size: row.size as u64,
+        mtime_ns: row.mtime_ns,
+    };
+    let (Some(sha), Some(stamp)) = (row.sha256.as_deref(), row.stamp) else {
+        return Ok(false);
+    };
+    if recorded != renamed.version.stat || stamp != renamed.previous() {
+        return Ok(false);
+    }
+    if Version::of(&open_source(ctx, rel_path)?.file.metadata()?) != renamed.version {
+        return Ok(false);
+    }
+    let stamp = renamed.version.stamp;
+    ctx.db
+        .with(|c| db::set_stamp(c, ctx.root_id, rel_path, sha, row.size, row.mtime_ns, stamp))
 }
 
 fn note_embed_outage(ctx: &RootContext, error: &anyhow::Error) {
@@ -523,20 +734,23 @@ pub fn process_inner(
     known_sha: Option<String>,
     only_feature: Option<&str>,
 ) -> Result<()> {
-    process_stages(ctx, rel_path, stat, known_sha, None, only_feature, || {})
+    let known = known_sha.map(|sha| (sha, StampUpdate::Keep));
+    process_stages(ctx, rel_path, stat, known, None, only_feature, || {})
 }
 
 /// One file in the order a person notices it: its row (a name search finds it), its
 /// thumbnails, then `visible`, then its text and last its embeddings. With a text stage on
 /// this thread (watcher and queued changes), the embeddings go to that stage: the chunks are
 /// searchable by text at once and the worker moves on instead of waiting for the model.
-/// The file is reopened from the root by descriptor; `hint` stands in for hashing it while
-/// the opened file still matches it.
+/// The file is reopened from the root by descriptor; `known` is a digest already in hand
+/// and what it does to the row's stamp, and `hint` stands in for hashing it while the
+/// opened file still matches it. A row is stamped by the indexer's own settled read, or by
+/// the hint of the API that wrote exactly those bytes.
 pub fn process_stages(
     ctx: &Arc<RootContext>,
     rel_path: &str,
     stat: FileStat,
-    known_sha: Option<String>,
+    known: Option<(String, StampUpdate)>,
     hint: Option<&ContentHint>,
     only_feature: Option<&str>,
     visible: impl FnOnce(),
@@ -545,14 +759,20 @@ pub fn process_stages(
     let ext = ext_of(name);
     let mime = guess_mime(name);
     let mut source = open_source(ctx, rel_path)?;
-    let sha = match known_sha.or_else(|| hint.and_then(|h| h.digest_for(&source.file))) {
-        Some(sha) => sha,
-        None => crate::fsx::sha256_of_file(&mut source.file)?,
+    let (sha, stamp) = match known.or_else(|| {
+        hint.filter(|h| h.describes(stat, &source.file))
+            .map(|h| (h.sha256.clone(), StampUpdate::Set(Some(h.version.stamp))))
+    }) {
+        Some(known) => known,
+        None => {
+            let (sha, stamp) = read_digest(&mut source.file, stat, ctx.stamp_settle)?;
+            (sha, StampUpdate::Set(stamp))
+        }
     };
     let source_path = source.path();
     let abs_path = source_path.as_path();
     let file_id = ctx.db.with(|c| {
-        db::upsert_file(
+        db::upsert_file_stamped(
             c,
             &NewFile {
                 root_id: ctx.root_id,
@@ -564,8 +784,23 @@ pub fn process_stages(
                 sha256: &sha,
                 mime: mime.as_deref(),
             },
+            stamp,
         )
     })?;
+    ctx.names_touched(rel_path, false);
+    if kind_for_ext(&ext) == Some(Kind::Image) {
+        // Within the thumbnail size limit, since a TIFF-based file's EXIF is read whole.
+        let photo = if skip_reason(stat.size, ctx.cfg.thumb_max_bytes).is_none() {
+            source
+                .file
+                .rewind()
+                .map(|()| photo::read(&source.file))
+                .unwrap_or_default()
+        } else {
+            Photo::default()
+        };
+        ctx.db.with(|c| db::set_photo(c, file_id, &photo))?;
+    }
 
     let mut features = ctx.values();
     if only_feature == Some("textSearch") {
@@ -633,7 +868,7 @@ pub fn process_stages(
             status = "partial".to_owned();
             empty()
         } else if features.semantic_search {
-            match embed_passages(&pieces, &ctx.cfg.embed_url, ctx.cfg.embed_batch) {
+            match embed_passages(&pieces, &ctx.cfg.text_url(), ctx.cfg.embed_batch) {
                 Ok(vectors) => {
                     note_embed_recovery(ctx);
                     vectors.into_iter().map(Some).collect()
@@ -846,7 +1081,7 @@ fn current_text_stage() -> Option<Arc<Stage>> {
 }
 
 /// Embed a file's thumbnail, on the current stage when there is one. True when it is done
-/// or waiting on an absent unit.
+/// or waiting on an unavailable unit.
 pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str) -> bool {
     let stage = STAGE.with(|s| s.borrow().clone());
     if let Some(stage) = stage
@@ -859,7 +1094,7 @@ pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str
     let mut errors = Vec::new();
     match embed_thumbnail(ctx, sha, &mut errors) {
         Ok(ok) => {
-            let waiting = !ok && (ctx.image_embed_backoff.paused() || ctx.cfg.image_embed_url.is_empty());
+            let waiting = !ok && ctx.image_embed_backoff.paused();
             if !ok && errors.is_empty() && !waiting {
                 errors.push("Thumbnail unavailable: generate a preview before retrying image search".to_owned());
             }
@@ -884,10 +1119,9 @@ pub fn process_image_embedding(ctx: &Arc<RootContext>, rel_path: &str, sha: &str
 }
 
 /// Embed the 256 px thumbnail under `sha` unless the configured model already has a row.
-/// False (without error) when unconfigured, paused, unhealthy, or there is no thumbnail.
+/// False (without error) when paused, unhealthy, or there is no thumbnail.
 pub fn embed_thumbnail(ctx: &RootContext, sha: &str, errors: &mut Vec<String>) -> Result<bool> {
-    let url = &ctx.cfg.image_embed_url;
-    if url.is_empty() || ctx.image_embed_backoff.paused() {
+    if ctx.image_embed_backoff.paused() {
         return Ok(false);
     }
     let health = ctx.image_embed_status();
@@ -913,7 +1147,8 @@ pub fn embed_thumbnail(ctx: &RootContext, sha: &str, errors: &mut Vec<String>) -
             return Ok(false);
         }
     };
-    let (vectors, model) = match image_embed::embed_images(&[data], url, ctx.cfg.image_embed_batch_size) {
+    let url = ctx.cfg.image_url();
+    let (vectors, model) = match image_embed::embed_images(&[data], &url, ctx.cfg.image_embed_batch_size) {
         Ok(result) => result,
         Err(e) if is_outage(&e) => {
             if ctx.image_embed_backoff.note_failure() {
@@ -945,7 +1180,7 @@ type StageWork = fn(&Arc<RootContext>, &str, &str, &str) -> Outcome;
 
 /// Runs one model-bound step for files on a thread of its own, so workers never wait for
 /// the model. Each scan owns an image stage; watcher and queued changes share one image
-/// stage and one text stage per root for the life of the process.
+/// stage and one text stage for the life of the process.
 pub struct Stage {
     sender: Mutex<Option<crossbeam_channel::Sender<StageItem>>>,
     abandoned: Arc<AtomicBool>,
@@ -1167,7 +1402,7 @@ pub fn embed_chunks(ctx: &RootContext, rel_path: &str, expected_sha: Option<&str
         .with(|c| db::chunks_missing_embeddings(c, ctx.root_id, rel_path))?;
     if !rows.is_empty() {
         let texts: Vec<String> = rows.iter().map(|(_, t)| t.clone()).collect();
-        let vectors = match embed_passages(&texts, &ctx.cfg.embed_url, ctx.cfg.embed_batch) {
+        let vectors = match embed_passages(&texts, &ctx.cfg.text_url(), ctx.cfg.embed_batch) {
             Ok(vectors) => vectors,
             Err(e) if is_outage(&e) => {
                 note_embed_outage(ctx, &e);
@@ -1214,69 +1449,6 @@ pub fn safe_process_with(
             let _ = ctx.db.with(|c| db::mark_file_error(c, ctx.root_id, rel_path, &message));
             "error"
         }
-    }
-}
-
-/// Yield `(abs, rel, stat)` for regular files below `root`, directories sorted by
-/// lowercase name, skipping junk. `on_error` hears about unreadable entries.
-pub fn walk(root: &Path, on_error: impl FnMut(), visit: impl FnMut(PathBuf, String, FileStat) -> bool) {
-    walk_tree(root, on_error, |_| {}, visit);
-}
-
-/// `walk`, also reporting each folder below `root` it will descend into, before its contents.
-pub fn walk_tree(
-    root: &Path,
-    mut on_error: impl FnMut(),
-    mut on_folder: impl FnMut(db::FolderRow),
-    mut visit: impl FnMut(PathBuf, String, FileStat) -> bool,
-) {
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(&dir) {
-            Ok(entries) => entries.filter_map(std::result::Result::ok).collect(),
-            Err(e) => {
-                log(&format!("skip dir {}: {e}", dir.display()));
-                on_error();
-                continue;
-            }
-        };
-        entries.sort_by_key(|e| e.file_name().to_string_lossy().to_lowercase());
-        let mut subdirs = Vec::new();
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !should_index_name(&name, SKIP_NAMES) {
-                continue;
-            }
-            let metadata = match std::fs::symlink_metadata(entry.path()) {
-                Ok(metadata) => metadata,
-                Err(e) => {
-                    log(&format!("skip {}: {e}", entry.path().display()));
-                    on_error();
-                    continue;
-                }
-            };
-            if metadata.is_dir() {
-                if should_walk_dir(&name, SKIP_DIRS) {
-                    let path = entry.path();
-                    let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-                    on_folder(db::FolderRow {
-                        path: rel,
-                        mtime_ns: FileStat::of(&metadata).mtime_ns,
-                    });
-                    subdirs.push(path);
-                }
-                continue;
-            }
-            if !metadata.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            let rel = path.strip_prefix(root).unwrap_or(&path).to_string_lossy().into_owned();
-            if !visit(path, rel, FileStat::of(&metadata)) {
-                return;
-            }
-        }
-        stack.extend(subdirs.into_iter().rev());
     }
 }
 
@@ -1343,8 +1515,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         };
     }
     let started = match ctx.db.with(|c| {
+        let baseline = db::scan_baseline(c, ctx.root_id)?;
         let started = db::start_scan(c, ctx.root_id)?;
-        Ok((started, db::scan_manifest(c, ctx.root_id)?))
+        Ok((baseline, started, db::scan_manifest(c, ctx.root_id)?))
     }) {
         Ok(started) => started,
         Err(e) => {
@@ -1355,20 +1528,23 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
             };
         }
     };
-    let ((scan_id, started_at), manifest) = started;
+    let ((finished_before, had_folders), (scan_id, started_at), manifest) = started;
+    // Differences are journaled only against a baseline: without rows to compare with, every
+    // file would look new, and none of them changed. The first scan of an empty index, the
+    // one after the whole index was cleared and the one after an interrupted first scan
+    // journal nothing.
+    let journal_files = (finished_before && !manifest.is_empty()).then_some(Source::Scan);
+    let journal_folders = journal_files.filter(|_| had_folders);
     let t0 = Instant::now();
-    let mut unseen: HashSet<String> = manifest
-        .iter()
-        .filter(|(_, row)| !row.deleted)
-        .map(|(path, _)| path.clone())
-        .collect();
+    let mut unseen: HashSet<String> = manifest.keys().cloned().collect();
     let counters = Arc::new(ScanCounters {
         changed: AtomicI64::new(0),
         errors: AtomicI64::new(0),
         media_backfill_errors: AtomicI64::new(0),
     });
     let image_op = operations.get("imageSearch").cloned();
-    let stage = (image_op.is_some() && !ctx.cfg.image_embed_url.is_empty())
+    let stage = image_op
+        .is_some()
         .then(|| ImageStage::start(Arc::clone(ctx), &format!("image-embed-{}", ctx.name)));
 
     let workers = ctx.settings().workers.max(1);
@@ -1385,10 +1561,12 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
             std::thread::Builder::new()
                 .name(format!("scan-{}-{i}", ctx.name))
                 .spawn(move || {
-                    for job in receiver {
-                        ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
-                        tracked_job(&ctx, job, &counters, stage.as_ref(), image_op.as_ref());
-                    }
+                    journal::with_source(journal_files, || {
+                        for job in receiver {
+                            ctx.yield_to_foreground(FOREGROUND_WAIT_LIMIT);
+                            tracked_job(&ctx, job, &counters, stage.as_ref(), image_op.as_ref());
+                        }
+                    });
                 })
                 .ok()
         })
@@ -1477,19 +1655,39 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     // A worker can observe disablement after traversal finished.
     let traversal_complete = traversal_complete && ctx.values().indexer_enabled();
     let unseen: Vec<String> = unseen.into_iter().collect();
-    let deleted = if traversal_complete {
+    let vanished = if traversal_complete {
         ctx.db
-            .with(|c| db::sweep_vanished(c, ctx.root_id, &unseen, started_at))
+            .with(|c| db::sweep_vanished_paths(c, ctx.root_id, &unseen, started_at))
             .unwrap_or_else(|e| {
                 log(&format!("[{}] sweep failed: {}", ctx.name, describe(&e)));
-                0
+                Vec::new()
             })
     } else {
-        0
+        Vec::new()
     };
+    let deleted = vanished.len() as i64;
+    for path in &vanished {
+        ctx.names_touched(path, false);
+    }
+    if traversal_complete && let Err(e) = failures::resolve_gone(&ctx.db, ctx.root_id, started_at) {
+        log(&format!("[{}] resolving failures failed: {}", ctx.name, describe(&e)));
+    }
+    if let Some(source) = journal_files {
+        let gone: Vec<NewChange> = vanished.iter().map(|path| NewChange::path(path)).collect();
+        journal::record_as(ctx, source, &gone);
+    }
     let sweep = traversal_complete.then_some(("", started_at));
-    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, &folders, sweep)) {
-        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    match ctx
+        .db
+        .with(|c| db::sync_folders_changes(c, ctx.root_id, &folders, sweep))
+    {
+        Ok(changes) => {
+            touch_folders(ctx, &changes);
+            if let Some(source) = journal_folders {
+                journal::record_as(ctx, source, &folder_changes(&changes));
+            }
+        }
+        Err(e) => log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e))),
     }
     if traversal_complete && ctx.needs_media_backfill() && counters.media_backfill_errors.load(Ordering::SeqCst) == 0 {
         ctx.finish_media_backfill();
@@ -1497,11 +1695,9 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
     // An unreadable entry only stops the sweep; it is not a file failure.
     let errors = counters.errors.load(Ordering::SeqCst);
     let changed = counters.changed.load(Ordering::SeqCst);
-    let finished = ctx.db.with(|c| {
-        db::finish_scan(c, scan_id, seen, changed, deleted, errors)?;
-        db::prune_events(c, ctx.cfg.events_retention_days)?;
-        Ok(())
-    });
+    let finished = ctx
+        .db
+        .with(|c| db::finish_scan(c, scan_id, seen, changed, deleted, errors));
     if let Err(e) = finished.and_then(|()| failures::prune(&ctx.db)) {
         log(&format!("[{}] scan bookkeeping failed: {}", ctx.name, describe(&e)));
     }
@@ -1510,6 +1706,11 @@ fn scan_inner(ctx: &Arc<RootContext>, operations: &HashMap<String, Op>) -> ScanR
         ctx.name,
         t0.elapsed().as_secs_f64()
     ));
+    // A completed walk is a good moment to read the names again whole: it catches modification
+    // times of unchanged folders and anything the index missed.
+    if traversal_complete {
+        ctx.names_rebuild();
+    }
     ScanResult {
         seen,
         changed,
@@ -1640,7 +1841,7 @@ pub fn watch_index_with(
     }
     let _foreground = ctx.foreground();
     // Inline embedding paced every watcher worker at the model's speed.
-    let stage = (features.image_search && !ctx.cfg.image_embed_url.is_empty()).then(|| ctx.watch_image_stage());
+    let stage = features.image_search.then(|| ctx.watch_image_stage());
     let text = features.semantic_search.then(|| ctx.watch_text_stage());
     let (status, observed) = attempt(HashMap::new(), || {
         with_stage(stage, || {
@@ -1654,17 +1855,26 @@ pub fn watch_index_with(
     }
 }
 
-pub fn watch_mark_deleted(ctx: &RootContext, rel_path: &str, is_dir: bool) -> usize {
+/// Delete the rows of a path that is gone (with `is_dir`, also those below it); returns file
+/// rows deleted.
+pub fn watch_delete(ctx: &RootContext, rel_path: &str, is_dir: bool) -> usize {
     if !ctx.values().indexer_enabled() {
         return 0;
     }
     let _guard = ctx.path_locks.get(rel_path);
-    match ctx.db.with(|c| db::mark_deleted(c, ctx.root_id, rel_path, is_dir)) {
-        Ok(ids) => {
-            if !ids.is_empty() {
-                emit_event(ctx, EventKind::Deleted, rel_path, None);
+    match ctx.db.with(|c| db::delete_paths(c, ctx.root_id, rel_path, is_dir)) {
+        Ok(deleted) => {
+            if !deleted.files.is_empty() || deleted.folders > 0 {
+                ctx.names_touched(rel_path, is_dir);
             }
-            ids.len()
+            if !deleted.files.is_empty() {
+                notify_indexed(ctx);
+            }
+            // An empty folder has no file rows, but its going is still a change.
+            if !deleted.files.is_empty() || deleted.folders > 0 {
+                journal::record(ctx, vec![NewChange::path(rel_path)]);
+            }
+            deleted.files.len()
         }
         Err(e) => {
             log(&format!("watch: delete {rel_path} failed: {}", describe(&e)));
@@ -1698,14 +1908,36 @@ pub fn folder_chain(root: &Path, rel: &str) -> Vec<db::FolderRow> {
 }
 
 /// Write `found` to the root's folder rows; with `sweep`, also drop the rows below that folder
-/// the walk that found them did not see. Nothing is written while indexing is off.
+/// the walk that found them did not see. Nothing is written while indexing is off. Folders
+/// added and dropped are journaled under the thread's source.
 pub fn record_folders(ctx: &RootContext, found: &[db::FolderRow], sweep: Option<(&str, DateTime<Utc>)>) {
     if (found.is_empty() && sweep.is_none()) || !ctx.values().indexer_enabled() {
         return;
     }
-    if let Err(e) = ctx.db.with(|c| db::sync_folders(c, ctx.root_id, found, sweep)) {
-        log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e)));
+    match ctx.db.with(|c| db::sync_folders_changes(c, ctx.root_id, found, sweep)) {
+        Ok(changes) => {
+            touch_folders(ctx, &changes);
+            journal::record(ctx, folder_changes(&changes));
+        }
+        Err(e) => log(&format!("[{}] folder sync failed: {}", ctx.name, describe(&e))),
     }
+}
+
+/// Tell the name index about every folder row added or dropped.
+fn touch_folders(ctx: &RootContext, changes: &db::FolderChanges) {
+    for path in changes.added.iter().chain(&changes.dropped) {
+        ctx.names_touched(path, false);
+    }
+}
+
+/// One journal row per folder added or dropped.
+fn folder_changes(changes: &db::FolderChanges) -> Vec<NewChange> {
+    changes
+        .added
+        .iter()
+        .chain(&changes.dropped)
+        .map(|path| NewChange::path(path))
+        .collect()
 }
 
 /// A folder appeared or changed under `rel`: record it, the folders above it and every folder
@@ -1745,23 +1977,24 @@ pub fn watch_rename(ctx: &RootContext, old: &str, new: &str, is_dir: bool) -> us
         return 0;
     }
     if !is_dir && ext_of(basename(old)) != ext_of(basename(new)) {
-        watch_mark_deleted(ctx, old, false);
+        watch_delete(ctx, old, false);
         return 0;
     }
     let _guard = ctx.path_locks.get_many(&[old, new]);
-    let moved = ctx.db.with(|c| {
-        let moved = db::rename_paths(c, ctx.root_id, old, new, is_dir)?;
-        if moved > 0 {
-            db::insert_move(c, ctx.root_id, old, new, "watcher")?;
-        }
-        Ok(moved)
-    });
-    match moved {
+    match ctx.db.with(|c| db::move_paths(c, ctx.root_id, old, new, is_dir)) {
         Ok(moved) => {
-            if moved > 0 {
-                emit_event(ctx, EventKind::Moved, old, Some(new));
+            if moved.files + moved.folders > 0 {
+                ctx.names_touched(old, is_dir);
+                ctx.names_touched(new, is_dir);
             }
-            moved as usize
+            if moved.files > 0 {
+                notify_indexed(ctx);
+            }
+            // An empty folder moves only its folder rows, but that is still a move.
+            if moved.files + moved.folders > 0 {
+                journal::record(ctx, vec![NewChange::moved(old, new)]);
+            }
+            moved.files as usize
         }
         Err(e) => {
             log(&format!("watch: rename {old} -> {new} failed: {}", describe(&e)));

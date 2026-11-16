@@ -1,13 +1,5 @@
 export { AboutResponse } from "./about.ts";
 export {
-  AccountFavoriteItem,
-  AccountFavoritesResponse,
-  AccountIdentityId,
-  LinkIdentityRequest,
-  SwitchIdentityRequest,
-  UnlinkIdentityRequest,
-} from "./accounts.ts";
-export {
   ActivityOperation,
   SystemActivityId,
   SystemActivityItem,
@@ -58,7 +50,6 @@ export {
 export { IdentitySummary, LoginRequest, LoginResponse, MeResponse } from "./auth.ts";
 export { createBackupClient } from "./backup-client.ts";
 export {
-  BackupAttachmentInput,
   BackupDestinationInput,
   BackupEstimateJob,
   BackupRecoveryStatus,
@@ -79,7 +70,15 @@ export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from 
 export * from "./desktop.ts";
 export * from "./desktop-writes.ts";
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
-export { FsEvent, JobEvent, PingEvent, SseEvent } from "./events.ts";
+export {
+  FsEvent,
+  IndexedEvent,
+  JobEvent,
+  PingEvent,
+  ResyncEvent,
+  SSE_EVENT_ID,
+  SseEvent,
+} from "./events.ts";
 export {
   FEATURE_IDS,
   FEATURES_SETTINGS_KEY,
@@ -88,6 +87,7 @@ export {
   FeatureStatus,
   FeaturesUpdateRequest,
   FeatureValues,
+  indexerEnabled,
   SystemFeaturesResponse,
   WORKER_TOKEN_HEADER,
 } from "./features.ts";
@@ -132,6 +132,7 @@ export {
   JobsResponse,
 } from "./jobs.ts";
 export {
+  CreateSavedSearchRequest,
   CreateTagRequest,
   FavoriteItem,
   FavoriteKind,
@@ -145,6 +146,8 @@ export {
   RecentsResponse,
   RecentTouchRequest,
   RemoveFolderViewRequest,
+  SavedSearch,
+  SavedSearchesResponse,
   SetFileTagsRequest,
   SetFolderViewRequest,
   Tag,
@@ -167,20 +170,8 @@ export {
   SystemOfficeResponse,
 } from "./office.ts";
 export * from "./personal-activity.ts";
+export { PhotoDetailsResponse, PhotoItem, PhotosResponse } from "./photos.ts";
 export * from "./processing-failures.ts";
-export {
-  AdminProvider,
-  AdminProvidersResponse,
-  AdminProviderUpdateRequest,
-  ProviderCapabilities,
-  ProviderField,
-  ProviderFieldKind,
-  ProviderFieldValues,
-  ProviderName,
-  ProvidersResponse,
-  ProviderType,
-  PublicProvider,
-} from "./providers.ts";
 export {
   HttpOrigin,
   PUBLIC_URL_SETTINGS_KEY,
@@ -190,15 +181,12 @@ export {
 export type { Routes } from "./routes.ts";
 export {
   accountTokenRoute,
-  adminProviderRoute,
   adminUserRoute,
   chatActionRoute,
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
   grantRoute,
-  IDENTITY_HEADER,
-  IDENTITY_QUERY_PARAM,
   jobCancelRoute,
   jobRoute,
   MODIFIED_AT_HEADER,
@@ -207,11 +195,11 @@ export {
   PUBLIC_SHARE_SUFFIXES,
   publicShareRoute,
   ROUTES,
+  savedSearchRoute,
   systemLogsRoute,
   tagFilesRoute,
   tagRoute,
 } from "./routes.ts";
-export { IdentityScopeReason } from "./scopes.ts";
 export {
   ImageSearchHit,
   ImageSearchQuery,
@@ -223,6 +211,7 @@ export {
   SearchSections,
   SearchSnippet,
   SearchStatusResponse,
+  SearchTypeFilter,
 } from "./search.ts";
 export {
   SETUP_TOKEN_HEADER,
@@ -230,6 +219,17 @@ export {
   SetupStatusResponse,
 } from "./setup.ts";
 export * from "./shares.ts";
+export {
+  DEFAULT_STORAGE_NAME,
+  STORAGE_NAME_SETTINGS_KEY,
+  StorageDuplicates,
+  StorageFile,
+  StorageKind,
+  StorageName,
+  StorageUsageResponse,
+  SystemStorage,
+  SystemStorageUpdateRequest,
+} from "./storage.ts";
 export {
   ImageEmbeddingClearJob,
   ImageEmbeddingRebuildJob,
@@ -241,7 +241,6 @@ export {
   IndexerHealth,
   IndexerLastScan,
   IndexerReindexRequest,
-  IndexerRootStats,
   IndexerSettingsResponse,
   IndexerSettingsSources,
   IndexerSettingsUpdateRequest,
@@ -293,17 +292,14 @@ export {
   CreateApiTokenResponse,
 } from "./tokens.ts";
 export {
+  DEFAULT_TRASH_RETENTION_DAYS,
   isValidPath,
-  SystemTrashQuery,
-  TrashConfiguration,
+  TRASH_RETENTION_SETTINGS_KEY,
   TrashEntry,
   TrashListResponse,
   TrashPurgeRequest,
   TrashRestoreRequest,
   TrashRestoreResponse,
   TrashSettings,
-  TrashSettingsUpdateRequest,
-  TrashStatusResponse,
-  TrashStrategy,
 } from "./trash.ts";
 export * from "./users.ts";

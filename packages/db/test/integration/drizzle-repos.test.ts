@@ -2,7 +2,7 @@ import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testconta
 import { and, eq, sql } from "drizzle-orm";
 import type { Pool, PoolClient } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createDb, createOfficeFileRepo, type Db, migrate } from "../../src/index.js";
+import { createDb, type Db, migrate } from "../../src/index.js";
 import { createFilesFolderFacts, createRepos } from "../../src/repos/drizzle.js";
 import { PATH_CHUNK_SIZE } from "../../src/repos/path-chunks.js";
 import {
@@ -48,7 +48,7 @@ defineReposSuite("drizzle", async () => {
       app.ai_chats,
       app.sessions,
       app.api_tokens,
-      app.credentials,
+      app.local_users,
       app.file_tags,
       app.favorites,
       app.folder_views,
@@ -56,7 +56,6 @@ defineReposSuite("drizzle", async () => {
       app.tags,
       app.identities,
       app.accounts,
-      app.providers,
       app.settings,
       app.system_events
     cascade
@@ -127,23 +126,17 @@ describe("metadata prefix operations", () => {
         app.recents,
         app.tags,
         app.identities,
-        app.accounts,
-        app.providers
+        app.accounts
       cascade
     `);
   });
 
   async function createIdentity(label: string) {
     const repos = createRepos(db);
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: `http://prefix-${label}`,
-    });
     const account = await repos.accounts.create({ displayName: label });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: label,
+      username: label,
     });
     return { account, identity, repos };
   }
@@ -507,24 +500,6 @@ describe("metadata prefix operations", () => {
   });
 });
 
-// Office file rows go with their provider: a provider with no logins but
-// past Office documents must still be removable (the FK cascades).
-it("cascades office_files when their provider is deleted", async () => {
-  await db.execute(sql`truncate table app.office_files, app.providers cascade`);
-  const repos = createRepos(db);
-  const officeFiles = createOfficeFileRepo(db);
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://office" });
-  const file = await officeFiles.ensure({
-    providerId: provider.id,
-    rootName: "sftpgo",
-    path: "alice/report.docx",
-  });
-  expect(await officeFiles.get(file.id)).not.toBeNull();
-  await repos.providers.delete(provider.id);
-  expect(await repos.providers.get(provider.id)).toBeNull();
-  expect(await officeFiles.get(file.id)).toBeNull();
-});
-
 // A directory listing is unbounded, and `decorate` binds one parameter per
 // entry, so a folder filled outside fdrive (rsync, SMB) can push
 // these lookups past what one statement may carry. The listing below exceeds
@@ -543,23 +518,17 @@ describe("metadata lookups for oversized directory listings", () => {
         app.favorites,
         app.tags,
         app.identities,
-        app.accounts,
-        app.providers
+        app.accounts
       cascade
     `);
   });
 
   async function seedListing() {
     const repos = createRepos(db);
-    const provider = await repos.providers.ensure({
-      type: "local",
-      baseUrl: "http://oversized",
-    });
     const account = await repos.accounts.create({ displayName: "oversized" });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "oversized",
+      username: "oversized",
     });
     const work = await repos.tags.create(account.id, { name: "Work", color: null });
     const personal = await repos.tags.create(account.id, { name: "Personal", color: null });
@@ -656,7 +625,7 @@ describe("createFilesFolderFacts", () => {
     expect(row?.installationId).toBe(id);
   });
 
-  it("holds files once there is a user or a live indexed file, not a deleted one", async () => {
+  it("holds files once there is a user or an indexed file", async () => {
     const facts = createFilesFolderFacts(db);
     expect(await facts.holdsFiles()).toBe(false);
 
@@ -672,8 +641,6 @@ describe("createFilesFolderFacts", () => {
       size: 1,
       mtimeNs: 1n,
     };
-    await db.insert(files).values({ ...file, path: "alice/gone.txt", deletedAt: new Date() });
-    expect(await facts.holdsFiles()).toBe(false);
     await db.insert(files).values({ ...file, path: "alice/a.txt" });
     expect(await facts.holdsFiles()).toBe(true);
 

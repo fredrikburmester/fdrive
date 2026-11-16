@@ -32,24 +32,36 @@ Results are ordered by what the query most likely meant, then by age. A file who
 the query comes first, then one whose name holds every query word, then one whose name and
 folders hold them between them; all of these rank above a file found by its content alone.
 Words match from their start, ignoring case, punctuation and how accents are encoded, so a
-name macOS stored with decomposed accents matches the same word typed normally. Every score
-is then weighted by modification time: full weight today, falling toward 40% with a half-life
+name macOS stored with decomposed accents matches the same word typed normally.
+
+A name typed with a typo is found too: a word of five to eight letters may hold one typo, and
+a longer word two (a letter changed, added, dropped, or two neighbours swapped), so "Microlär"
+finds "Mikrolärande". An a typed for an ä counts as one typo. These matches come from the
+indexer's name index and rank below every name spelled as typed, however new, but above a file
+found by its content alone. While the indexer cannot answer, names are found only as typed.
+Every score is then weighted by modification time: full weight today, falling toward 40% with a half-life
 of 180 days. A recent file therefore beats an older one that matched about as well, and an
 old file still surfaces when it matches clearly better. The constants live in
 [ranking.ts](../packages/core/src/search/ranking.ts).
 
 The Folders section lists up to five folders whose own name holds every query word, empty
 ones included, ranked the same way: by how the name matches, then by the folder's
-modification time. The indexer records every folder it walks in `idx.folders`, so a folder
+modification time. A folder whose name matches only with a typo comes after every other. The indexer records every folder it walks in `idx.folders`, so a folder
 made a moment ago in fdrive is found at once, as is one made over SMB once the watcher sees
 it. Your own home folder, and the folder a "This folder only" search starts in, are never
 listed, and a type filter hides the section, since folders have no type.
 
-Index-backed results cover the files folder, including folders other users share with you,
-and require live read permission. The login's Trash folder is left out by every search query,
-mapped through its index scopes, before the query's row limit, so trashed files never crowd out
-live ones. For account-wide queries, text may span linked identities while visual results
-remain scoped to the active identity.
+**Save search** in the panel keeps the query, the type filter and, with "This folder only", that
+folder under a name in the sidebar's Saved searches (`app.saved_searches`, one list per account).
+Opening one runs the search again for live results; its context menu removes it.
+
+Index-backed results cover the files folder, including folders other users share with you.
+The login's [scopes](SCOPING.md), computed for each request, are the permission, so a share
+that ends drops out of the next search; no result reads storage. A file deleted outside fdrive
+can show until the indexer notices, and opening it answers not found. fdrive's own folders (`isReservedPath` in `@fdrive/core`: the
+Trash at `/.trash` and the Mac app's `/.fdrive-desktop`) are left out by every search, image search, MCP and
+AI index query, mapped through the login's index scopes, before the query's row limit, so they
+never crowd out live files or count in a total.
 
 PDF conversion rewrites the file in place, so System > Searchable PDFs keeps the file each
 rewrite replaced. **Kept originals** there lists them with what each one would overwrite, and

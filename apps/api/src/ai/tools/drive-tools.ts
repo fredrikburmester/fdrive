@@ -2,17 +2,17 @@ import { DEFAULT_ORGANIZE_SHARING, type OrganizeSharing } from "@fdrive/contract
 import {
   baseName,
   type FileEntry,
+  isReservedPath,
   isUnderPath,
   normalizePath,
   parentPath,
   toFsPath,
 } from "@fdrive/core";
-import type { IndexedFile } from "@fdrive/db";
+import { INDEX_ROOT_ID, type IndexedFile } from "@fdrive/db";
 import { z } from "zod";
 import type { Principal } from "../../auth/principal.js";
 import { type McpToolDeps, runSearch, runSimilarFiles } from "../../mcp/handlers.js";
 import { resolveScopeContext, type ScopeContext, virtualPathFor } from "../../mcp/scope-context.js";
-import { createReadAuthorizer, type ReadAuthorizer } from "../../scoping/read-authorizer.js";
 import { toIndexRelativePath } from "../../search/scopes.js";
 import { createPathLocator } from "./stored-paths.ts";
 import { type AiTool, AiToolError, defineTool, formatSize } from "./tool.ts";
@@ -38,7 +38,7 @@ export interface DriveToolsDeps {
   readonly mcp: McpToolDeps;
   readonly principal: Principal;
   readonly focus: ToolFocus;
-  /** Whether the identity has verified index scopes, so excerpts, search and similarity can work. */
+  /** Whether the files folder is indexed, so excerpts, search and similarity can work. */
   readonly indexed: boolean;
   /** What the person chose to share with the model; defaults to everything. */
   readonly share?: OrganizeSharing | undefined;
@@ -65,13 +65,8 @@ function sharingOf(deps: DriveToolsDeps): OrganizeSharing {
   return deps.share ?? DEFAULT_ORGANIZE_SHARING;
 }
 
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
-function inTrash(trashPath: string | null, path: string): boolean {
-  return trashPath !== null && (path === trashPath || isUnderPath(trashPath, path));
-}
+/** Why a folder tool refuses one of fdrive's own folders (`isReservedPath`), which it never opens or shows. */
+const RESERVED_FOLDER = "That folder is fdrive's own, like the Trash.";
 
 function normalizeArg(path: string): string {
   try {
@@ -145,8 +140,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
       activity: (args) => `Looked through ${args.path}`,
       async run(args, signal) {
         const root = await storedArg(deps, args.path);
-        const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, root)) throw new AiToolError("That folder is the Trash.");
+        if (isReservedPath(root)) throw new AiToolError(RESERVED_FOLDER);
         const listings = new Map<string, FileEntry[] | string>();
         let frontier = isClosed(focus, root) ? [] : [root];
         let budget = TREE_LISTING_BUDGET;
@@ -171,7 +165,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
                   .filter(
                     (entry) =>
                       entry.kind === "dir" &&
-                      !inTrash(trashPath, entry.path) &&
+                      !isReservedPath(entry.path) &&
                       !isClosed(focus, entry.path),
                   )
                   .map((entry) => entry.path)
@@ -199,7 +193,7 @@ function folderTreeTool(deps: DriveToolsDeps): AiTool {
             return;
           }
           const dirs = entries
-            .filter((entry) => entry.kind === "dir" && !inTrash(trashPath, entry.path))
+            .filter((entry) => entry.kind === "dir" && !isReservedPath(entry.path))
             .sort((a, b) => a.name.localeCompare(b.name));
           const files = entries.filter((entry) => entry.kind !== "dir");
           // Without other file names, only files in the focus are named; the count still covers every file.
@@ -246,10 +240,9 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
       activity: (args) => `Opened ${args.path}`,
       async run(args) {
         const path = await storedArg(deps, args.path);
-        const trashPath = trashPathOf(deps);
-        if (inTrash(trashPath, path)) throw new AiToolError("That folder is the Trash.");
+        if (isReservedPath(path)) throw new AiToolError(RESERVED_FOLDER);
         const all = (await deps.principal.storage.list(path)).filter(
-          (entry) => !inTrash(trashPath, entry.path),
+          (entry) => !isReservedPath(entry.path),
         );
         const withheld = otherFileNames
           ? 0
@@ -283,13 +276,12 @@ function listFolderTool(deps: DriveToolsDeps): AiTool {
 
 export interface IndexScope {
   readonly ctx: ScopeContext;
-  readonly authorizer: ReadAuthorizer;
 }
 
 export interface IndexLookup {
-  /** The identity's verified index scope, resolved once; `null` when the index cannot be used. */
+  /** The identity's scopes, resolved once; `null` when the index cannot be used. */
   scope(): Promise<IndexScope | null>;
-  /** The index row for a stored path that round-trips and passes a live read check, else `null`. */
+  /** The index row for a stored path that round-trips, else `null`. */
   file(path: string): Promise<{ file: IndexedFile; scope: IndexScope } | null>;
 }
 
@@ -300,32 +292,23 @@ export function createIndexLookup(deps: DriveToolsDeps): IndexLookup {
     scope() {
       if (scope === undefined)
         scope = (async (): Promise<IndexScope | null> => {
-          const identity = await deps.mcp.identities.get(deps.principal.identityId);
-          const verified =
-            identity === null ? null : await deps.mcp.scopeResolver.verifiedIndexScopes(identity);
-          if (verified === null || !verified.available) return null;
-          const ctx = await resolveScopeContext(
-            deps.mcp.indexQueries,
-            verified.scopes,
-            trashPathOf(deps),
-          );
-          if (ctx === null) return null;
-          return { ctx, authorizer: createReadAuthorizer({ storage: deps.principal.storage }) };
+          if (!(await deps.mcp.indexed())) return null;
+          const scopes = await deps.mcp.scopeResolver.scopesFor(deps.principal.username);
+          const ctx = resolveScopeContext(scopes);
+          return ctx === null ? null : { ctx };
         })();
       return scope;
     },
     async file(path) {
       const resolved = await lookup.scope();
       if (resolved === null) return null;
-      const { ctx, authorizer } = resolved;
+      const { ctx } = resolved;
       const fsPath = toFsPath(ctx.scopes, path);
-      const rootId = fsPath === null ? undefined : ctx.rootIdByName.get(fsPath.rootName);
       const file =
-        fsPath === null || rootId === undefined
+        fsPath === null
           ? null
-          : await deps.mcp.indexQueries.fileByPath(rootId, toIndexRelativePath(fsPath.fsPath));
-      if (file === null || virtualPathFor(ctx, file.rootId, file.path) !== path) return null;
-      if (!(await authorizer.authorize({ path, kind: "file" })).allowed) return null;
+          : await deps.mcp.indexQueries.fileByPath(INDEX_ROOT_ID, toIndexRelativePath(fsPath));
+      if (file === null || virtualPathFor(ctx, file.path) !== path) return null;
       return { file, scope: resolved };
     },
   };

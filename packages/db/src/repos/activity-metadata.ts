@@ -1,7 +1,7 @@
 import type { ActivityFacts, ActivitySubject, PersonalActivityAction } from "@fdrive/contracts";
 import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../index.js";
-import { favorites, fileTags, folderViews, identities, tags } from "../schema/app.js";
+import { favorites, fileTags, folderViews, tags } from "../schema/app.js";
 import { ensureActivityFile, lockActivityRegistry } from "./activity-registry.js";
 import { captureActivityIdentity } from "./activity-writer.js";
 
@@ -15,18 +15,8 @@ export async function captureActivityMetadata(
   now = new Date(),
 ) {
   await db.execute(sql`select id from app.accounts where id = ${accountId} for no key update`);
-  const linked = await db
-    .select()
-    .from(identities)
-    .where(eq(identities.accountId, accountId))
-    .orderBy(identities.id)
-    .for("update");
-  if (!linked.some((identity) => identity.id === identityId))
-    throw Error("Identity ownership changed");
-  for (const identity of linked) {
-    await captureActivityIdentity(db, { accountId, identityId: identity.id });
-    await lockActivityRegistry(db, identity.id);
-  }
+  await captureActivityIdentity(db, { accountId, identityId });
+  await lockActivityRegistry(db, identityId);
   const before: ActivityFacts = { ...(requested.path ? { path: requested.path } : {}) };
   let paths: { identityId: string; path: string; kind?: "file" | "dir" }[] = [];
   let absent = false;
@@ -44,11 +34,7 @@ export async function captureActivityMetadata(
       paths = await db
         .selectDistinct({ identityId: fileTags.identityId, path: fileTags.path })
         .from(fileTags)
-        .innerJoin(
-          identities,
-          and(eq(identities.id, fileTags.identityId), eq(identities.accountId, accountId)),
-        )
-        .where(eq(fileTags.tagId, id));
+        .where(and(eq(fileTags.identityId, identityId), eq(fileTags.tagId, id)));
   } else if (action === "file.tags.set" && requested.path) {
     before.tags = await db
       .select({ id: tags.id, name: tags.name, color: tags.color })
@@ -72,14 +58,11 @@ export async function captureActivityMetadata(
         mode: folderViews.mode,
       })
       .from(folderViews)
-      .innerJoin(
-        identities,
-        and(eq(identities.id, folderViews.identityId), eq(identities.accountId, accountId)),
-      )
       .where(
-        requested.variant === "all"
-          ? undefined
-          : and(eq(folderViews.identityId, identityId), eq(folderViews.path, requested.path ?? "")),
+        and(
+          eq(folderViews.identityId, identityId),
+          requested.variant === "all" ? undefined : eq(folderViews.path, requested.path ?? ""),
+        ),
       );
     absent = !rows.length;
     // A folder view row can pin only a sort, leaving the mode null; that is no view to record.

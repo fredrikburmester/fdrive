@@ -35,15 +35,6 @@ export type AppHono = Hono<{ Variables: AppVariables }>;
 /** The `/api/v1` sub-app mounted behind `createRequireAuth`. */
 export type AuthedHono = Hono<{ Variables: AppVariables & PrincipalVariables }>;
 
-/**
- * Whether fdrive setup is still required, and the enabled providers to
- * show on the public `/about` route.
- */
-export interface ConnectionStatus {
-  readonly required: boolean;
-  readonly providers: readonly { readonly type: string; readonly host: string }[];
-}
-
 export interface AppRouteGroups {
   public: AppHono;
   authed: AuthedHono;
@@ -51,7 +42,6 @@ export interface AppRouteGroups {
 }
 
 export interface AppDeps {
-  readonly requestGate?: (path: string, method: string, work: () => Promise<void>) => Promise<void>;
   readonly config: AppConfig;
   readonly logger: Logger;
   readonly clock?: () => Date;
@@ -67,12 +57,11 @@ export interface AppDeps {
    */
   readonly principalResolver?: PrincipalResolver;
   /**
-   * Reports whether fdrive setup is required and the enabled providers to
-   * show on `/about`. Defaults to "set up, no providers", which is enough
-   * for tests that do not exercise provider rows; `composeApp` wires the
-   * real `ProviderService`-backed version.
+   * Whether fdrive setup is still required: every route outside
+   * `SETUP_EXEMPT_PREFIXES` refuses with `setup_required` until it is done,
+   * and `/about` says so. Defaults to "set up".
    */
-  readonly connectionStatus?: () => Promise<ConnectionStatus>;
+  readonly setupRequired?: () => Promise<boolean>;
   /**
    * Lets route-chunks (and tests) add routes to the public or authed
    * `/api/v1` sub-apps without `createApp` knowing about every feature.
@@ -133,14 +122,11 @@ export function redactMcpTokenPath(path: string): string {
 export function createApp(deps: AppDeps): AppHono {
   const clock = deps.clock ?? (() => new Date());
   const principalResolver: PrincipalResolver = deps.principalResolver ?? (async () => null);
-  const connectionStatus: () => Promise<ConnectionStatus> =
-    deps.connectionStatus ?? (async () => ({ required: false, providers: [] }));
+  const setupRequired = deps.setupRequired ?? (async () => false);
   const app: AppHono = new Hono();
 
   app.use("*", requestIdMiddleware({ headerName: REQUEST_ID_HEADER }));
   app.use("*", secureHeaders());
-  const requestGate = deps.requestGate;
-  if (requestGate) app.use("*", (c, next) => requestGate(c.req.path, c.req.method, next));
 
   app.use("*", async (c, next) => {
     const start = Date.now();
@@ -162,11 +148,8 @@ export function createApp(deps: AppDeps): AppHono {
     app.use(prefix, createCsrfGuard());
 
     app.use(prefix, async (c, next) => {
-      if (!isSetupExempt(c.req.path)) {
-        const status = await connectionStatus();
-        if (status.required) {
-          throw new ApiHttpError("setup_required", "fdrive setup has not been completed yet");
-        }
+      if (!isSetupExempt(c.req.path) && (await setupRequired())) {
+        throw new ApiHttpError("setup_required", "fdrive setup has not been completed yet");
       }
       await next();
     });
@@ -191,25 +174,15 @@ export function createApp(deps: AppDeps): AppHono {
     return c.json(body);
   });
 
+  // Reachable without a session (see SETUP_EXEMPT_PREFIXES): the login page
+  // reads `setupRequired` to decide whether to redirect to `/setup`.
   v1.get("/about", async (c) => {
-    const status = await connectionStatus();
-    // `/about` is reachable without a session (see SETUP_EXEMPT_PREFIXES),
-    // so an anonymous caller must not learn the configured storage hosts:
-    // only reveal each provider's label once `principalResolver` confirms a
-    // valid session. The provider types still tell an anonymous caller setup
-    // is complete, which the login page needs to decide whether to redirect
-    // to `/setup`.
-    const principal = status.providers.length === 0 ? null : await principalResolver(c);
     const body: AboutResponse = AboutResponse.parse({
       version: deps.version,
       release: deps.release ?? undefined,
       revision: deps.revision ?? undefined,
       uptimeSeconds: Math.max(0, (clock().getTime() - deps.startedAt.getTime()) / 1000),
-      providers: status.providers.map((provider) => ({
-        type: provider.type,
-        label: principal === null ? null : provider.host,
-      })),
-      setupRequired: status.required,
+      setupRequired: await setupRequired(),
     });
     return c.json(body);
   });

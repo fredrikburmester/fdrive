@@ -4,32 +4,29 @@ import {
   accounts,
   apiTokens,
   backupConfiguration,
-  credentials,
   favorites,
   fileTags,
   folderViews,
   identities,
   localGrants,
   localUsers,
-  providers,
   recents,
+  savedSearches,
   sessions,
   settings,
   tags,
 } from "../schema/app.js";
 import { files } from "../schema/idx.js";
 import { createAiChatRepo } from "./ai-chats.js";
-import { supersedeDesktopEffects } from "./desktop-effects.js";
-import { validateIdentityLinkId } from "./identity-links-types.js";
+import { createLoginRepo } from "./logins.js";
 import { selectPathChunks } from "./path-chunks.js";
+import { isUniqueViolation } from "./pg-errors.js";
 import { createSystemEventRepo } from "./system-events.js";
 import type {
   Account,
   AccountRepo,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,
@@ -46,11 +43,11 @@ import type {
   LocalUser,
   LocalUserRepo,
   MetadataPathRepo,
-  Provider,
-  ProviderRepo,
   Recent,
   RecentRepo,
   Repos,
+  SavedSearch,
+  SavedSearchRepo,
   Session,
   SessionRepo,
   SettingsRepo,
@@ -70,46 +67,6 @@ async function lockMetadataIdentity(db: SqlExecutor, identityId: string): Promis
   `);
 }
 
-/** The Postgres SQLSTATE for a unique-constraint violation. */
-const UNIQUE_VIOLATION_CODE = "23505";
-
-function hasCode(error: unknown, code: string): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === code
-  );
-}
-
-/**
- * True when `error` is a Postgres unique-constraint violation. node-postgres
- * throws the raw driver error with `.code` set directly, but Drizzle wraps
- * it in its own `DrizzleQueryError` with the driver error attached as
- * `.cause`, so both shapes are checked.
- */
-function isUniqueViolation(error: unknown): boolean {
-  if (hasCode(error, UNIQUE_VIOLATION_CODE)) {
-    return true;
-  }
-  const cause =
-    typeof error === "object" && error !== null ? (error as { cause?: unknown }).cause : undefined;
-  return hasCode(cause, UNIQUE_VIOLATION_CODE);
-}
-
-function toProvider(row: typeof providers.$inferSelect): Provider {
-  return {
-    id: row.id,
-    type: row.type,
-    baseUrl: row.baseUrl,
-    label: row.label,
-    config: row.config,
-    enabled: row.enabled,
-    managedByEnv: row.managedByEnv,
-    createdAt: row.createdAt,
-  };
-}
-
 function toAccount(row: typeof accounts.$inferSelect): Account {
   return {
     id: row.id,
@@ -123,21 +80,9 @@ function toIdentity(row: typeof identities.$inferSelect): Identity {
   return {
     id: row.id,
     accountId: row.accountId,
-    providerId: row.providerId,
-    externalUsername: row.externalUsername,
+    username: row.username,
     createdAt: row.createdAt,
     lastLoginAt: row.lastLoginAt,
-  };
-}
-
-function toCredential(row: typeof credentials.$inferSelect): Credential {
-  return {
-    identityId: row.identityId,
-    ciphertext: new Uint8Array(row.ciphertext),
-    keyId: row.keyId,
-    cachedToken: row.cachedToken,
-    cachedTokenExpiresAt: row.cachedTokenExpiresAt,
-    updatedAt: row.updatedAt,
   };
 }
 
@@ -145,103 +90,12 @@ function toSession(row: typeof sessions.$inferSelect): Session {
   return {
     idHash: row.idHash,
     accountId: row.accountId,
-    activeIdentityId: row.activeIdentityId,
+    identityId: row.identityId,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
     lastSeenAt: row.lastSeenAt,
     userAgent: row.userAgent,
     ip: row.ip,
-  };
-}
-
-function createProviderRepo(db: Db): ProviderRepo {
-  return {
-    async create(input) {
-      const [row] = await db
-        .insert(providers)
-        .values({ ...input, config: { ...input.config } })
-        .onConflictDoNothing({ target: [providers.type, providers.baseUrl] })
-        .returning();
-      if (!row) throw new ConflictError("provider endpoint already exists");
-      return toProvider(row);
-    },
-    async get(id) {
-      validateIdentityLinkId(id);
-      const [row] = await db.select().from(providers).where(eq(providers.id, id));
-      return row ? toProvider(row) : null;
-    },
-    async list() {
-      const rows = await db.select().from(providers).orderBy(providers.createdAt, providers.id);
-      return rows.map(toProvider);
-    },
-    async update(id, patch) {
-      validateIdentityLinkId(id);
-      return db
-        .transaction(async (tx) => {
-          const [current] = await tx
-            .select()
-            .from(providers)
-            .where(eq(providers.id, id))
-            .for("update");
-          if (!current) return null;
-          if (patch.baseUrl !== undefined && patch.baseUrl !== current.baseUrl) {
-            const [used] = await tx
-              .select({ count: sql<number>`count(*)::int` })
-              .from(identities)
-              .where(eq(identities.providerId, id));
-            if ((used?.count ?? 0) > 0)
-              throw new ConflictError("provider is still used by identities");
-          }
-          const set = {
-            ...(patch.label !== undefined ? { label: patch.label } : {}),
-            ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
-            ...(patch.config !== undefined ? { config: { ...patch.config } } : {}),
-            ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-            ...(patch.managedByEnv !== undefined ? { managedByEnv: patch.managedByEnv } : {}),
-          };
-          if (Object.keys(set).length === 0) {
-            const [row] = await tx.select().from(providers).where(eq(providers.id, id));
-            return row ? toProvider(row) : null;
-          }
-          const [row] = await tx.update(providers).set(set).where(eq(providers.id, id)).returning();
-          return row ? toProvider(row) : null;
-        })
-        .catch((error: unknown) => {
-          if (isUniqueViolation(error)) throw new ConflictError("provider endpoint already exists");
-          throw error;
-        });
-    },
-    async delete(id) {
-      validateIdentityLinkId(id);
-      await db.transaction(async (tx) => {
-        const [current] = await tx
-          .select()
-          .from(providers)
-          .where(eq(providers.id, id))
-          .for("update");
-        if (!current) return;
-        const [used] = await tx
-          .select({ count: sql<number>`count(*)::int` })
-          .from(identities)
-          .where(eq(identities.providerId, id));
-        if ((used?.count ?? 0) > 0) throw new ConflictError("provider is still used by identities");
-        await tx.delete(providers).where(eq(providers.id, id));
-      });
-    },
-    async ensure(input) {
-      const [row] = await db
-        .insert(providers)
-        .values({ type: input.type, baseUrl: input.baseUrl })
-        .onConflictDoUpdate({
-          target: [providers.type, providers.baseUrl],
-          set: { baseUrl: sql`excluded.base_url` },
-        })
-        .returning();
-      if (!row) {
-        throw new Error("providers.ensure: insert returned no row");
-      }
-      return toProvider(row);
-    },
   };
 }
 
@@ -269,23 +123,14 @@ function createAccountRepo(db: Db): AccountRepo {
 
 function createIdentityRepo(db: Db): IdentityRepo {
   return {
-    async findByProviderUsername(providerId, username) {
-      const [row] = await db
-        .select()
-        .from(identities)
-        .where(
-          and(eq(identities.providerId, providerId), eq(identities.externalUsername, username)),
-        );
+    async findByUsername(username) {
+      const [row] = await db.select().from(identities).where(eq(identities.username, username));
       return row ? toIdentity(row) : null;
     },
     async create(input) {
       const [row] = await db
         .insert(identities)
-        .values({
-          accountId: input.accountId,
-          providerId: input.providerId,
-          externalUsername: input.externalUsername,
-        })
+        .values({ accountId: input.accountId, username: input.username })
         .returning();
       if (!row) {
         throw new Error("identities.create: insert returned no row");
@@ -296,62 +141,12 @@ function createIdentityRepo(db: Db): IdentityRepo {
       const [row] = await db.select().from(identities).where(eq(identities.id, id));
       return row ? toIdentity(row) : null;
     },
-    async listByAccount(accountId) {
-      const rows = await db.select().from(identities).where(eq(identities.accountId, accountId));
-      return rows.map(toIdentity);
-    },
-    async countByProvider(providerId) {
-      const [row] = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(identities)
-        .where(eq(identities.providerId, providerId));
-      return row?.count ?? 0;
-    },
     async touchLogin(id, at) {
       await db.update(identities).set({ lastLoginAt: at }).where(eq(identities.id, id));
     },
     async listAll() {
       const rows = await db.select().from(identities);
       return rows.map(toIdentity);
-    },
-  };
-}
-
-function createCredentialRepo(db: Db): CredentialRepo {
-  return {
-    async put(input) {
-      await db
-        .insert(credentials)
-        .values({
-          identityId: input.identityId,
-          ciphertext: Buffer.from(input.ciphertext),
-          keyId: input.keyId,
-        })
-        .onConflictDoUpdate({
-          target: credentials.identityId,
-          set: {
-            ciphertext: Buffer.from(input.ciphertext),
-            keyId: input.keyId,
-            updatedAt: new Date(),
-          },
-        });
-    },
-    async get(identityId) {
-      const [row] = await db
-        .select()
-        .from(credentials)
-        .where(eq(credentials.identityId, identityId));
-      return row ? toCredential(row) : null;
-    },
-    async setCachedToken(identityId, token) {
-      await db
-        .update(credentials)
-        .set({
-          cachedToken: token?.sealed ?? null,
-          cachedTokenExpiresAt: token?.expiresAt ?? null,
-          updatedAt: new Date(),
-        })
-        .where(eq(credentials.identityId, identityId));
     },
   };
 }
@@ -364,7 +159,7 @@ function createSessionRepo(db: Db): SessionRepo {
         .values({
           idHash: input.idHash,
           accountId: input.accountId,
-          activeIdentityId: input.activeIdentityId,
+          identityId: input.identityId,
           expiresAt: input.expiresAt,
           userAgent: input.userAgent,
           ip: input.ip,
@@ -420,7 +215,7 @@ function toApiToken(row: typeof apiTokens.$inferSelect): ApiToken {
     identityId: row.identityId,
     name: row.name,
     tokenHash: row.tokenHash,
-    ...(row.access === null ? {} : { access: row.access }),
+    access: row.access,
     createdAt: row.createdAt,
     lastUsedAt: row.lastUsedAt,
     expiresAt: row.expiresAt,
@@ -437,7 +232,7 @@ function createApiTokenRepo(db: Db): ApiTokenRepo {
           identityId: input.identityId,
           name: input.name,
           tokenHash: input.tokenHash,
-          access: input.access ?? null,
+          access: input.access,
           expiresAt: input.expiresAt,
         })
         .returning();
@@ -568,6 +363,37 @@ function createTagRepo(db: Db): TagRepo {
   };
 }
 
+function toSavedSearch(row: typeof savedSearches.$inferSelect): SavedSearch {
+  const type = row.type as SavedSearch["type"];
+  return { id: row.id, name: row.name, query: row.query, type, folder: row.folder };
+}
+
+function createSavedSearchRepo(db: Db): SavedSearchRepo {
+  return {
+    async list(accountId) {
+      const rows = await db
+        .select()
+        .from(savedSearches)
+        .where(eq(savedSearches.accountId, accountId))
+        .orderBy(asc(savedSearches.createdAt), asc(savedSearches.id));
+      return rows.map(toSavedSearch);
+    },
+    async create(accountId, input) {
+      const [row] = await db
+        .insert(savedSearches)
+        .values({ accountId, ...input })
+        .returning();
+      if (!row) throw new Error("savedSearches.create: insert returned no row");
+      return toSavedSearch(row);
+    },
+    async delete(id, accountId) {
+      await db
+        .delete(savedSearches)
+        .where(and(eq(savedSearches.id, id), eq(savedSearches.accountId, accountId)));
+    },
+  };
+}
+
 async function moveFileTagPrefix(
   db: SqlExecutor,
   identityId: string,
@@ -589,7 +415,7 @@ async function moveFileTagPrefix(
   `);
   await db.execute(sql`
     update "app"."file_tags"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -696,7 +522,7 @@ async function moveFavoritePrefix(
   `);
   await db.execute(sql`
     update "app"."favorites"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -729,7 +555,7 @@ function createFavoriteRepo(db: Db): FavoriteRepo {
         .values({ identityId, path, kind })
         .onConflictDoUpdate({
           target: [favorites.identityId, favorites.path],
-          set: { kind, revision: sql`gen_random_uuid()` },
+          set: { kind },
         });
     },
     async remove(identityId, path) {
@@ -790,7 +616,7 @@ async function moveFolderViewPrefix(
   `);
   await db.execute(sql`
     update "app"."folder_views"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end,
         updated_at = now()
     where identity_id = ${identityId}
@@ -833,7 +659,6 @@ function createFolderViewRepo(db: Db): FolderViewRepo {
             ...(patch.mode === undefined ? {} : { mode: patch.mode }),
             ...(patch.sort === undefined ? {} : { sort: patch.sort }),
             updatedAt,
-            revision: sql`gen_random_uuid()`,
           },
         });
       await db
@@ -900,7 +725,7 @@ async function moveRecentPrefix(
   `);
   await db.execute(sql`
     update "app"."recents"
-    set revision = gen_random_uuid(), path = case when path = ${oldPath} then ${newPath}
+    set path = case when path = ${oldPath} then ${newPath}
                     else ${newPrefix} || substr(path, char_length(${oldPrefix}) + 1) end
     where identity_id = ${identityId}
       and (path = ${oldPath} or (${isDir} and starts_with(path, ${oldPrefix})))
@@ -939,7 +764,7 @@ function createRecentRepo(db: Db): RecentRepo {
         .values({ identityId, path, openedAt: now })
         .onConflictDoUpdate({
           target: [recents.identityId, recents.path],
-          set: { openedAt: now, revision: sql`gen_random_uuid()` },
+          set: { openedAt: now },
         });
     },
     async movePrefix(identityId, oldPath, newPath, isDir) {
@@ -950,11 +775,7 @@ function createRecentRepo(db: Db): RecentRepo {
       });
     },
     async deletePrefix(identityId, path, isDir) {
-      await db.transaction(async (tx) => {
-        await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, path, null);
-        await deleteRecentPrefix(tx, identityId, path, isDir);
-      });
+      await deleteRecentPrefix(db, identityId, path, isDir);
     },
     async prune(identityId, keep) {
       await db.execute(sql`
@@ -977,7 +798,6 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
       if (oldPath === newPath) return;
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, oldPath, newPath);
         await moveFileTagPrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFavoritePrefix(tx, identityId, oldPath, newPath, isDir);
         await moveFolderViewPrefix(tx, identityId, oldPath, newPath, isDir);
@@ -987,7 +807,6 @@ function createMetadataPathRepo(db: Db): MetadataPathRepo {
     async deletePrefix(identityId, path, isDir) {
       await db.transaction(async (tx) => {
         await lockMetadataIdentity(tx, identityId);
-        await supersedeDesktopEffects(tx, { identityId }, path, null);
         await deleteFileTagPrefix(tx, identityId, path, isDir);
         await deleteFavoritePrefix(tx, identityId, path, isDir);
         await deleteFolderViewPrefix(tx, identityId, path, isDir);
@@ -1002,6 +821,7 @@ function toLocalUser(row: typeof localUsers.$inferSelect): LocalUser {
     username: row.username,
     passwordHash: row.passwordHash,
     disabled: row.disabled,
+    storageLimit: row.storageLimit,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1024,25 +844,13 @@ export function createLocalUserRepo(db: Db): LocalUserRepo {
       const [row] = await db.select({ value: count() }).from(localUsers);
       return row?.value ?? 0;
     },
-    async create(input) {
-      try {
-        const [row] = await db
-          .insert(localUsers)
-          .values({ username: input.username, passwordHash: input.passwordHash })
-          .returning();
-        if (row === undefined) throw new Error("local user insert returned no row");
-        return toLocalUser(row);
-      } catch (error) {
-        if (isUniqueViolation(error)) throw new ConflictError("username already exists");
-        throw error;
-      }
-    },
     async update(username, patch) {
       const [row] = await db
         .update(localUsers)
         .set({
           ...(patch.passwordHash !== undefined ? { passwordHash: patch.passwordHash } : {}),
           ...(patch.disabled !== undefined ? { disabled: patch.disabled } : {}),
+          ...(patch.storageLimit !== undefined ? { storageLimit: patch.storageLimit } : {}),
           updatedAt: sql`now()`,
         })
         .where(sameName(username))
@@ -1072,6 +880,31 @@ function atOrUnder(path: string) {
     eq(localGrants.path, path),
     sql`starts_with(${localGrants.path}, ${path === "/" ? "/" : `${path}/`})`,
   );
+}
+
+/**
+ * `LocalGrantRepo.movePrefix` on `db`, so a caller already in a transaction
+ * (a Mac write's receipt) applies it there.
+ */
+export async function moveLocalGrantPrefix(
+  db: Pick<Db, "update">,
+  owner: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  await db
+    .update(localGrants)
+    .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
+    .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+}
+
+/** `LocalGrantRepo.deletePrefix` on `db`, for a caller already in a transaction. */
+export async function deleteLocalGrantPrefix(
+  db: Pick<Db, "delete">,
+  owner: string,
+  path: string,
+): Promise<void> {
+  await db.delete(localGrants).where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
 }
 
 function createLocalGrantRepo(db: Db): LocalGrantRepo {
@@ -1118,15 +951,10 @@ function createLocalGrantRepo(db: Db): LocalGrantRepo {
       await db.delete(localGrants).where(eq(localGrants.id, id));
     },
     async movePrefix(owner, from, to) {
-      await db
-        .update(localGrants)
-        .set({ path: sql`${to} || substr(${localGrants.path}, ${from.length + 1})` })
-        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(from)));
+      await moveLocalGrantPrefix(db, owner, from, to);
     },
     async deletePrefix(owner, path) {
-      await db
-        .delete(localGrants)
-        .where(and(eq(localGrants.ownerUsername, owner), atOrUnder(path)));
+      await deleteLocalGrantPrefix(db, owner, path);
     },
   };
 }
@@ -1150,11 +978,7 @@ export function createFilesFolderFacts(db: Db) {
       return row.id;
     },
     async holdsFiles(): Promise<boolean> {
-      const [file] = await db
-        .select({ id: files.id })
-        .from(files)
-        .where(isNull(files.deletedAt))
-        .limit(1);
+      const [file] = await db.select({ id: files.id }).from(files).limit(1);
       if (file !== undefined) return true;
       const [user] = await db.select({ username: localUsers.username }).from(localUsers).limit(1);
       return user !== undefined;
@@ -1164,12 +988,11 @@ export function createFilesFolderFacts(db: Db) {
 
 export function createRepos(db: Db): Repos {
   return {
-    providers: createProviderRepo(db),
     localUsers: createLocalUserRepo(db),
     localGrants: createLocalGrantRepo(db),
     accounts: createAccountRepo(db),
     identities: createIdentityRepo(db),
-    credentials: createCredentialRepo(db),
+    logins: createLoginRepo(db),
     sessions: createSessionRepo(db),
     settings: createSettingsRepo(db),
     apiTokens: createApiTokenRepo(db),
@@ -1178,6 +1001,7 @@ export function createRepos(db: Db): Repos {
     favorites: createFavoriteRepo(db),
     folderViews: createFolderViewRepo(db),
     recents: createRecentRepo(db),
+    savedSearches: createSavedSearchRepo(db),
     metadataPaths: createMetadataPathRepo(db),
     systemEvents: createSystemEventRepo(db),
     aiChats: createAiChatRepo(db),

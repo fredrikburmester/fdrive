@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Readable } from "node:stream";
 import { BackupRetainedError } from "@fdrive/backup";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { Logger } from "pino";
@@ -50,17 +49,6 @@ function build() {
     verification_requested: false,
     verification_error: null,
   };
-  const attachment = {
-    id: randomUUID(),
-    version_id: randomUUID(),
-    label: "Router",
-    filename: "router.zip",
-    source_date: new Date(),
-    notes: "saved copy",
-    uploaded_at: new Date(),
-    bytes: "3",
-    sha256: "a".repeat(64),
-  };
   const destination = {
     id: destinationId,
     name: "Bucket",
@@ -78,7 +66,6 @@ function build() {
     owner: vi.fn().mockResolvedValue(true),
     configuration: vi.fn().mockResolvedValue(configuration),
     destinations: vi.fn().mockResolvedValue([destination]),
-    attachments: vi.fn().mockResolvedValue([attachment]),
     runs: vi.fn().mockResolvedValue([run]),
     run: vi.fn().mockResolvedValue(run),
     deliveries: vi.fn().mockResolvedValue([
@@ -96,15 +83,10 @@ function build() {
     destinationSchedule: vi.fn(),
     destination: vi.fn().mockResolvedValue(destination),
     deleteDestination: vi.fn(),
-    attachment: vi.fn().mockResolvedValue(attachment),
-    deleteAttachment: vi.fn(),
   };
   const engine = {
     operations: {
       status: vi.fn().mockResolvedValue({ workerSeenAt: null, estimate: null, rehearsal: null }),
-      inventories: vi
-        .fn()
-        .mockResolvedValue({ [runId]: { attachmentVersions: [attachment.version_id] } }),
       requestEstimate: vi.fn().mockResolvedValue(runId),
       recordRehearsal: vi.fn(),
     },
@@ -117,21 +99,10 @@ function build() {
   };
   const query = vi.fn().mockResolvedValue({ rows: [{ id: runId }] });
   const pool = { query, connect: async () => ({ query, release: vi.fn() }) };
-  const attachments = {
-    upload: vi.fn(async (_input, body: Readable) => {
-      for await (const _ of body) {
-        /* consume upload */
-      }
-      return attachment.id;
-    }),
-    download: vi.fn(async () => Readable.from([Buffer.from("ZIP")])),
-  };
   const module = {
     store,
     engine,
     pool,
-    gatePool: pool,
-    attachments,
     enabled: true,
     destinationRecord: vi.fn().mockResolvedValue(destination),
   };
@@ -140,12 +111,13 @@ function build() {
   const app = createApp({
     config: loadConfig({
       DATABASE_URL: "postgres://unused/test",
+      FDRIVE_STORAGE_ROOT: "/srv/files",
       FDRIVE_MASTER_KEY: Buffer.alloc(32, 1).toString("base64"),
     }),
     logger,
     version: "test",
     startedAt: new Date(),
-    connectionStatus: async () => ({ required: false, providers: [] }),
+    setupRequired: async () => false,
     principalResolver: async () => ({
       accountId: account,
       identityId: identity,
@@ -173,9 +145,8 @@ function build() {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
   }
-  const unlock = () =>
-    request("/unlock", "POST", { credential: { password: "test-owner-password" } });
-  return { module, store, engine, app, request, unlock, authenticate, attachment, run };
+  const unlock = () => request("/unlock", "POST", { password: "test-owner-password" });
+  return { module, store, engine, app, request, unlock, authenticate, run };
 }
 beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "backup-routes-"));
@@ -204,20 +175,18 @@ it("protects the collection and every sensitive route from non-owners and bearer
 });
 it("requires CSRF and fresh owner authentication, and returns only public backup summaries", async () => {
   expect(
-    (
-      await fixture.request(
-        "/unlock",
-        "POST",
-        { credential: { password: "x" } },
-        { "x-requested-with": "" },
-      )
-    ).status,
+    (await fixture.request("/unlock", "POST", { password: "x" }, { "x-requested-with": "" }))
+      .status,
   ).toBe(403);
+  // The old credential map, or anything beside the password, is refused before any check.
+  for (const body of [{ credential: { password: "x" } }, { password: "x", username: "owner" }])
+    expect((await fixture.request("/unlock", "POST", body)).status).toBe(400);
+  expect(fixture.authenticate).not.toHaveBeenCalled();
   expect((await fixture.unlock()).status).toBe(200);
   expect(fixture.authenticate).toHaveBeenCalledWith(
     account,
     identity,
-    { password: "test-owner-password" },
+    "test-owner-password",
     expect.any(String),
   );
   const body = (await (await fixture.request()).json()) as {
@@ -300,6 +269,13 @@ it("enqueues run actions and validates existing run state", async () => {
   };
   expect((await fixture.request("/destinations", "POST", input)).status).toBe(201);
   expect((await fixture.request(`/destinations/${destinationId}`, "PUT", input)).status).toBe(200);
+  expect(fixture.module.destinationRecord).toHaveBeenLastCalledWith(input, destinationId);
+  // Only a bucket is a destination: a folder in the files folder is refused before it is saved.
+  fixture.module.destinationRecord.mockClear();
+  const files = { type: "provider", name: "Files", providerId: destinationId, prefix: "/Backups" };
+  expect((await fixture.request("/destinations", "POST", files)).status).toBe(400);
+  expect((await fixture.request(`/destinations/${destinationId}`, "PUT", files)).status).toBe(400);
+  expect(fixture.module.destinationRecord).not.toHaveBeenCalled();
   expect((await fixture.request(`/destinations/${destinationId}/test`, "POST", {})).status).toBe(
     200,
   );
@@ -309,43 +285,17 @@ it("enqueues run actions and validates existing run state", async () => {
     404,
   );
 });
-it("stores opaque ZIPs with metadata and never accepts them as executable configuration", async () => {
+it("has no configuration ZIP routes", async () => {
   await fixture.unlock();
-  const metadata = Buffer.from(
-    JSON.stringify({
-      label: "Router",
-      filename: "router.zip",
-      sourceDate: null,
-      notes: "Restore outside fdrive",
-    }),
-  ).toString("base64");
-  const upload = (
-    path: string,
-    method = "POST",
-    headers: Record<string, string> = { "x-backup-metadata": metadata },
-  ) =>
-    fixture.app.request(`/api/v1/system/backups${path}`, {
-      method,
-      headers: { cookie: "fdrive_session=owner-session", "x-requested-with": "fdrive", ...headers },
-      body: "ZIP",
-    });
-  expect((await upload("/attachments")).status).toBe(201);
-  expect((await upload(`/attachments/${fixture.attachment.id}`, "PUT")).status).toBe(201);
-  expect((await upload("/attachments", "POST", {})).status).toBe(400);
-  expect((await upload("/attachments", "POST", { "x-backup-metadata": "broken" })).status).toBe(
-    400,
-  );
-  const download = await fixture.request(`/attachments/${fixture.attachment.id}/download`);
-  expect(await download.text()).toBe("ZIP");
-  expect(download.headers.get("content-disposition")).toContain("attachment;");
-  expect((await fixture.request(`/attachments/${fixture.attachment.id}`, "DELETE")).status).toBe(
-    200,
-  );
-  fixture.store.attachment.mockResolvedValue(null);
-  expect((await fixture.request(`/attachments/${fixture.attachment.id}/download`)).status).toBe(
-    404,
-  );
-  expect((await upload(`/attachments/${fixture.attachment.id}`, "PUT")).status).toBe(404);
+  const id = randomUUID();
+  for (const [path, method] of [
+    ["/attachments", "POST"],
+    [`/attachments/${id}`, "PUT"],
+    [`/attachments/${id}/download`, "GET"],
+    [`/attachments/${id}`, "DELETE"],
+  ] as const)
+    expect((await fixture.request(path, method)).status).toBe(404);
+  expect(await (await fixture.request()).json()).not.toHaveProperty("attachments");
   expect((await fixture.request("/schedule", "PUT", { timezone: "invalid" })).status).toBe(400);
 });
 
@@ -378,7 +328,7 @@ it("bounds sensitive sessions and frees expired authorizations", async () => {
         await fixture.request(
           "/unlock",
           "POST",
-          { credential: { password: "test" } },
+          { password: "test" },
           { cookie: `fdrive_session=session-${index}` },
         )
       ).status,
@@ -388,18 +338,9 @@ it("bounds sensitive sessions and frees expired authorizations", async () => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(Date.now() + 601_000);
   expect((await fixture.unlock()).status).toBe(200);
-  expect(
-    (
-      await fixture.request("/attachments", "POST", undefined, {
-        "x-backup-metadata": Buffer.from(
-          JSON.stringify({ label: "ZIP", filename: "test.zip", notes: "", sourceDate: null }),
-        ).toString("base64"),
-      })
-    ).status,
-  ).toBe(400);
 });
 
-it("requires fresh owner access for estimates and rehearsal records and reports captured ZIP versions", async () => {
+it("requires fresh owner access for estimates and rehearsal records and reports retention", async () => {
   expect((await fixture.request("/estimate", "POST")).status).toBe(401);
   await fixture.unlock();
   expect((await fixture.request("/estimate", "POST")).status).toBe(202);
@@ -427,14 +368,8 @@ it("requires fresh owner access for estimates and rehearsal records and reports 
       retention_until: new Date("2027-01-01T00:00:00Z"),
     },
   ] as never);
-  type StatusBody = {
-    attachments: Array<{ lastCapturedBackupId: string | null; lastCapturedAt: string | null }>;
+  const status = (await (await fixture.request()).json()) as {
     runs: Array<{ deliveries: Array<{ retentionUntil: string | null }> }>;
   };
-  let status = (await (await fixture.request()).json()) as StatusBody;
-  expect(status.attachments[0]?.lastCapturedBackupId).toBe(runId);
   expect(status.runs[0]?.deliveries[0]?.retentionUntil).toBe("2027-01-01T00:00:00.000Z");
-  fixture.engine.operations.inventories.mockResolvedValue({ [runId]: { attachmentVersions: [] } });
-  status = (await (await fixture.request()).json()) as StatusBody;
-  expect(status.attachments[0]?.lastCapturedAt).toBeNull();
 });

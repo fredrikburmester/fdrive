@@ -84,20 +84,79 @@ export function filenameScore(hits: number, words: number, rank: number, k: numb
 }
 
 /** How well a file's name answers a query, strongest first; see `nameMatch`. */
-export type NameMatch = "exact" | "words" | "path" | "none";
+export type NameMatch = "exact" | "words" | "path" | "typo" | "none";
 
 /**
  * What each `NameMatch` adds to a result's score. Reciprocal rank fusion
  * tops out near `0.05`, so any name match outranks every result found by
  * content alone, and a whole step separates one kind of name match from the
- * next.
+ * next. A `typo` match adds less than recency can leave of a name spelled as
+ * typed (`path * RECENCY_FLOOR`), so however new it is it never outranks
+ * one, and more than fusion gives a content-only result.
  */
 export const NAME_MATCH_BOOST: Readonly<Record<NameMatch, number>> = {
   exact: 3,
   words: 2,
   path: 1,
+  typo: 0.3,
   none: 0,
 };
+
+/**
+ * How many typos a query word of `length` characters may hold and still
+ * match: none below five, one up to eight, two from nine. The indexer's name
+ * index (`services/indexer/src/names.rs`) counts the same way.
+ */
+export function typoBudget(length: number): number {
+  if (length < 5) {
+    return 0;
+  }
+  return length <= 8 ? 1 : 2;
+}
+
+/**
+ * The edits between `a` and `b`: a letter changed, added or dropped, or two
+ * neighbours swapped, each counted once (optimal string alignment).
+ */
+function editDistance(a: readonly string[], b: readonly string[]): number {
+  const rows = Array.from({ length: a.length + 1 }, (_, i) =>
+    Array.from({ length: b.length + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
+  );
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const row = rows[i] as number[];
+      const above = rows[i - 1] as number[];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let best = Math.min(
+        (above[j] as number) + 1,
+        (row[j - 1] as number) + 1,
+        (above[j - 1] as number) + cost,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        best = Math.min(best, ((rows[i - 2] as number[])[j - 2] as number) + 1);
+      }
+      row[j] = best;
+    }
+  }
+  return (rows[a.length] as number[])[b.length] as number;
+}
+
+/** `word` is within its `typoBudget` of the start of `token`. */
+function typoStartsToken(token: string, word: string): boolean {
+  const wanted = Array.from(word);
+  const budget = typoBudget(wanted.length);
+  if (budget === 0) {
+    return false;
+  }
+  const letters = Array.from(token);
+  const longest = Math.min(letters.length, wanted.length + budget);
+  for (let length = Math.max(1, wanted.length - budget); length <= longest; length++) {
+    if (editDistance(wanted, letters.slice(0, length)) <= budget) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** The part of a file a query is compared with by `nameMatch`. */
 export interface NameMatchTarget {
@@ -128,6 +187,8 @@ function startsAnyToken(tokens: readonly string[], word: string): boolean {
  * - `words`: every query word starts a word of the name.
  * - `path`: every query word starts a word of the name or of a folder above
  *   it, and at least one is in the name.
+ * - `typo`: every query word starts a word of the name give or take its
+ *   `typoBudget`, so "microlär" finds "Mikrolärande".
  * - `none`: anything else, including a query with no words.
  *
  * Words match from their start ("plan" matches "planning", not "airplane"),
@@ -154,12 +215,16 @@ export function nameMatch(query: string, target: NameMatchTarget): NameMatch {
   if (inName.length === words.length) {
     return "words";
   }
-  if (inName.length === 0) {
-    return "none";
+  if (inName.length > 0) {
+    const folders = nameTokens(target.folder);
+    if (words.every((word) => startsAnyToken(full, word) || startsAnyToken(folders, word))) {
+      return "path";
+    }
   }
-  const folders = nameTokens(target.folder);
-  return words.every((word) => startsAnyToken(full, word) || startsAnyToken(folders, word))
-    ? "path"
+  return words.every(
+    (word) => startsAnyToken(full, word) || full.some((token) => typoStartsToken(token, word)),
+  )
+    ? "typo"
     : "none";
 }
 

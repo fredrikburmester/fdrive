@@ -1,12 +1,11 @@
 import type { OrganizeRequest, OrganizeRun } from "@fdrive/contracts";
 import { StorageError, type StorageProvider } from "@fdrive/core";
-import { createMemoryStorage } from "@fdrive/core/testing";
+import { createMemoryStorage, entryStat } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import type { Principal } from "../../auth/principal.js";
 import { ApiHttpError } from "../../errors.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import {
   type AiInput,
   type AiModel,
@@ -76,15 +75,12 @@ function submitTurn(moves: { path: string; destination: string; reason: string }
 
 function mcpDeps(overrides: Partial<McpToolDeps> = {}): McpToolDeps {
   return {
-    indexQueries: { rootIdsByName: async () => ({}) } as unknown as IndexQueries,
+    indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected search")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_roots" }),
-    },
-    identities: { get: async () => buildIdentity() },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-01-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -108,7 +104,7 @@ function drive() {
     "/Inbox/sub/c.txt": "c",
     "/Other.txt": "o",
     "/Finance/Receipts/x.pdf": "x",
-    "/.Trash/old.pdf": "old",
+    "/.trash/old.pdf": "old",
   });
 }
 
@@ -196,7 +192,7 @@ describe("createOrganizeService", () => {
     });
 
     it("refuses invalid paths, the drive root and Trash", async () => {
-      const { service } = setup({ mcp: { trashPathForStorage: () => "/.Trash" } });
+      const { service } = setup();
       const principal = principalWith(drive());
 
       const invalid = await startError(service, principal, { paths: ["/Inbox/a.pdf", "/a\0b"] });
@@ -207,17 +203,13 @@ describe("createOrganizeService", () => {
       expect(root.kind).toBe("bad_request");
       expect(root.message).toBe("The drive root cannot be moved.");
 
-      const trash = await startError(service, principal, { paths: ["/.Trash/old.pdf"] });
-      expect(trash.kind).toBe("bad_request");
-      expect(trash.message).toBe("Items in Trash cannot be organized.");
-    });
-
-    it("uses the configured Trash path when the storage has none of its own", async () => {
-      const { service } = setup({ mcp: { trashPath: "/.Trash" } });
-
-      const error = await startError(service, principalWith(drive()), { paths: ["/.Trash"] });
-
-      expect(error.kind).toBe("bad_request");
+      for (const path of ["/.trash/old.pdf", "/.fdrive-desktop/staging/a.pdf"]) {
+        const reserved = await startError(service, principal, { paths: [path] });
+        expect(reserved.kind).toBe("bad_request");
+        expect(reserved.message).toBe(
+          "Items in Trash or fdrive's own folders cannot be organized.",
+        );
+      }
     });
 
     it("collapses duplicate selections and items inside selected folders", async () => {
@@ -273,14 +265,11 @@ describe("createOrganizeService", () => {
         toolTurn({ id: "tree", name: "folder_tree", input: { depth: 1 } }),
         submitTurn([
           { path: "/Inbox/a.pdf", destination: "/Finance/Receipts", reason: "A receipt." },
-          { path: "/Inbox/b.pdf", destination: "/.Trash", reason: "Junk." },
+          { path: "/Inbox/b.pdf", destination: "/.trash", reason: "Junk." },
         ]),
       ]);
       const verifyAuthority = vi.fn(async () => true);
-      const { service, onUnexpectedError } = setup({
-        model,
-        mcp: { trashPathForStorage: () => "/.Trash" },
-      });
+      const { service, onUnexpectedError } = setup({ model });
       const principal = principalWith(drive(), { verifyAuthority });
 
       const started = await service.start(principal, {
@@ -308,7 +297,12 @@ describe("createOrganizeService", () => {
             conflict: false,
           },
         ],
-        unchanged: [{ path: "/Inbox/b.pdf", reason: "The suggested folder is in Trash." }],
+        unchanged: [
+          {
+            path: "/Inbox/b.pdf",
+            reason: "The suggested folder is in Trash or another of fdrive's own folders.",
+          },
+        ],
       });
       expect(starts[0]?.tools.map((tool) => tool.name)).toEqual([
         "folder_tree",
@@ -343,13 +337,10 @@ describe("createOrganizeService", () => {
       const { service } = setup({
         model,
         mcp: {
-          trashPathForStorage: () => "/.Trash",
           scopeResolver: {
-            verifiedIndexScopes: async () => ({
-              available: true,
-              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-            }),
+            scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
           },
+          indexed: async () => true,
         },
       });
       const principal = principalWith(drive());
@@ -383,17 +374,15 @@ describe("createOrganizeService", () => {
       });
     });
 
-    it("offers the index-backed tools when the identity's index scopes are verified", async () => {
+    it("offers the index-backed tools while the files folder is indexed", async () => {
       const { model, starts } = fakeModel([submitTurn([])]);
       const { service } = setup({
         model,
         mcp: {
           scopeResolver: {
-            verifiedIndexScopes: async () => ({
-              available: true,
-              scopes: [{ rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" }],
-            }),
+            scopesFor: async () => [{ fsPrefix: "/alice", virtualPrefix: "/" }],
           },
+          indexed: async () => true,
         },
       });
       const principal = principalWith(drive());
@@ -416,38 +405,12 @@ describe("createOrganizeService", () => {
       ]);
     });
 
-    it("works without index-backed tools when the identity is gone", async () => {
-      const { model, starts, inputs } = fakeModel([submitTurn([])]);
-      const verifiedIndexScopes = vi.fn();
-      const { service } = setup({
-        model,
-        mcp: { identities: { get: async () => null }, scopeResolver: { verifiedIndexScopes } },
-      });
-      const principal = principalWith(drive());
-
-      const started = await service.start(principal, { paths: ["/Inbox"], instructions: "" });
-      const run = await finished(service, principal, started.id);
-
-      expect(run.state).toBe("done");
-      expect(verifiedIndexScopes).not.toHaveBeenCalled();
-      expect(starts[0]?.tools.map((tool) => tool.name)).toEqual([
-        "folder_tree",
-        "list_folder",
-        SUBMIT_TOOL,
-      ]);
-      const firstText = inputs[0]?.kind === "user" ? inputs[0].text : "";
-      expect(firstText).toContain("- /Inbox (folder)");
-      expect(firstText).not.toContain("instructions");
-    });
-
     it("skips selected items that no longer exist or are not files or folders", async () => {
       const memory = drive();
       const storage: StorageProvider = {
         ...memory,
         stat: async (path) =>
-          path === "/link"
-            ? { kind: "symlink", size: 0, modifiedAt: null, contentType: null }
-            : memory.stat(path),
+          path === "/link" ? entryStat(path, { kind: "symlink" }) : memory.stat(path),
       };
       const { model, inputs } = fakeModel([submitTurn([])]);
       const { service } = setup({ model });

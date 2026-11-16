@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dateFromMtimeNs, toIndexRelativePath, trashExclusion } from "./scopes";
+import { dateFromMtimeNs, indexPrefixes, reservedExclusion, toIndexRelativePath } from "./scopes";
 
 describe("dateFromMtimeNs", () => {
   it("converts nanoseconds since epoch to a Date at millisecond precision", () => {
@@ -22,29 +22,38 @@ describe("toIndexRelativePath", () => {
   });
 });
 
-describe("trashExclusion", () => {
-  const home = { rootName: "files", fsPrefix: "/alice", virtualPrefix: "/" };
+describe("indexPrefixes", () => {
+  it("maps every scope onto the files folder's root", () => {
+    expect(
+      indexPrefixes([
+        { fsPrefix: "/alice", virtualPrefix: "/" },
+        { fsPrefix: "/bob/Projects", virtualPrefix: "/Shared with me/Projects" },
+      ]),
+    ).toEqual([
+      { rootId: 1, fsPrefix: "/alice" },
+      { rootId: 1, fsPrefix: "/bob/Projects" },
+    ]);
+  });
+});
+
+describe("reservedExclusion", () => {
+  const home = { fsPrefix: "/alice", virtualPrefix: "/" };
   const mount = {
-    rootName: "files",
     fsPrefix: "/bob/Projects",
     virtualPrefix: "/Shared with me/Projects",
   };
 
-  it("maps the Trash through the home onto its root", () => {
-    expect(trashExclusion([home, mount], "/.trash", { files: 3 })).toEqual([
-      { rootId: 3, fsPrefix: "/alice/.trash" },
-    ]);
+  it("maps the Trash, the Mac app's folder and the home's own Shared with me through the home", () => {
+    expect(reservedExclusion([home, mount])).toEqual({
+      prefixes: [
+        { rootId: 1, fsPrefix: "/alice/.trash" },
+        { rootId: 1, fsPrefix: "/alice/.fdrive-desktop" },
+        { rootId: 1, fsPrefix: "/alice/Shared with me" },
+      ],
+    });
   });
 
-  it("maps a Trash inside a mounted folder through that mount", () => {
-    expect(trashExclusion([home, mount], "/Shared with me/Projects/.trash", { files: 3 })).toEqual([
-      { rootId: 3, fsPrefix: "/bob/Projects/.trash" },
-    ]);
-  });
-
-  it("is empty without a Trash, outside every scope, or on a root the index lacks", () => {
-    expect(trashExclusion([home], null, { files: 3 })).toEqual([]);
-    expect(trashExclusion([mount], "/.trash", { files: 3 })).toEqual([]);
-    expect(trashExclusion([home], "/.trash", {})).toEqual([]);
+  it("leaves out nothing outside every scope", () => {
+    expect(reservedExclusion([mount])).toEqual({ prefixes: [] });
   });
 });

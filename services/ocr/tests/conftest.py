@@ -1,11 +1,13 @@
 """Shared fixtures for the I/O tests: a real Postgres (via testcontainers) with
 the repo's own Drizzle migrations applied, matching what this service runs
-against in production, and a fake `ocrmypdf` executable placed first on PATH so
-no test ever needs a real scanned PDF or the real (slow) tool.
+against in production, fake `ocrmypdf` and `pdftotext` executables placed first
+on PATH so no test ever needs a real scanned PDF or the real (slow) tools, and
+`index_pdfs`, which stands in for the indexer.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from collections.abc import Iterator
@@ -72,14 +74,15 @@ def db_conn(postgres_dsn: str) -> Iterator[psycopg.Connection]:
 
 @pytest.fixture(autouse=True)
 def _clean_tables(postgres_dsn: str) -> Iterator[None]:
-    """Truncate the mutable tables before each test so tests are independent."""
+    """Truncate the mutable tables before each test so tests are independent.
+    `idx.roots` keeps the files root a migration seeds as row 1."""
     yield
     conn = psycopg.connect(postgres_dsn, autocommit=True)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."events", "idx"."moves", "idx"."scans", '
-                '"idx"."chunks", "idx"."files", "idx"."roots", "app"."thumbnails", "app"."settings" '
+                'TRUNCATE "idx"."ocr_log", "idx"."ocr_runs", "idx"."scans", "idx"."chunks", '
+                '"idx"."files", "idx"."changes", "app"."thumbnails", "app"."settings" '
                 "RESTART IDENTITY CASCADE"
             )
     finally:
@@ -88,6 +91,92 @@ def _clean_tables(postgres_dsn: str) -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _fake_ocrmypdf_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Puts `tests/fixtures` (the fake `ocrmypdf`) first on `PATH` for every
-    test, matching how `scripts/test-in-docker.sh` and CI run against it."""
+    """Puts `tests/fixtures` (the fake `ocrmypdf` and `pdftotext`) first on
+    `PATH` for every test, matching how `scripts/test-in-docker.sh` and CI run
+    against them."""
     monkeypatch.setenv("PATH", f"{FIXTURES_DIR}{os.pathsep}{os.environ.get('PATH', '')}")
+
+
+def index_pdfs(conn: psycopg.Connection, root_id: int, root_dir: Path | str) -> None:
+    """What the indexer would have recorded for `root_dir`: one live `idx.files`
+    row per PDF below it, with its size, mtime and digest, replacing a row the
+    path already had. Walks every folder; which of them OCR skips is OCR's rule."""
+    for dirpath, _dirnames, filenames in os.walk(root_dir):
+        for name in filenames:
+            if not name.lower().endswith(".pdf") or name.startswith("._"):
+                continue
+            abs_path = os.path.join(dirpath, name)
+            info = os.stat(abs_path)
+            with open(abs_path, "rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            conn.execute(
+                """
+                INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256)
+                VALUES (%s, %s, %s, '.pdf', %s, %s, %s)
+                ON CONFLICT (root_id, path) DO UPDATE SET
+                  size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns, sha256 = EXCLUDED.sha256
+                """,
+                (
+                    root_id,
+                    os.path.relpath(abs_path, root_dir).replace(os.sep, "/"),
+                    name,
+                    info.st_size,
+                    info.st_mtime_ns,
+                    digest,
+                ),
+            )
+
+
+class Journal:
+    """What the indexer would receive from this service: `idx.changes` rows and
+    `NOTIFY idx_changes` payloads, read through a connection that listens the
+    way the indexer's journal thread does."""
+
+    def __init__(self, dsn: str, listener: psycopg.Connection) -> None:
+        self._dsn = dsn
+        self._listener = listener
+
+    def rows(self) -> list[tuple[object, ...]]:
+        # Not on the listener: a query there could consume a pending notification.
+        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns "
+                'FROM "idx"."changes" ORDER BY id'
+            )
+            return list(cur.fetchall())
+
+    def notifications(self) -> list[str]:
+        """Payloads delivered since the last call. Postgres sends them on commit,
+        before the writer's call returns, so a short wait collects them all."""
+        return [notify.payload for notify in self._listener.notifies(timeout=0.5) if notify.channel == "idx_changes"]
+
+
+@pytest.fixture
+def journal(postgres_dsn: str) -> Iterator[Journal]:
+    listener = psycopg.connect(postgres_dsn, autocommit=True)
+    try:
+        listener.execute("LISTEN idx_changes")
+        yield Journal(postgres_dsn, listener)
+    finally:
+        listener.close()
+
+
+@pytest.fixture
+def failing_journal(postgres_dsn: str) -> Iterator[None]:
+    """Makes every `idx.changes` insert fail inside Postgres, as a broken or
+    unreachable journal would, until the test ends."""
+    conn = psycopg.connect(postgres_dsn, autocommit=True)
+    try:
+        conn.execute(
+            "CREATE FUNCTION public.fail_journal() RETURNS trigger LANGUAGE plpgsql AS "
+            "$$ BEGIN RAISE EXCEPTION 'idx.changes is unavailable'; END $$"
+        )
+        conn.execute(
+            'CREATE TRIGGER fail_journal BEFORE INSERT ON "idx"."changes" '
+            "FOR EACH ROW EXECUTE FUNCTION public.fail_journal()"
+        )
+        yield
+    finally:
+        conn.execute('DROP TRIGGER IF EXISTS fail_journal ON "idx"."changes"')
+        conn.execute("DROP FUNCTION IF EXISTS public.fail_journal()")
+        conn.close()

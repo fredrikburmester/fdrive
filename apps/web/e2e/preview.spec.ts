@@ -1,5 +1,33 @@
 import { expect, test } from "@playwright/test";
+import { openSandbox, removeSandbox } from "./support/sandbox.js";
 import { shareHeicFixture } from "./support/share-fixture.js";
+
+test("an mkv plays through the transcode, with the subtitle files named after it", async ({
+  page,
+}) => {
+  const sandbox = await openSandbox(page, "video");
+  const files = {
+    "Movie.mkv": "matroska",
+    "Movie.en.srt": "1\n00:00:01,000 --> 00:00:02,000\nHello\n",
+  };
+  for (const [name, data] of Object.entries(files)) {
+    const path = encodeURIComponent(`/${sandbox}/${name}`);
+    const upload = await page.request.put(`/api/v1/fs/upload?path=${path}`, {
+      headers: { "x-requested-with": "fdrive" },
+      data,
+    });
+    expect(upload.ok()).toBe(true);
+  }
+
+  await page.goto(`/view/${sandbox}/Movie.mkv`);
+
+  await expect(page.locator("video")).toHaveAttribute("src", /^\/api\/v1\/fs\/transcode\?path=/);
+  const track = page.locator('video track[kind="subtitles"][label="en"]');
+  const vtt = await page.request.get((await track.getAttribute("src")) ?? "");
+  expect(vtt.headers()["content-type"]).toBe("text/vtt; charset=utf-8");
+  expect(await vtt.text()).toBe("WEBVTT\n\n1\n00:00:01.000 --> 00:00:02.000\nHello\n");
+  await removeSandbox(page, sandbox);
+});
 
 for (const width of [320, 402]) {
   test(`mobile preview header stays usable at ${width}px`, async ({ page }) => {

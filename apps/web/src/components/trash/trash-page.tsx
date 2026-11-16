@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useTrashSettings } from "@/lib/api/trash-settings-queries";
 import { describeFsError } from "@/lib/files/queries";
 import { useDefaultView } from "@/lib/files/use-default-view";
 import {
@@ -48,7 +49,6 @@ import {
   useTrashEmpty,
   useTrashPurge,
   useTrashRestore,
-  useTrashStatus,
 } from "@/lib/trash/queries";
 import { useFormatters } from "@/lib/use-format-preferences";
 
@@ -63,11 +63,11 @@ type ConfirmAction =
 export function TrashPage() {
   const { formatBytes, formatDate } = useFormatters();
   const [viewMode] = useDefaultView();
-  const status = useTrashStatus();
   const trash = useTrash();
   const restore = useTrashRestore();
   const purge = useTrashPurge();
   const emptyTrash = useTrashEmpty();
+  const retention = retentionNote(useTrashSettings().data?.retentionDays);
 
   const entries = trash.data?.entries ?? [];
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -195,8 +195,6 @@ export function TrashPage() {
   // A restore started from the toolbar; a "Restore to" restore shows its
   // busy state in the picker instead, while the toolbar is merely disabled.
   const restoringSelection = restore.isPending && restoreTargetEntry === null;
-  const note = retentionNote(status.data?.retentionHours ?? null);
-  const helperText = `Files and folders moved to Trash from Files show up here until you restore or permanently delete them.${note ? ` ${note}` : ""}`;
 
   return (
     <>
@@ -204,7 +202,10 @@ export function TrashPage() {
       <main className="mx-auto w-full max-w-6xl space-y-5 p-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Trash</h1>
-          <p className="mt-1 text-sm text-muted-foreground">{helperText}</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Files and folders you delete stay here until you restore them or delete them
+            permanently.{retention === null ? null : ` ${retention}`}
+          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -269,7 +270,7 @@ export function TrashPage() {
         ) : entries.length === 0 ? (
           <EmptyState
             title="Trash is empty"
-            description="Items you move to Trash from Files show up here until you restore or permanently delete them."
+            description="Items you delete show up here until you restore them or delete them permanently."
           />
         ) : (
           <>

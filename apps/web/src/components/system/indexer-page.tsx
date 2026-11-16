@@ -16,13 +16,6 @@ import {
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -56,9 +49,6 @@ import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
 import { SystemSection } from "./system-section";
-
-/** Sentinel `root` select value meaning "every configured root" (the API's `root` omitted). */
-const ALL_ROOTS = "__all__";
 
 interface SettingsDraft {
   scanIntervalSeconds: string;
@@ -99,28 +89,17 @@ export function IndexerPage() {
 
   const [draft, setDraft] = useState<SettingsDraft | null>(null);
   const [reindexOpen, setReindexOpen] = useState(false);
-  const [reindexRoot, setReindexRoot] = useState<string | null>(null);
   const [reindexPath, setReindexPath] = useState("");
   const [clearOpen, setClearOpen] = useState(false);
-  const [clearRoot, setClearRoot] = useState(ALL_ROOTS);
   const [clearPath, setClearPath] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const status = data !== undefined ? sidecarStatus(data.configured, data.reachable) : null;
-  const roots = data?.stats?.roots ?? [];
-  const watcher = data?.health?.watcher ?? {};
-  const rootNames = data?.health?.roots ?? roots.map((root) => root.root);
-
-  const totalFiles = roots.reduce(
-    (sum, root) => sum + Object.values(root.countsByStatus).reduce((a, b) => a + b, 0),
-    0,
-  );
-  const withText = roots.reduce(
-    (sum, root) => sum + (root.countsByStatus.indexed ?? 0) + (root.countsByStatus.partial ?? 0),
-    0,
-  );
-  const totalChunks = roots.reduce((sum, root) => sum + root.chunks, 0);
-  const totalEmbedded = roots.reduce((sum, root) => sum + root.chunksEmbedded, 0);
+  const stats = data?.stats;
+  const counts = stats?.countsByStatus ?? {};
+  const lastScan = stats?.lastScan ?? null;
+  const totalFiles = Object.values(counts).reduce((a, b) => a + b, 0);
+  const withText = (counts.indexed ?? 0) + (counts.partial ?? 0);
 
   const draftValues = draft !== null ? valuesFromDraft(draft) : null;
   const dirty =
@@ -155,49 +134,31 @@ export function IndexerPage() {
   }
 
   function handleReindexConfirm() {
-    if (reindexRoot === null) {
-      return;
-    }
-    reindex.mutate(
-      {
-        root: reindexRoot,
-        ...(reindexPath.trim().length > 0 ? { path: reindexPath.trim() } : {}),
+    reindex.mutate(reindexPath.trim().length > 0 ? { path: reindexPath.trim() } : {}, {
+      onSuccess: (result) => {
+        toast.success(`Marked ${result.marked} file${result.marked === 1 ? "" : "s"} for reindex.`);
+        setReindexOpen(false);
+        setReindexPath("");
       },
-      {
-        onSuccess: (result) => {
-          toast.success(
-            `Marked ${result.marked} file${result.marked === 1 ? "" : "s"} for reindex.`,
-          );
-          setReindexOpen(false);
-          setReindexPath("");
-        },
-        onError: (err) => toast.error(describeApiError(err)),
-      },
-    );
+      onError: (err) => toast.error(describeApiError(err)),
+    });
   }
 
   function handleClearConfirm() {
-    clearIndex.mutate(
-      {
-        ...(clearRoot !== ALL_ROOTS ? { root: clearRoot } : {}),
-        ...(clearPath.trim() ? { path: clearPath.trim() } : {}),
+    clearIndex.mutate(clearPath.trim() ? { path: clearPath.trim() } : {}, {
+      onSuccess: () => {
+        toast.success("Index clear started.");
+        setClearOpen(false);
+        setClearPath("");
       },
-      {
-        onSuccess: () => {
-          toast.success("Index clear started.");
-          setClearOpen(false);
-          setClearRoot(ALL_ROOTS);
-          setClearPath("");
-        },
-        onError: (err) => toast.error(describeMaintenanceError(err)),
-      },
-    );
+      onError: (err) => toast.error(describeMaintenanceError(err)),
+    });
   }
 
   return (
     <SystemPage
       title="Full-text search"
-      description="Roots, scan status, and extraction settings for full-text search."
+      description="Scan status and extraction settings for full-text search."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature={["thumbnails", "textSearch", "searchOcr", "imageSearch"]}
       actions={
@@ -210,11 +171,7 @@ export function IndexerPage() {
           >
             Clear index
           </Button>
-          <Button
-            type="button"
-            onClick={() => setReindexOpen(true)}
-            disabled={rootNames.length === 0 || unavailable || busy}
-          >
+          <Button type="button" onClick={() => setReindexOpen(true)} disabled={unavailable || busy}>
             Reindex
           </Button>
           <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
@@ -232,79 +189,65 @@ export function IndexerPage() {
             title="Status"
             description={
               data.configured
-                ? "The indexer's internal API, per configured root."
-                : "Not configured: set FDRIVE_INDEXER_URL and FDRIVE_INDEX_ROOTS."
+                ? "The indexer's internal API and its file watcher."
+                : "Not configured: set FDRIVE_INDEXER_URL."
             }
             contentClassName="flex-row flex-wrap items-center gap-3"
           >
             {status !== null ? <StatusBadge status={status} /> : null}
-            {rootNames.map((root) => (
-              <Badge key={root} variant={watcher[root] ? "secondary" : "outline"}>
-                {root} · watcher {watcher[root] ? "on" : "off"}
+            {data.health !== undefined ? (
+              <Badge variant={data.health.watcher ? "secondary" : "outline"}>
+                Watcher {data.health.watcher ? "on" : "off"}
               </Badge>
-            ))}
+            ) : null}
           </SystemSection>
 
           <StatGrid
             stats={[
               { label: "Files", value: totalFiles.toLocaleString() },
               { label: "With text", value: withText.toLocaleString() },
-              { label: "Chunks", value: totalChunks.toLocaleString() },
-              { label: "Embedded", value: totalEmbedded.toLocaleString() },
-              { label: "Queue depth", value: (data.stats?.queueDepth ?? 0).toLocaleString() },
+              { label: "Chunks", value: (stats?.chunks ?? 0).toLocaleString() },
+              { label: "Embedded", value: (stats?.chunksEmbedded ?? 0).toLocaleString() },
+              { label: "Queue depth", value: (stats?.queueDepth ?? 0).toLocaleString() },
             ]}
           />
 
-          <MaintenanceProgress title="Index clear" job={data.stats?.indexClear} />
+          <MaintenanceProgress title="Index clear" job={stats?.indexClear} />
 
-          {roots.length > 0 ? (
+          {Object.keys(counts).length > 0 ? (
             <SystemSection title="Counts by status">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Root</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Files</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {roots.flatMap((root) =>
-                    Object.entries(root.countsByStatus).map(([status_, count]) => (
-                      <TableRow key={`${root.root}-${status_}`}>
-                        <TableCell className="font-medium">{root.root}</TableCell>
-                        <TableCell>{status_}</TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {count.toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    )),
-                  )}
+                  {Object.entries(counts).map(([status_, count]) => (
+                    <TableRow key={status_}>
+                      <TableCell>{status_}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {count.toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
                 </TableBody>
               </Table>
             </SystemSection>
           ) : null}
 
-          {roots.some((root) => root.lastScan !== null) ? (
+          {lastScan !== null ? (
             <SystemSection title="Last scan">
-              {roots
-                .filter((root) => root.lastScan !== null)
-                .map((root) => (
-                  <div
-                    key={root.root}
-                    className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm"
-                  >
-                    <span className="font-medium">{root.root}</span>
-                    <span className="text-muted-foreground">
-                      started{" "}
-                      {formatRelativeTime(new Date(root.lastScan?.startedAt ?? 0), new Date())}
-                    </span>
-                    <span className="text-muted-foreground">
-                      {root.lastScan?.filesSeen ?? 0} seen · {root.lastScan?.filesChanged ?? 0}{" "}
-                      changed · {root.lastScan?.filesDeleted ?? 0} deleted ·{" "}
-                      {root.lastScan?.errors ?? 0} errors
-                    </span>
-                  </div>
-                ))}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <span className="text-muted-foreground">
+                  started {formatRelativeTime(new Date(lastScan.startedAt), new Date())}
+                </span>
+                <span className="text-muted-foreground">
+                  {lastScan.filesSeen} seen · {lastScan.filesChanged} changed ·{" "}
+                  {lastScan.filesDeleted} deleted · {lastScan.errors} errors
+                </span>
+              </div>
             </SystemSection>
           ) : null}
         </>
@@ -394,39 +337,23 @@ export function IndexerPage() {
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
             <Field>
-              <FieldLabel htmlFor="reindex-root">Root</FieldLabel>
-              <Select value={reindexRoot} onValueChange={(value) => setReindexRoot(value ?? null)}>
-                <SelectTrigger id="reindex-root">
-                  <SelectValue placeholder="Select a root" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rootNames.map((root) => (
-                    <SelectItem key={root} value={root}>
-                      {root}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
               <FieldLabel htmlFor="reindex-path">Path (optional)</FieldLabel>
               <Input
                 id="reindex-path"
                 value={reindexPath}
                 onChange={(event) => setReindexPath(event.target.value)}
-                placeholder="Leave empty to reindex the whole root"
+                placeholder="Everything"
               />
+              <FieldDescription>
+                A file or folder in the files folder, such as alice/Documents.
+              </FieldDescription>
             </Field>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setReindexOpen(false)}>
               Cancel
             </Button>
-            <Button
-              type="button"
-              disabled={reindexRoot === null || unavailable || busy}
-              onClick={handleReindexConfirm}
-            >
+            <Button type="button" disabled={unavailable || busy} onClick={handleReindexConfirm}>
               Reindex
             </Button>
           </DialogFooter>
@@ -439,45 +366,21 @@ export function IndexerPage() {
             <DialogTitle>Clear index data?</DialogTitle>
             <DialogDescription>
               Removes indexed file records, extracted text, chunks, and embeddings in the selected
-              scope. Original files, thumbnails, tags, favorites, recents, roots, and history stay.
-              Later scheduled scans or file changes can populate the index again.
+              scope. Original files, thumbnails, tags, favorites, recents, and history stay. Later
+              scheduled scans or file changes can populate the index again.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-4 py-2">
-            <Field>
-              <FieldLabel htmlFor="clear-index-root">Root</FieldLabel>
-              <Select
-                value={clearRoot}
-                onValueChange={(value) => {
-                  setClearRoot(value ?? ALL_ROOTS);
-                  setClearPath("");
-                }}
-              >
-                <SelectTrigger id="clear-index-root">
-                  <SelectValue>{clearRoot === ALL_ROOTS ? "All roots" : clearRoot}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL_ROOTS}>All roots</SelectItem>
-                  {rootNames.map((root) => (
-                    <SelectItem key={root} value={root}>
-                      {root}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <FieldDescription>Choose all roots or limit removal to one root.</FieldDescription>
-            </Field>
             <Field>
               <FieldLabel htmlFor="clear-index-path">Path (optional)</FieldLabel>
               <Input
                 id="clear-index-path"
                 value={clearPath}
-                disabled={clearRoot === ALL_ROOTS}
                 onChange={(event) => setClearPath(event.target.value)}
-                placeholder="Whole root"
+                placeholder="Everything"
               />
               <FieldDescription>
-                Choose a root first, then enter a file or folder path relative to it.
+                A file or folder in the files folder, such as alice/Documents.
               </FieldDescription>
             </Field>
           </div>

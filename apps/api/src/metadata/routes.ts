@@ -64,9 +64,8 @@ async function runTagCall<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * Registers the phase 3 metadata routes: tag CRUD and per-tag file listing,
  * `PUT /fs/tags` (replace a path's tags), and favorites/recents CRUD. Tags
- * are scoped to the caller's account (shared across every linked identity);
- * `file_tags`, favorites, and recents are scoped to the caller's active
- * identity, matching every other fs-facing route.
+ * are scoped to the caller's account; `file_tags`, favorites, and recents to
+ * its login, matching every other fs-facing route.
  */
 export function registerMetadataRoutes(
   groups: { public: AppHono; authed: AuthedHono },
@@ -274,7 +273,7 @@ export function registerMetadataRoutes(
       c,
       metadata,
       { action: "folder.view.reset", requested: { variant: "all" } },
-      (metadata) => metadata.resetFolderViews(principal.accountId),
+      (metadata) => metadata.resetFolderViews(principal.identityId),
     );
     const body: OkResponse = { ok: true };
     return c.json(body);
@@ -314,7 +313,6 @@ export function registerMetadataRoutes(
     // into history. New opens are recorded as the person who made them.
     if (deps.admitActivity)
       await deps.admitActivity(c, {
-        identityId: principal.identityId,
         path,
         action: "file.open",
         requestId: input.requestId ?? randomUUID(),

@@ -6,12 +6,23 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     let domain: NSFileProviderDomain
     init(domain: NSFileProviderDomain) { self.domain = domain; super.init() }
     func invalidate() {}
-    private func connection() throws -> (Catalog, APIClient) {
-        // Finder runs this extension without the app, so the trial is enforced here too.
-        guard NativeEnvironment.licenseState().allowsAccess else { throw DriveError.unlicensed }
+    private func location() throws -> (ConnectionStore, SavedLocation) {
         let store = try NativeEnvironment.store()
         guard let location = try store.load().first(where: { $0.id == domain.identifier.rawValue }) else { throw DriveError.authentication }
+        return (store, location)
+    }
+    private func saved() throws -> (ConnectionStore, SavedLocation) {
+        // Finder runs this extension without the app, so the trial is enforced here too.
+        guard NativeEnvironment.licenseState().allowsAccess else { throw DriveError.unlicensed }
+        return try location()
+    }
+    private func connection() throws -> (Catalog, APIClient) {
+        let (store, location) = try saved()
         return (try store.catalog(location), try store.client(location))
+    }
+    private func writer() throws -> WriteCoordinator {
+        let (store, location) = try saved()
+        return try store.writer(location)
     }
     func enumerator(for containerItemIdentifier: NSFileProviderItemIdentifier, request: NSFileProviderRequest) throws -> NSFileProviderEnumerator {
         let (repository, client) = try connection()
@@ -77,8 +88,7 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let progress = Progress(totalUnitCount: -1)
         let task = Task {
             do {
-                let (repository, client) = try connection()
-                let coordinator = WriteCoordinator(catalog: repository, client: client)
+                let coordinator = try writer()
                 if reimport {
                     // Matching remote bytes or metadata are acknowledged without a second
                     // copy; differing bytes fall through to a create that keeps both.
@@ -115,10 +125,10 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
             let progress = Progress(totalUnitCount: -1)
             let task = Task {
                 do {
-                    let (repository, client) = try connection()
-                    let previous = try await repository.item(id)
+                    let coordinator = try writer()
+                    _ = try await coordinator.catalog.item(id)
                     guard !hasContents || newContents != nil else { throw DriveError.unsupported }
-                    let result = try await WriteCoordinator(catalog: repository, client: client).perform(
+                    let result = try await coordinator.perform(
                         route: hasContents ? "uploads" : "moves", localId: id, templateKey: id,
                         parentId: parentId, name: name, base: base, contents: newContents, progress: progress, keepBoth: keepBoth, modificationDate: modificationDate)
                     await signalChanges()
@@ -137,12 +147,32 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
     func deleteItem(identifier: NSFileProviderItemIdentifier, baseVersion version: NSFileProviderItemVersion,
                     options: NSFileProviderDeleteItemOptions, request: NSFileProviderRequest,
                     completionHandler: @escaping (Error?) -> Void) -> Progress {
-        // Finder trashing uses modifyItem -> trashContainer. This callback means
-        // permanent removal, including direct unlink requests from applications.
-        // Rejection makes the system restore its local item instead of losing it.
-        completionHandler(NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.deletionRejected.rawValue,
-                                  userInfo: [NSLocalizedDescriptionKey: "Permanent deletion is disabled. Use Move to Trash to retain a recoverable copy."]))
-        return Progress(totalUnitCount: 0)
+        // Finder's Move to Trash arrives as modifyItem into the Trash container. This is a
+        // permanent delete: Empty Trash, Delete Immediately, or an app removing a file. It
+        // deletes a whole item in Trash for good and moves anything else to fdrive's Trash;
+        // a refused one puts the item back, and none is ever retried (`WriteCoordinator.delete`).
+        let handler = Callback(completionHandler)
+        let id = NativeEnvironment.id(identifier)
+        let base = WriteVersion(content: String(decoding: version.contentVersion, as: UTF8.self),
+                                metadata: String(decoding: version.metadataVersion, as: UTF8.self))
+        let progress = Progress(totalUnitCount: 1)
+        let task = Task {
+            let outcome = await deletion(of: id, base: base)
+            await signalChanges()
+            progress.completedUnitCount = 1
+            handler.value(deleteAnswer(outcome) { ProviderItem($0) })
+        }
+        progress.cancellationHandler = { task.cancel() }
+        return progress
+    }
+    /// A delete runs only for a licensed, connected location. Otherwise nothing is deleted,
+    /// and the item comes back as this Mac's catalog has it; one the catalog does not know
+    /// was never this location's to delete.
+    private func deletion(of id: String, base: WriteVersion) async -> DeleteOutcome {
+        if let coordinator = try? writer() { return await coordinator.delete(id, base: base) }
+        guard let found = try? location(), let catalog = try? found.0.catalog(found.1),
+              let item = try? await catalog.item(id) else { return .deleted }
+        return .kept(item)
     }
     /// A replicated extension is only heard through the working set; other containers are ignored.
     private func signalChanges() async {

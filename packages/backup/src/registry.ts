@@ -1,17 +1,16 @@
 /** Explicit coverage: adding a table without a policy prevents a successful backup. */
 export const DURABLE_TABLES = [
-  "app.providers",
   "app.local_users",
   "app.local_grants",
   "app.accounts",
   "app.identities",
-  "app.credentials",
   "app.api_tokens",
   "app.tags",
   "app.file_tags",
   "app.favorites",
   "app.folder_views",
   "app.recents",
+  "app.saved_searches",
   "app.ai_chats",
   "app.ai_chat_messages",
   "app.ai_chat_references",
@@ -21,7 +20,7 @@ export const DURABLE_TABLES = [
   "app.system_events",
   "app.desktop_items",
   "app.desktop_operations",
-  "app.desktop_effects",
+  "app.trash_items",
   "app.activity_storage_identities",
   "app.activity_files",
   "app.activity_file_bridges",
@@ -35,10 +34,7 @@ export const DURABLE_TABLES = [
   "app.activity_trash_bindings",
   "app.activity_observation_state",
   "app.activity_read_windows",
-  "idx.roots",
   "idx.scans",
-  "idx.moves",
-  "idx.events",
   "idx.ocr_log",
   "idx.ocr_runs",
   "idx.processing_failures",
@@ -46,7 +42,6 @@ export const DURABLE_TABLES = [
   "app.backup_destinations",
   "app.backup_runs",
   "app.backup_deliveries",
-  "app.backup_attachments",
 ] as const;
 export const OMITTED_TABLES = {
   "app.thumbnails": "rebuildable",
@@ -60,8 +55,17 @@ export const OMITTED_TABLES = {
   "app.activity_exports": "transient",
   "app.activity_export_reads": "transient",
   "app.wopi_locks": "transient",
-  "idx.work": "transient",
-  "idx.schema_version": "migration",
+  // The change journal and its readers' positions. A restore rebuilds the
+  // index from the disk, so no consumer could resume from a position taken
+  // before it, and a month of rows would grow every backup for nothing.
+  // After a restore the journal starts again and the indexer at its end.
+  "idx.changes": "transient",
+  "idx.change_cursors": "transient",
+  // Names the journal's positions. A restore must get a new one, so a Mac
+  // app's position from before it reads as unknown rather than as a later one.
+  "idx.change_epoch": "transient",
+  // Its one row, the files folder's, comes from a migration.
+  "idx.roots": "migration",
 } as const;
 export type DurableTable = (typeof DURABLE_TABLES)[number];
 export function assertCoverage(tables: string[]): void {
@@ -81,5 +85,17 @@ export function quoteTable(value: string): string {
   if (!(DURABLE_TABLES as readonly string[]).includes(value)) throw Error("Unknown backup table");
   return value.split(".").map(quoteIdentifier).join(".");
 }
+/**
+ * Held shared by everything that writes or removes recovery files (OCR's kept originals and
+ * their mappings), and exclusively by a capture from before its database snapshot until it has
+ * read every recovery file, so the files it reads match the snapshot.
+ */
 export const BACKUP_GATE = 736591204;
 export const BACKUP_WORKER = 736591205;
+/**
+ * Held shared by every write that changes the database in more than one step, or the database
+ * and the files folder together (`withDatabaseWrite`), and exclusively by a capture only while
+ * it takes its database snapshot, so the snapshot sees no write half done. Writes go on while
+ * the capture reads rows and files; the snapshot does not see them.
+ */
+export const SNAPSHOT_GATE = 736591207;

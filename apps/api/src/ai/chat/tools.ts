@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
-import { baseName, extensionOf, isUnderPath, normalizePath, parentPath } from "@fdrive/core";
+import {
+  baseName,
+  extensionOf,
+  isReservedPath,
+  mimeFromExtension,
+  normalizePath,
+  parentPath,
+} from "@fdrive/core";
 import { z } from "zod";
-import { boundedBytes, decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
+import { decodeText, MAX_FILE_BYTES } from "../../mcp/content.js";
 import { pageText } from "../../mcp/format.js";
 import {
   fileInfoInScope,
@@ -29,10 +36,6 @@ function shareOf(deps: DriveToolsDeps) {
   return deps.share ?? { contents: true, otherFileNames: true };
 }
 
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
 function normalizeArg(path: string): string {
   try {
     return normalizePath(path);
@@ -48,9 +51,8 @@ async function storedArg(deps: DriveToolsDeps, path: string): Promise<string> {
 /** The stored path of a referenced item, or a tool error the model can act on. */
 export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<string> {
   const path = await storedArg(deps, raw);
-  const trashPath = trashPathOf(deps);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-    throw new AiToolError("That path is in the Trash.");
+  if (isReservedPath(path))
+    throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   if (!isWithin(deps.focus.paths, path))
     throw new AiToolError(
       `${path} is not ${deps.focus.adjective}; only ${deps.focus.adjective} items and their contents can be used. Ask the person to open its folder or add it to the chat.`,
@@ -58,23 +60,19 @@ export async function referencedArg(deps: DriveToolsDeps, raw: string): Promise<
   return path;
 }
 
-/** Downloads a whole file when it fits the byte cap, else `null`. */
+/** Reads a whole file when it fits the byte cap, else `null`. */
 export async function readBytes(
   deps: DriveToolsDeps,
   path: string,
   limit: number,
-  signal: AbortSignal,
 ): Promise<{ bytes: Buffer; sha256: string } | null> {
-  const result = await deps.principal.storage.download(path, { signal });
-  if (result.contentLength !== null && result.contentLength > limit) {
-    await result.body.cancel();
-    return null;
-  }
+  const file = await deps.principal.storage.open(path);
   let bytes: Buffer;
   try {
-    bytes = await boundedBytes(result.body, limit);
-  } catch {
-    return null;
+    if (file.size > limit) return null;
+    bytes = Buffer.from(await file.read(0, file.size));
+  } finally {
+    await file.close();
   }
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
@@ -99,12 +97,12 @@ function readFileTool(deps: DriveToolsDeps): AiTool {
     schema,
     {
       activity: (args) => `Read ${baseName(args.path)}`,
-      async run(args, signal) {
+      async run(args) {
         const path = await referencedArg(deps, args.path);
         const stat = await deps.principal.storage.stat(path);
         if (stat.kind === "dir") throw new AiToolError(`${path} is a folder; list it instead.`);
         if (!DOCUMENT_EXTENSIONS.test(path) && stat.size <= MAX_FILE_BYTES) {
-          const read = await readBytes(deps, path, MAX_FILE_BYTES, signal);
+          const read = await readBytes(deps, path, MAX_FILE_BYTES);
           const text = read === null ? null : decodeText(read.bytes);
           if (read !== null && text !== null) {
             const page = pageText(text, args.offset, READ_CHARS);
@@ -161,12 +159,13 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
       async run(args) {
         const path = await referencedArg(deps, args.path);
         const stat = await deps.principal.storage.stat(path);
+        const mime = mimeFromExtension(stat.ext);
         const lines = [
           `${path}`,
           `kind: ${stat.kind === "dir" ? "folder" : "file"}`,
           ...(stat.kind === "dir" ? [] : [`size: ${formatSize(stat.size)} (${stat.size} bytes)`]),
-          `modified: ${stat.modifiedAt?.toISOString() ?? "unknown"}`,
-          ...(stat.contentType ? [`type: ${stat.contentType}`] : []),
+          `modified: ${stat.modifiedAt.toISOString()}`,
+          ...(mime === null ? [] : [`type: ${mime}`]),
         ];
         const metadata = deps.mcp.metadata;
         if (metadata !== undefined) {
@@ -176,9 +175,9 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
               path,
               kind: stat.kind === "dir" ? "dir" : "file",
               size: stat.size,
-              modifiedAt: (stat.modifiedAt ?? deps.mcp.clock()).toISOString(),
+              modifiedAt: stat.modifiedAt.toISOString(),
               ext: extensionOf(baseName(path)),
-              mime: null,
+              mime,
             },
           ]);
           const tagIds = new Set(entry?.meta?.tagIds ?? []);
@@ -200,7 +199,7 @@ function fileInfoTool(deps: DriveToolsDeps): AiTool {
             const { file, scope } = found;
             lines.push(`index: ${file.textStatus}${file.sha256 ? `, sha256 ${file.sha256}` : ""}`);
             try {
-              const info = await fileInfoInScope(deps.mcp, scope.ctx, scope.authorizer, { path });
+              const info = await fileInfoInScope(deps.mcp, scope.ctx, { path });
               lines.push(
                 `identical copies: ${describePaths(info.identical_copies, shareOf(deps).otherFileNames)}`,
               );
@@ -232,12 +231,12 @@ function duplicatesTool(deps: DriveToolsDeps): AiTool {
           return `${path} is not indexed, so its content cannot be compared. Compare names, sizes and dates instead.`;
         const { scope } = found;
         const names = shareOf(deps).otherFileNames;
-        const info = await fileInfoInScope(deps.mcp, scope.ctx, scope.authorizer, { path });
-        const similar = await similarFilesInScope(deps.mcp, scope.ctx, scope.authorizer, {
+        const info = await fileInfoInScope(deps.mcp, scope.ctx, { path });
+        const similar = await similarFilesInScope(deps.mcp, scope.ctx, {
           path,
           limit: 10,
         });
-        const sameName = await findFilesInScope(deps.mcp, scope.ctx, scope.authorizer, {
+        const sameName = await findFilesInScope(deps.mcp, scope.ctx, {
           name_contains: baseName(path),
           limit: 20,
         });

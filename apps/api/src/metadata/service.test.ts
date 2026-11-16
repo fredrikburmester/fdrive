@@ -1,12 +1,7 @@
 import type { FsEntry } from "@fdrive/contracts";
 import { createMemoryRepos } from "@fdrive/db/testing";
-import { describe, expect, it, vi } from "vitest";
-import {
-  createMetadataService,
-  DEFAULT_RECENTS_LIMIT,
-  hasTrackedMetadata,
-  RECENTS_KEEP,
-} from "./service.js";
+import { describe, expect, it } from "vitest";
+import { createMetadataService, DEFAULT_RECENTS_LIMIT, RECENTS_KEEP } from "./service.js";
 
 function buildService() {
   const repos = createMemoryRepos();
@@ -162,36 +157,28 @@ describe("createMetadataService: folder views", () => {
     expect(await service.getFolderView(IDENTITY_ID, "/photos")).toBeNull();
   });
 
-  it("resets views across every linked identity without touching another account", async () => {
+  it("resets every view of the login without touching another login's", async () => {
     const { repos, service } = buildService();
-    const provider = await repos.providers.ensure({ type: "test", baseUrl: "http://test" });
     const account = await repos.accounts.create({ displayName: "Alice" });
     const otherAccount = await repos.accounts.create({ displayName: "Bob" });
-    const first = await repos.identities.create({
+    const alice = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice-1",
-    });
-    const second = await repos.identities.create({
-      accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice-2",
+      username: "alice",
     });
     const other = await repos.identities.create({
       accountId: otherAccount.id,
-      providerId: provider.id,
-      externalUsername: "bob",
+      username: "bob",
     });
     await Promise.all([
-      service.setFolderView(first.id, "/one", { mode: "list" }),
-      service.setFolderView(second.id, "/two", { mode: "grid" }),
+      service.setFolderView(alice.id, "/one", { mode: "list" }),
+      service.setFolderView(alice.id, "/two", { mode: "grid" }),
       service.setFolderView(other.id, "/keep", { mode: "tree" }),
     ]);
 
-    await service.resetFolderViews(account.id);
+    await service.resetFolderViews(alice.id);
 
-    await expect(service.getFolderView(first.id, "/one")).resolves.toBeNull();
-    await expect(service.getFolderView(second.id, "/two")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/one")).resolves.toBeNull();
+    await expect(service.getFolderView(alice.id, "/two")).resolves.toBeNull();
     await expect(service.getFolderView(other.id, "/keep")).resolves.toMatchObject({ mode: "tree" });
   });
 });
@@ -331,32 +318,6 @@ describe("createMetadataService: onDeleted", () => {
   });
 });
 
-describe("createMetadataService: onTrashed", () => {
-  it("drops only recents, keeping tags and favorites at the original path", async () => {
-    const { repos, service } = buildService();
-    const account = await repos.accounts.create({ displayName: "Alice" });
-    const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
-      tag.id,
-    ]);
-    await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
-    await service.touchRecent(IDENTITY_ID, "/a.txt");
-
-    await service.onTrashed(IDENTITY_ID, "/a.txt", false);
-
-    expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual(["/a.txt"]);
-    expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/a.txt"]);
-    expect(await service.listRecents(IDENTITY_ID)).toEqual([]);
-  });
-
-  it("is idempotent: trashing an already-gone path is harmless", async () => {
-    const { service } = buildService();
-    await expect(
-      service.onTrashed(IDENTITY_ID, "/never-existed.txt", false),
-    ).resolves.toBeUndefined();
-  });
-});
-
 describe("createMetadataService: onCopied", () => {
   it("does not copy tags or favorites onto the target", async () => {
     const { repos, service } = buildService();
@@ -374,41 +335,14 @@ describe("createMetadataService: onCopied", () => {
   });
 });
 
-describe("hasTrackedMetadata", () => {
-  it("is false when a path has no tags and is not favorited", async () => {
-    const { repos } = buildService();
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(false);
-  });
-
-  it("is true when a path has a tag", async () => {
-    const { repos, service } = buildService();
-    const account = await repos.accounts.create({ displayName: "Alice" });
-    const tag = await service.createTag(account.id, { name: "Work", color: null });
-    await service.setFileTags({ accountId: account.id, identityId: IDENTITY_ID }, "/a.txt", [
-      tag.id,
-    ]);
-
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
-  });
-
-  it("is true when a path is favorited", async () => {
-    const { repos, service } = buildService();
-    await service.addFavorite(IDENTITY_ID, "/a.txt", "file");
-
-    expect(await hasTrackedMetadata(repos, IDENTITY_ID, "/a.txt")).toBe(true);
-  });
-});
-
 describe("createMetadataService: AI chat references", () => {
   async function withChat() {
     const repos = createMemoryRepos();
     const service = createMetadataService(repos);
     const account = await repos.accounts.create({ displayName: "Alice" });
-    const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://a" });
     const identity = await repos.identities.create({
       accountId: account.id,
-      providerId: provider.id,
-      externalUsername: "alice",
+      username: "alice",
     });
     const chat = await repos.aiChats.create({
       identityId: identity.id,
@@ -421,7 +355,7 @@ describe("createMetadataService: AI chat references", () => {
     return { service, identity: identity.id, references };
   }
 
-  it("follows moves and marks trashed and deleted items missing", async () => {
+  it("follows moves and marks deleted items missing", async () => {
     const { service, identity, references } = await withChat();
 
     await service.onMoved(identity, "/a.txt", "/b.txt", false);
@@ -431,10 +365,9 @@ describe("createMetadataService: AI chat references", () => {
       ["/moved/x.txt", false],
     ]);
 
-    await service.onTrashed(identity, "/b.txt", false);
     await service.onDeleted(identity, "/moved", true);
     expect(await references()).toEqual([
-      ["/b.txt", true],
+      ["/b.txt", false],
       ["/moved/x.txt", true],
     ]);
   });
@@ -444,59 +377,6 @@ describe("createMetadataService: AI chat references", () => {
     const { aiChats: _aiChats, ...withoutChats } = repos;
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
-    await expect(service.onTrashed(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
-  });
-});
-
-describe("createMetadataService: followers", () => {
-  it("tells each follower about moves and deletes, in order, after its own records", async () => {
-    const repos = createMemoryRepos();
-    const calls: string[] = [];
-    const follower = (name: string) => ({
-      onMoved: vi.fn(async (identity: string, from: string, to: string, isDir: boolean) => {
-        calls.push(`${name} moved ${identity} ${from} ${to} ${isDir}`);
-      }),
-      onDeleted: vi.fn(async (identity: string, path: string, isDir: boolean) => {
-        calls.push(`${name} deleted ${identity} ${path} ${isDir}`);
-      }),
-    });
-    const movePrefix = vi.spyOn(repos.metadataPaths, "movePrefix");
-    const service = createMetadataService({
-      ...repos,
-      followers: [follower("grants"), follower("other")],
-    });
-
-    await service.onMoved(IDENTITY_ID, "/Projects", "/Work", true);
-    await service.onDeleted(IDENTITY_ID, "/Work", true);
-    // Trash is not a delete: a share of a trashed folder stays until it is gone for good.
-    await service.onTrashed(IDENTITY_ID, "/Other", true);
-
-    expect(movePrefix).toHaveBeenCalledWith(IDENTITY_ID, "/Projects", "/Work", true);
-    expect(calls).toEqual([
-      `grants moved ${IDENTITY_ID} /Projects /Work true`,
-      `other moved ${IDENTITY_ID} /Projects /Work true`,
-      `grants deleted ${IDENTITY_ID} /Work true`,
-      `other deleted ${IDENTITY_ID} /Work true`,
-    ]);
-  });
-
-  it("stops at a follower that fails, so the caller sees the failure", async () => {
-    const repos = createMemoryRepos();
-    const failure = new Error("grants unavailable");
-    const after = { onMoved: vi.fn(), onDeleted: vi.fn() };
-    const service = createMetadataService({
-      ...repos,
-      followers: [
-        {
-          onMoved: vi.fn().mockRejectedValue(failure),
-          onDeleted: vi.fn().mockRejectedValue(failure),
-        },
-        after,
-      ],
-    });
-    await expect(service.onMoved(IDENTITY_ID, "/a", "/b", true)).rejects.toBe(failure);
-    await expect(service.onDeleted(IDENTITY_ID, "/b", true)).rejects.toBe(failure);
-    expect(after.onMoved).not.toHaveBeenCalled();
-    expect(after.onDeleted).not.toHaveBeenCalled();
+    await expect(service.onDeleted(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
   });
 });

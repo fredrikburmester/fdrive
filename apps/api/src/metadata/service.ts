@@ -1,4 +1,5 @@
 import type { FsEntry } from "@fdrive/contracts";
+import { isReservedPath } from "@fdrive/core";
 import type {
   AiChatRepo,
   Tag as DbTag,
@@ -9,7 +10,6 @@ import type {
   FolderViewPatch,
   FolderViewRepo,
   FolderViewSort,
-  IdentityRepo,
   MetadataPathRepo,
   RecentRepo,
   TagRepo,
@@ -40,22 +40,13 @@ export interface MetadataFolderView {
   readonly sort: FolderViewSort | null;
 }
 
-/** Something else keyed by a login's paths that follows its moves and deletes. */
-export interface PathFollower {
-  onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
-  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
-}
-
 export interface MetadataServiceDeps {
-  /** Folders shared with people follow their owner's moves and deletes. */
-  readonly followers?: readonly PathFollower[];
   /** AI chat references follow the same moves and deletes; optional for tests that have no chats. */
   readonly aiChats?: Pick<AiChatRepo, "moveReferences" | "markReferencesMissing"> | undefined;
   readonly tags: TagRepo;
   readonly fileTags: FileTagRepo;
   readonly favorites: FavoriteRepo;
   readonly folderViews: FolderViewRepo;
-  readonly identities: Pick<IdentityRepo, "listByAccount">;
   readonly metadataPaths: MetadataPathRepo;
   readonly recents: RecentRepo;
 }
@@ -83,10 +74,13 @@ function toMetadataTag(tag: DbTag): MetadataTag {
 
 /**
  * The metadata use cases shared by the tags, favorites, and recents routes,
- * plus the hooks `fs/routes.ts` calls after a move or delete so tag and
- * favorite and folder-view metadata survives renames made through fdrive itself. Renames and
- * deletes seen via the indexer (rsync, SMB, other writers) reach the same
- * hooks through `events/indexer-listener.ts`.
+ * plus the hooks the file operations call after a move or delete
+ * (`files/operations.ts`), so tags, favorites, folder views, recents and AI
+ * chat references survive renames made through fdrive itself. None of it
+ * grants access, so it follows best effort, after what does
+ * (`files/access.ts`). Renames and deletes made outside fdrive (rsync, SMB,
+ * other writers), which the indexer's watcher journals, reach the same hooks
+ * through `events/outside.ts`.
  */
 export interface MetadataService {
   /**
@@ -122,22 +116,18 @@ export interface MetadataService {
   setFolderView(identityId: string, path: string, patch: FolderViewPatch): Promise<void>;
   /** Removes a folder's pin, or only its mode or sort when `part` is given. */
   removeFolderView(identityId: string, path: string, part?: "mode" | "sort"): Promise<void>;
-  /** Resets every folder pin owned through every identity linked to `accountId`. */
-  resetFolderViews(accountId: string): Promise<void>;
+  /** Resets every folder pin of the login. */
+  resetFolderViews(identityId: string): Promise<void>;
   listRecents(identityId: string, limit?: number): Promise<MetadataRecentItem[]>;
   touchRecent(identityId: string, path: string): Promise<void>;
   /** Atomically rewrites all path-keyed metadata after a move made through fdrive or seen on disk. */
   onMoved(identityId: string, oldPath: string, newPath: string, isDir: boolean): Promise<void>;
-  /** Atomically drops all path-keyed metadata after a delete made through fdrive or seen on disk. */
-  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
-   * Drops only the recent-files entries after a delete that moved the item
-   * into the storage provider's trash instead of removing it. Tags and
-   * favorites are left in place (keyed at the original path) so a
-   * same-path restore recovers them. Alternate restores relocate surviving
-   * metadata only when no replacement entry occupies the original path.
+   * Atomically drops all path-keyed metadata after a delete made through
+   * fdrive or seen on disk. Into Trash is a move, and a purge from it a
+   * delete.
    */
-  onTrashed(identityId: string, path: string, isDir: boolean): Promise<void>;
+  onDeleted(identityId: string, path: string, isDir: boolean): Promise<void>;
   /**
    * No-op by design: a copy is a brand new file as far as metadata is
    * concerned, so tags, favorites, and recents on the source are never
@@ -149,22 +139,11 @@ export interface MetadataService {
 }
 
 /**
- * Whether `identityId` has any tags or a favorite recorded at exactly
- * `path`. Used by the indexer listener's sha256 relink fallback: only a path
- * that was actually tracked is worth reconciling when it disappears.
+ * What a list shows of `paths`: none in fdrive's own folders. Metadata follows
+ * an item into Trash, where nothing lists or opens it, and back out.
  */
-export async function hasTrackedMetadata(
-  deps: Pick<MetadataServiceDeps, "fileTags" | "favorites"> &
-    Partial<Pick<MetadataServiceDeps, "folderViews">>,
-  identityId: string,
-  path: string,
-): Promise<boolean> {
-  const [tagsByPath, favoritedPaths, hasFolderView] = await Promise.all([
-    deps.fileTags.tagsForPaths(identityId, [path]),
-    deps.favorites.has(identityId, [path]),
-    deps.folderViews?.has(identityId, path) ?? false,
-  ]);
-  return (tagsByPath.get(path)?.length ?? 0) > 0 || favoritedPaths.has(path) || hasFolderView;
+function visible(paths: readonly string[]): string[] {
+  return paths.filter((path) => !isReservedPath(path));
 }
 
 export function createMetadataService(deps: MetadataServiceDeps): MetadataService {
@@ -203,8 +182,8 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       await deps.tags.delete(id, accountId);
     },
 
-    filesForTag(identityId, tagId) {
-      return deps.fileTags.pathsForTag(identityId, tagId);
+    async filesForTag(identityId, tagId) {
+      return visible(await deps.fileTags.pathsForTag(identityId, tagId));
     },
 
     async setFileTags(owner, path, tagIds) {
@@ -218,11 +197,13 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
 
     async listFavorites(identityId) {
       const favorites = await deps.favorites.list(identityId);
-      return favorites.map((favorite) => ({
-        path: favorite.path,
-        kind: favorite.kind,
-        addedAt: favorite.createdAt,
-      }));
+      return favorites
+        .filter((favorite) => !isReservedPath(favorite.path))
+        .map((favorite) => ({
+          path: favorite.path,
+          kind: favorite.kind,
+          addedAt: favorite.createdAt,
+        }));
     },
 
     addFavorite(identityId, path, kind) {
@@ -251,14 +232,15 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
       );
     },
 
-    async resetFolderViews(accountId) {
-      const identities = await deps.identities.listByAccount(accountId);
-      await Promise.all(identities.map((identity) => deps.folderViews.clear(identity.id)));
+    async resetFolderViews(identityId) {
+      await deps.folderViews.clear(identityId);
     },
 
     async listRecents(identityId, limit = DEFAULT_RECENTS_LIMIT) {
       const recents = await deps.recents.list(identityId, limit);
-      return recents.map((recent) => ({ path: recent.path, openedAt: recent.openedAt }));
+      return recents
+        .filter((recent) => !isReservedPath(recent.path))
+        .map((recent) => ({ path: recent.path, openedAt: recent.openedAt }));
     },
 
     async touchRecent(identityId, path) {
@@ -268,22 +250,14 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
 
     async onMoved(identityId, oldPath, newPath, isDir) {
       await deps.metadataPaths.movePrefix(identityId, oldPath, newPath, isDir);
-      await deps.aiChats?.moveReferences(identityId, oldPath, newPath, isDir);
-      for (const follower of deps.followers ?? []) {
-        await follower.onMoved(identityId, oldPath, newPath, isDir);
-      }
+      // A chat never reads fdrive's own folders: a reference to what went there is missing.
+      if (isReservedPath(newPath))
+        await deps.aiChats?.markReferencesMissing(identityId, oldPath, isDir);
+      else await deps.aiChats?.moveReferences(identityId, oldPath, newPath, isDir);
     },
 
     async onDeleted(identityId, path, isDir) {
       await deps.metadataPaths.deletePrefix(identityId, path, isDir);
-      await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
-      for (const follower of deps.followers ?? []) {
-        await follower.onDeleted(identityId, path, isDir);
-      }
-    },
-
-    async onTrashed(identityId, path, isDir) {
-      await deps.recents.deletePrefix(identityId, path, isDir);
       await deps.aiChats?.markReferencesMissing(identityId, path, isDir);
     },
 

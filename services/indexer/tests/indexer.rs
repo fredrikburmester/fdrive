@@ -7,20 +7,19 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
-use common::fake_ml::{self, IMAGE_EMBED, IMAGE_HEALTH, TEXT_EMBED, TIKA};
+use common::fake_ml::{self, EXTRACT, IMAGE_EMBED, IMAGE_HEALTH, TEXT_EMBED};
 use common::root_env::{
-    Env, OFF, context_with, fake_sha, fv, jpeg, manual_clock, pdf, png, tesseract_available, wait_until,
+    Env, OFF, context_with, fake_sha, fv, jpeg, jpeg_with_exif, manual_clock, pdf, png, tesseract_available, wait_until,
 };
 use fdrive_indexer::backoff::Backoff;
+use fdrive_indexer::config::{ROOT_ID, ROOT_NAME};
 use fdrive_indexer::db::{self, ManifestRow};
-use fdrive_indexer::events::EventKind;
 use fdrive_indexer::features::FeatureConfiguration;
 use fdrive_indexer::files_marker::FILES_MARKER;
 use fdrive_indexer::indexer::{
-    self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, emit_event, error_kind,
-    exclusion_still_applies, guess_mime, process_file, process_thumbnails, safe_process, scan_once,
-    should_retry_unchanged, unchanged_in_db, walk, walk_tree, watch_index, watch_mark_deleted, watch_rename,
-    work_features,
+    self, FileStat, ImageStage, backfill_media, embed_missing, embed_thumbnail, error_kind, exclusion_still_applies,
+    guess_mime, notify_indexed, process_file, process_thumbnails, safe_process, scan_once, should_retry_unchanged,
+    unchanged_in_db, walk, walk_tree, watch_delete, watch_index, watch_rename, work_features,
 };
 use fdrive_indexer::settings::Settings;
 
@@ -81,6 +80,9 @@ fn walk_skips_junk_and_sorts_directories() {
         ("._a.txt", "resource fork"),
         ("node_modules/x.txt", "x"),
         (".git/config", "x"),
+        ("alice/.fdrive-desktop/staging/s.txt", "staged"),
+        // Backups no longer go into the files folder; one an old release left is the user's.
+        ("alice/.fdrive-backups/install/b.age", "backup"),
         ("sub/c.txt", "c"),
         ("sub/deeper/d.txt", "d"),
         ("Zed/e.txt", "e"),
@@ -107,6 +109,7 @@ fn walk_skips_junk_and_sorts_directories() {
         vec![
             "A.txt",
             "b.txt",
+            "alice/.fdrive-backups/install/b.age",
             "sub/.fdrive-partial-0123456789abcdef.docx",
             "sub/c.txt",
             "sub/deeper/d.txt",
@@ -140,6 +143,7 @@ fn walk_tree_reports_the_folders_it_descends_into() {
         "node_modules/pkg",
         ".git/objects",
         "@eaDir",
+        ".fdrive-desktop/trash",
     ] {
         std::fs::create_dir_all(root.join(rel)).unwrap();
     }
@@ -186,12 +190,11 @@ fn walk_reports_unreadable_directories_and_continues() {
 
 // -- pure decisions ------------------------------------------------------------------------
 
-fn manifest_row(size: i64, mtime_ns: i64, status: &str, deleted: bool) -> ManifestRow {
+fn manifest_row(size: i64, mtime_ns: i64, status: &str) -> ManifestRow {
     ManifestRow {
         size,
         mtime_ns,
         status: status.to_owned(),
-        deleted,
         sha256: None,
         image_embedded: false,
         thumbnail_failed: false,
@@ -199,17 +202,16 @@ fn manifest_row(size: i64, mtime_ns: i64, status: &str, deleted: bool) -> Manife
 }
 
 #[test]
-fn unchanged_in_db_needs_a_settled_live_row_of_the_same_version() {
+fn unchanged_in_db_needs_a_settled_row_of_the_same_version() {
     let stat = FileStat {
         size: 10,
         mtime_ns: 123,
     };
     assert!(!unchanged_in_db(None, stat));
-    assert!(unchanged_in_db(Some(&manifest_row(10, 123, "indexed", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "pending", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "indexed", true)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(9, 123, "indexed", false)), stat));
-    assert!(!unchanged_in_db(Some(&manifest_row(10, 124, "indexed", false)), stat));
+    assert!(unchanged_in_db(Some(&manifest_row(10, 123, "indexed")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(10, 123, "pending")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(9, 123, "indexed")), stat));
+    assert!(!unchanged_in_db(Some(&manifest_row(10, 124, "indexed")), stat));
 }
 
 #[test]
@@ -304,8 +306,8 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     }
     assert!(!exclusion_still_applies(&ctx, "notes.txt", over));
     let mut settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/private/*".to_owned()];
-    settings.ocr_image_globs = vec!["r/scans/*".to_owned()];
+    settings.text_exclude_globs = vec!["files/private/*".to_owned()];
+    settings.ocr_image_globs = vec!["files/scans/*".to_owned()];
     assert_eq!(
         ctx.set_settings(settings.clone()),
         vec!["text_exclude_globs", "ocr_image_globs"]
@@ -314,7 +316,7 @@ fn exclusions_apply_until_their_limit_or_rule_changes() {
     assert!(exclusion_still_applies(&ctx, "private/notes.txt", 1));
     assert!(exclusion_still_applies(&ctx, "photos/a.png", 1));
     assert!(!exclusion_still_applies(&ctx, "scans/a.png", 1));
-    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["r/scans/*"]);
+    assert_eq!(ctx.extractor().ocr_image_globs.patterns(), ["files/scans/*"]);
 }
 
 // -- process_file --------------------------------------------------------------------------
@@ -398,7 +400,7 @@ fn a_rejected_embedding_marks_the_file_partial_and_records_the_failure() {
 fn an_unreachable_embed_backend_is_probed_once_and_not_a_file_failure() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     for name in ["a.txt", "b.txt", "c.txt"] {
         let (path, stat) = env.write(name, b"hello");
@@ -456,7 +458,7 @@ fn extraction_statuses() {
     ];
     for (name, bytes, status, error) in cases {
         if name == "short.docx" {
-            env.ml.set_tika_text("tiny");
+            env.ml.set_extract_text("tiny");
         }
         let (path, stat) = env.write(name, bytes);
         assert!(process_file(&ctx, &path, name, stat).unwrap());
@@ -471,10 +473,10 @@ fn extraction_statuses() {
         env.unresolved(),
         [("broken.pdf".to_owned(), "textSearch".to_owned())].into()
     );
-    assert_eq!(env.ml.count(TIKA), 2);
-    assert_eq!(env.ml.requests(TIKA)[0].body, b"docx bytes");
+    assert_eq!(env.ml.count(EXTRACT), 2);
+    assert_eq!(env.ml.requests(EXTRACT)[0].body, b"docx bytes");
     // An unsupported document is an error, not a crash.
-    env.ml.fail(TIKA, 422);
+    env.ml.fail(EXTRACT, 422);
     let (path, stat) = env.write("weird.docx", b"weird");
     process_file(&ctx, &path, "weird.docx", stat).unwrap();
     assert_eq!(
@@ -488,7 +490,7 @@ fn excluded_text_stays_quiet_until_the_rule_is_removed() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
     let mut settings: Settings = ctx.settings();
-    settings.text_exclude_globs = vec!["r/*.txt".to_owned()];
+    settings.text_exclude_globs = vec!["files/*.txt".to_owned()];
     ctx.set_settings(settings.clone());
     let (path, stat) = env.write("a.txt", b"excluded");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
@@ -501,12 +503,12 @@ fn excluded_text_stays_quiet_until_the_rule_is_removed() {
     let result = scan_once(&ctx);
     assert_eq!((result.seen, result.changed, result.errors), (1, 0, 0));
     assert!(!process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
     settings.text_exclude_globs = vec![];
     ctx.set_settings(settings);
     assert_eq!(scan_once(&ctx).changed, 1);
     assert_eq!(env.status(&ctx, "a.txt"), "partial");
-    assert_eq!(env.events(), ["created"], "re-deriving the same version emits nothing");
+    assert_eq!(env.signals(), 1, "re-deriving the same version emits nothing");
 }
 
 #[test]
@@ -554,7 +556,7 @@ fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
         ["alice/a.txt", "alice/b.txt"],
         "the marker itself is never indexed"
     );
-    let live = || env.count("idx.files WHERE deleted_at IS NULL");
+    let live = || env.count("idx.files");
 
     // An empty folder mounted in its place, as Compose does when FDRIVE_FILES_DIR is unset.
     std::fs::remove_dir_all(env.path("alice")).unwrap();
@@ -585,8 +587,13 @@ fn a_scan_deletes_nothing_from_a_folder_without_this_installations_marker() {
 fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     let env = Env::new();
     let cfg = Arc::new(env.config());
-    let root_id = db::upsert_root(&mut env.client(), "r").unwrap();
-    let mut ctx = indexer::RootContext::new("r", root_id, env.root.clone(), Arc::clone(&cfg), common::features(OFF));
+    let mut ctx = indexer::RootContext::new(
+        ROOT_NAME,
+        ROOT_ID,
+        env.root.clone(),
+        Arc::clone(&cfg),
+        common::features(OFF),
+    );
     ctx.files_folder_recheck = Duration::from_secs(3600);
     assert!(!ctx.files_folder_verified(), "no installation id recorded yet");
     common::mark_files_folder(&env.url, &env.root);
@@ -599,7 +606,7 @@ fn the_marker_verdict_is_reused_and_survives_a_database_outage() {
     };
     assert!(ctx.files_folder_verified(), "an outage keeps the last verdict");
 
-    let mut offline = indexer::RootContext::new("r", root_id, env.root.clone(), cfg, common::features(OFF));
+    let mut offline = indexer::RootContext::new(ROOT_NAME, ROOT_ID, env.root.clone(), cfg, common::features(OFF));
     offline.db = db::Db {
         url: "postgres://nobody@127.0.0.1:1/nope".to_owned(),
         retries: 1,
@@ -619,7 +626,7 @@ fn nothing_is_processed_while_every_feature_is_off() {
     assert_eq!(env.count("idx.files"), 0);
     assert_eq!(scan_once(&ctx), Default::default());
     assert_eq!(watch_index(&ctx, &path, "a.txt", stat).status, "disabled");
-    assert_eq!(watch_mark_deleted(&ctx, "a.txt", false), 0);
+    assert_eq!(watch_delete(&ctx, "a.txt", false), 0);
     assert_eq!(watch_rename(&ctx, "a.txt", "b.txt", false), 0);
     assert!(ctx.activity.snapshot().is_empty());
 }
@@ -652,6 +659,55 @@ fn thumbnails_are_generated_for_real_images() {
 }
 
 #[test]
+fn photo_details_are_read_from_exif_within_the_thumbnail_limit() {
+    type Details = (
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+        Option<i32>,
+        Option<f64>,
+        Option<f64>,
+    );
+    let details = |env: &Env, rel: &str| -> Details {
+        let row = env
+            .client()
+            .query_one(
+                "SELECT to_char(taken_at, 'YYYY-MM-DD HH24:MI:SS'), camera, width, height, latitude, longitude \
+                 FROM idx.files WHERE path = $1",
+                &[&rel],
+            )
+            .unwrap();
+        (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4), row.get(5))
+    };
+    let env = Env::new();
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    let (path, stat) = env.write("photo.jpg", &jpeg_with_exif());
+    assert!(process_file(&ctx, &path, "photo.jpg", stat).unwrap());
+    assert_eq!(
+        details(&env, "photo.jpg"),
+        (
+            Some("2024-05-01 14:03:09".to_owned()),
+            Some("Apple iPhone 15 Pro".to_owned()),
+            Some(4032),
+            Some(3024),
+            Some(59.5),
+            Some(18.0)
+        )
+    );
+    // A new version without EXIF clears them.
+    std::fs::write(&path, jpeg(8, 8, 4)).unwrap();
+    assert!(process_file(&ctx, &path, "photo.jpg", env.stat("photo.jpg")).unwrap());
+    assert_eq!(details(&env, "photo.jpg"), (None, None, None, None, None, None));
+    // Over the thumbnail limit the file is not read for them.
+    let mut cfg = env.config();
+    cfg.thumb_max_bytes = 1;
+    let ctx = context_with(cfg, fv(false, true, false, false, false), |_| {});
+    let (path, stat) = env.write("large.jpg", &jpeg_with_exif());
+    assert!(process_file(&ctx, &path, "large.jpg", stat).unwrap());
+    assert_eq!(details(&env, "large.jpg"), (None, None, None, None, None, None));
+}
+
+#[test]
 fn thumbnail_skips_do_not_resolve_failures_but_resolving_skips_do() {
     let env = Env::new();
     let ctx = env.ctx(fv(true, false, false, false, false));
@@ -675,24 +731,6 @@ fn thumbnail_skips_do_not_resolve_failures_but_resolving_skips_do() {
 }
 
 // -- image embeddings ----------------------------------------------------------------------
-
-#[test]
-fn embed_thumbnail_is_a_no_op_without_an_image_unit() {
-    let env = Env::new();
-    let mut cfg = env.config();
-    cfg.image_embed_url = String::new();
-    let ctx = context_with(cfg, fv(true, false, false, false, true), |_| {});
-    env.fake_thumbnail("ab");
-    assert!(!embed_thumbnail(&ctx, "ab", &mut Vec::new()).unwrap());
-    assert!(env.ml.seen().is_empty());
-    // A watcher change embeds inline when there is no unit to hand it to.
-    let bytes = png(8, 8);
-    let (path, stat) = env.write("a.png", &bytes);
-    let result = watch_index(&ctx, &path, "a.png", stat);
-    assert_eq!(result.status, "indexed");
-    assert!(result.deferred.is_empty());
-    assert_eq!(result.outcomes.unwrap()["imageSearch"], (true, true));
-}
 
 #[test]
 fn embed_thumbnail_waits_while_the_unit_is_unhealthy() {
@@ -785,7 +823,7 @@ fn image_embedding_resumes_after_its_pause() {
 fn an_image_unit_outage_is_probed_once_per_backoff_window() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.image_embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let (clock, now) = manual_clock();
     let ctx = context_with(cfg, fv(true, false, false, false, true), |c| {
         c.image_embed_backoff = Backoff::new(Duration::from_secs(60), now);
@@ -972,7 +1010,7 @@ fn embed_missing_fills_partial_chunks_and_marks_indexed() {
 fn embed_missing_leaves_the_row_alone_while_the_backend_is_down() {
     let env = Env::new();
     let mut cfg = env.config();
-    cfg.embed_url = fake_ml::closed_url();
+    cfg.ml_url = fake_ml::closed_url();
     let ctx = context_with(cfg, fv(false, true, false, true, false), |_| {});
     env.write("a.txt", b"hello");
     let id = env.seed(&ctx, "a.txt", "sha1", "partial");
@@ -1068,7 +1106,7 @@ fn enabling_text_reprocesses_unchanged_disabled_rows_with_their_stored_key() {
         (row.status.as_str(), row.sha256.as_deref()),
         ("partial", Some(sha.as_str()))
     );
-    assert!(env.events().is_empty(), "the same version emits nothing");
+    assert_eq!(env.signals(), 0, "the same version emits nothing");
 }
 
 #[test]
@@ -1124,7 +1162,11 @@ fn a_partial_row_with_missing_media_gets_both() {
 #[test]
 fn search_ocr_readmits_image_dir_exclusions() {
     let env = Env::new();
-    let ctx = env.ctx(fv(false, true, false, false, false));
+    // Settled at once: a read of the file would find bytes other than the seeded key at once,
+    // not only once a second has passed since the write.
+    let ctx = env.ctx_with(fv(false, true, false, false, false), |ctx| {
+        ctx.stamp_settle = Duration::ZERO
+    });
     env.write("a.png", &png(8, 8));
     let id = env.seed(&ctx, "a.png", "sha", "pending");
     db::update_file_status(&mut env.client(), id, "excluded", 0, Some("excluded:image_dir")).unwrap();
@@ -1274,7 +1316,7 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         (3, 2, 1, 0)
     );
     let manifest = db::scan_manifest(&mut c, ctx.root_id).unwrap();
-    assert!(manifest["gone.txt"].deleted);
+    assert!(!manifest.contains_key("gone.txt"));
     assert_eq!(manifest["a.txt"].status, "indexed");
     assert_eq!(manifest["kept.txt"].status, "indexed");
     let scan = c
@@ -1293,7 +1335,7 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         ),
         (3, 2, 1, 0, true)
     );
-    assert_eq!(env.events(), ["created", "created"]);
+    assert_eq!(env.signals(), 2);
     let text = Env::snapshot(&ctx, "textSearch");
     assert_eq!(
         (
@@ -1305,9 +1347,40 @@ fn a_scan_indexes_new_files_and_sweeps_vanished_rows() {
         ),
         (Some("scan"), Some("completed"), Some(2), Some(2), Some("processing"))
     );
-    // Nothing left to do: the deleted row stays deleted and is not swept twice.
+    // Nothing left to do: the swept row is gone and is not swept twice.
     let again = scan_once(&ctx);
     assert_eq!((again.seen, again.changed, again.deleted), (3, 0, 0));
+}
+
+#[test]
+fn a_scan_sweeps_what_was_indexed_in_the_mac_apps_folder() {
+    let env = Env::new();
+    let ctx = env.ctx(fv(false, true, false, false, false));
+    let mut c = env.client();
+    env.write("alice/.fdrive-desktop/staging/a.txt", b"staged");
+    env.seed(&ctx, "alice/.fdrive-desktop/staging/a.txt", "sha", "indexed");
+    let folder = |path: &str| db::FolderRow {
+        path: path.to_owned(),
+        mtime_ns: 1,
+    };
+    db::sync_folders(
+        &mut c,
+        ctx.root_id,
+        &[
+            folder("alice"),
+            folder("alice/.fdrive-desktop"),
+            folder("alice/.fdrive-desktop/staging"),
+        ],
+        None,
+    )
+    .unwrap();
+    env.write("alice/a.txt", b"mine");
+    let result = scan_once(&ctx);
+    assert_eq!((result.seen, result.changed, result.deleted), (1, 1, 1));
+    let manifest = db::scan_manifest(&mut c, ctx.root_id).unwrap();
+    assert!(!manifest.contains_key("alice/.fdrive-desktop/staging/a.txt"));
+    let paths: Vec<String> = env.folders(&ctx).into_iter().map(|(p, _)| p).collect();
+    assert_eq!(paths, ["alice"]);
 }
 
 #[test]
@@ -1371,12 +1444,12 @@ fn a_slow_file_does_not_hold_up_the_rest_of_the_tree() {
     for i in 0..20 {
         env.write(&format!("f{i:02}.txt"), b"hello");
     }
-    env.ml.hold(TIKA);
+    env.ml.hold(EXTRACT);
     let scan = {
         let ctx = Arc::clone(&ctx);
         std::thread::spawn(move || scan_once(&ctx))
     };
-    let held = env.ml.wait_for(TIKA, 1, SECOND);
+    let held = env.ml.wait_for(EXTRACT, 1, SECOND);
     let mut c = env.client();
     let others_done = wait_until(SECOND, || {
         c.query_one("SELECT count(*) FROM idx.files WHERE text_status = 'partial'", &[])
@@ -1384,7 +1457,7 @@ fn a_slow_file_does_not_hold_up_the_rest_of_the_tree() {
             .get::<_, i64>(0)
             == 20
     });
-    env.ml.release(TIKA);
+    env.ml.release(EXTRACT);
     let result = scan.join().unwrap();
     assert!(held && others_done);
     assert_eq!(result.changed, 21);
@@ -1441,17 +1514,17 @@ fn a_cancelled_scan_never_sweeps_unseen_rows() {
         mtime_ns: 1,
     }];
     db::sync_folders(&mut env.client(), ctx.root_id, &gone, None).unwrap();
-    env.ml.hold(TIKA);
+    env.ml.hold(EXTRACT);
     let scan = {
         let ctx = Arc::clone(&ctx);
         std::thread::spawn(move || scan_once(&ctx))
     };
-    assert!(env.ml.wait_for(TIKA, 1, SECOND));
+    assert!(env.ml.wait_for(EXTRACT, 1, SECOND));
     ctx.set_features(configuration(4, OFF));
-    env.ml.release(TIKA);
+    env.ml.release(EXTRACT);
     let result = scan.join().unwrap();
     assert_eq!(result.deleted, 0);
-    assert!(!env.row(&ctx, "gone.txt").deleted);
+    assert!(env.has_row(&ctx, "gone.txt"));
     assert_eq!(env.folders(&ctx), [("gone".to_owned(), "gone".to_owned())]);
     assert_eq!(Env::snapshot(&ctx, "textSearch")["state"], "stopped");
 }
@@ -1674,7 +1747,7 @@ fn only_a_new_or_changed_version_emits_an_event() {
     let ctx = env.ctx(fv(false, true, false, false, false));
     let (path, stat) = env.write("a.txt", b"first");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
     // A reindex request re-extracts the same version.
     db::mark_pending(&mut env.client(), ctx.root_id, None).unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
@@ -1683,46 +1756,47 @@ fn only_a_new_or_changed_version_emits_an_event() {
         .execute("UPDATE idx.files SET text_status = 'disabled:text'", &[])
         .unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created"]);
+    assert_eq!(env.signals(), 1);
 
     let (path, stat) = env.write("a.txt", b"second version");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    db::mark_deleted(&mut env.client(), ctx.root_id, "a.txt", false).unwrap();
+    db::delete_paths(&mut env.client(), ctx.root_id, "a.txt", false).unwrap();
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
-    assert_eq!(env.events(), ["created", "changed", "changed"]);
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
-fn a_failing_event_write_is_swallowed() {
+fn a_failing_signal_is_swallowed() {
     let env = Env::new();
+    // Postgres refuses a notification payload of 8000 bytes or more.
+    let long = env.ctx_with(fv(false, true, false, false, false), |ctx| ctx.name = "a".repeat(8000));
+    notify_indexed(&long);
     let ctx = env.ctx(fv(false, true, false, false, false));
-    env.client()
-        .batch_execute("ALTER TABLE idx.events RENAME TO events_gone")
-        .unwrap();
-    emit_event(&ctx, EventKind::Created, "a.txt", None);
+    assert_eq!(env.signals(), 0);
     let (path, stat) = env.write("a.txt", b"hello");
     assert!(process_file(&ctx, &path, "a.txt", stat).unwrap());
     assert_eq!(env.status(&ctx, "a.txt"), "partial");
+    assert_eq!(env.signals(), 1);
 }
 
 #[test]
 fn watcher_deletes_count_rows_and_emit_once() {
     let env = Env::new();
     let ctx = env.ctx(fv(false, true, false, false, false));
-    assert_eq!(watch_mark_deleted(&ctx, "missing.txt", false), 0);
-    assert!(env.events().is_empty());
+    assert_eq!(watch_delete(&ctx, "missing.txt", false), 0);
+    assert_eq!(env.signals(), 0);
     for rel in ["a.txt", "dir/b.txt", "dir/c.txt"] {
         env.write(rel, b"x");
         env.seed(&ctx, rel, "sha", "indexed");
     }
-    assert_eq!(watch_mark_deleted(&ctx, "a.txt", false), 1);
-    assert_eq!(watch_mark_deleted(&ctx, "dir", true), 2);
-    assert_eq!(env.events(), ["deleted", "deleted"]);
+    assert_eq!(watch_delete(&ctx, "a.txt", false), 1);
+    assert_eq!(watch_delete(&ctx, "dir", true), 2);
+    assert_eq!(env.signals(), 2);
     // The database is gone: logged, nothing affected.
     env.client()
         .batch_execute("ALTER TABLE idx.files RENAME TO files_gone")
         .unwrap();
-    assert_eq!(watch_mark_deleted(&ctx, "x.txt", false), 0);
+    assert_eq!(watch_delete(&ctx, "x.txt", false), 0);
     assert_eq!(watch_rename(&ctx, "x.txt", "y.txt", false), 0);
 }
 
@@ -1737,40 +1811,16 @@ fn watcher_renames_move_rows_or_delete_on_an_extension_change() {
     assert_eq!(watch_rename(&ctx, "missing.txt", "new.txt", false), 0);
     // A new extension is a different kind of file: delete it and index the new path later.
     assert_eq!(watch_rename(&ctx, "a.txt", "a.pdf", false), 0);
-    assert!(env.row(&ctx, "a.txt").deleted);
+    assert!(!env.has_row(&ctx, "a.txt"));
+    let renamed = env.row_id(&ctx, "b.txt");
     assert_eq!(watch_rename(&ctx, "b.txt", "renamed.txt", false), 1);
     assert_eq!(watch_rename(&ctx, "docs", "moved", true), 1);
-    assert!(!env.row(&ctx, "renamed.txt").deleted);
-    assert!(!env.row(&ctx, "moved/c.txt").deleted);
-    let moves: Vec<(String, String, String)> = env
-        .client()
-        .query("SELECT src, dst, actor FROM idx.moves ORDER BY id", &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
-    assert_eq!(
-        moves,
-        vec![
-            ("b.txt".into(), "renamed.txt".into(), "watcher".into()),
-            ("docs".into(), "moved".into(), "watcher".into())
-        ]
-    );
-    let events: Vec<(String, String, Option<String>)> = env
-        .client()
-        .query("SELECT kind, path, target_path FROM idx.events ORDER BY id", &[])
-        .unwrap()
-        .iter()
-        .map(|r| (r.get(0), r.get(1), r.get(2)))
-        .collect();
-    assert_eq!(
-        events,
-        vec![
-            ("deleted".into(), "a.txt".into(), None),
-            ("moved".into(), "b.txt".into(), Some("renamed.txt".into())),
-            ("moved".into(), "docs".into(), Some("moved".into()))
-        ]
-    );
+    // A move keeps the row, and with it the digest.
+    assert_eq!(env.row_id(&ctx, "renamed.txt"), renamed);
+    assert!(!env.has_row(&ctx, "b.txt"));
+    assert!(env.has_row(&ctx, "moved/c.txt"));
+    // The delete and both moves each told the API once.
+    assert_eq!(env.signals(), 3);
 }
 
 #[test]
@@ -1787,17 +1837,13 @@ fn watcher_parent_mutations_wait_for_an_in_flight_child() {
                 if rename {
                     watch_rename(&ctx, "docs", "moved", true)
                 } else {
-                    watch_mark_deleted(&ctx, "docs", true)
+                    watch_delete(&ctx, "docs", true)
                 }
             })
         };
         std::thread::sleep(Duration::from_millis(50));
         assert!(!operation.is_finished());
-        assert_eq!(
-            env.count("idx.events"),
-            0,
-            "nothing changed while the child is in flight"
-        );
+        assert_eq!(env.signals(), 0, "nothing changed while the child is in flight");
         drop(child);
         assert_eq!(operation.join().unwrap(), 1);
         assert!(ctx.path_locks.is_empty());
@@ -1871,7 +1917,7 @@ fn an_unreadable_directory_stops_the_sweep_but_is_not_a_file_failure() {
         (result.seen, result.changed, result.deleted, result.errors),
         (1, 1, 0, 0)
     );
-    assert!(!env.row(&ctx, "locked/inside.txt").deleted);
+    assert!(env.has_row(&ctx, "locked/inside.txt"));
     // The scan never finished discovery, so it reports no total.
     assert!(Env::snapshot(&ctx, "textSearch")["total"].is_null());
 }

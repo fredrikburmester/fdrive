@@ -10,12 +10,23 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   `packages/local` performs the file I/O; `apps/api` constructs it and handles authentication,
   authorization, HTTP, events and jobs. The UI uses the typed contracts client.
 - `packages/db` owns Drizzle migrations for PostgreSQL's `app` metadata and `idx` index
-  schemas. The indexer and OCR consume those schemas; they do not independently migrate them.
-- The indexer scans mounted roots, extracts content and builds thumbnails/embeddings.
-  The API queues each change it makes in `idx.work`, which the indexer applies at once;
-  its file watcher and periodic scan cover changes made outside fdrive. See
-  [how changes arrive](INDEXER.md#how-changes-arrive). OCR may write to mounted originals. Browser file operations go through the API, which reads
-  and writes the files folder on its own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
+  schemas. The indexer and OCR consume those schemas; they do not independently migrate them,
+  and compose starts them once the API, which migrates before it serves, is healthy. History
+  starts at `0000_baseline`, which replaced migrations 0000–0047. A new install runs it; a
+  database v0.7.0-rc.11 or main's edge build left skips it, and `0001_squash_history` gives it
+  the same schema and history. An older database is refused, unchanged, until it has run
+  v0.7.0-rc.11.
+- The indexer scans the files folder, extracts content and builds thumbnails/embeddings.
+  The API records each change it makes in the change journal, `idx.changes`, and OCR each
+  PDF it rewrites; the indexer reads the journal from its own position and applies them at
+  once. Its file watcher and periodic scan cover changes made outside fdrive and journal them
+  too, so the journal holds every change. See [how changes arrive](INDEXER.md#how-changes-arrive)
+  and the [change journal](INDEXER.md#the-change-journal). The API reads the journal too, as the only
+  way it learns of file changes: each change reaches every person who can see it once, as a
+  resumable live update, and one made outside fdrive brings path-keyed metadata along (see
+  [the API's reader](INDEXER.md#the-apis-reader)). OCR may write to mounted originals.
+  Browser file operations go through the API, which reads and writes the files folder on its
+  own disk. See [indexer](INDEXER.md), [OCR](OCR.md) and
   [search](SEARCH-AND-AI.md).
 - Model inference and office-document text extraction run in the Rust
   [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
@@ -25,81 +36,194 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
 - fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
   `<root>/<username>`, plain files) and keeps its own users. That files folder is the only
-  storage; WebDAV and S3 storage were removed on 2026-11-13. The API reaches it through the
-  internal [storage port](STORAGE-PROVIDERS.md), and every login carries capability flags
-  (`ProviderCapabilities`) that decide what the UI offers and the API accepts. Without
-  `FDRIVE_STORAGE_ROOT` the deployment has no storage and setup refuses to complete.
+  storage. Its plain files stay authoritative: fdrive keeps no database of their contents, and
+  writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
+  symbolic link and never follows one: storage refuses a path through a link for every caller,
+  and the indexer and OCR skip links. The API reaches it
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. An installation-wide flag on `/auth/me` says whether the
+  UI offers index-backed features: `index` (the files folder is indexed). Trash is always on.
 
 ## Accounts and storage
 
 The optional [native macOS companion](MACOS.md) exposes File Provider domains, read-only by
 default with explicitly granted writes on qualified storage. Each domain binds one
 server/account/storage identity. Its versioned desktop API uses separate identity-bound
-credentials; browser identity selection and MCP tokens cannot retarget these domains.
+credentials; MCP tokens cannot retarget these domains.
 
-A provider row identifies a configured backend instance; an identity is a login on that row;
-an account links identities. Sessions select an active identity. Credentials are encrypted
-and bound to their identity and provider, including during retries and background jobs.
-The files folder's row comes from the deployment (`deploymentManaged`); administrators can
-only rename it. See [authentication](AUTH.md) and [storage port](STORAGE-PROVIDERS.md).
+An identity is a login (`app.identities`), and an account has exactly one
+(`identities.account_id` is unique). A session and an API token act as that login
+(`sessions.identity_id`, `api_tokens.identity_id`), and deleting the login ends them. Every
+local user has a login of the same name (`identities.username`, unique in any case) from the
+moment the user exists, and sign-in finds it by name in any case; passwords live only as
+scrypt hashes in `app.local_users`. A removed user's login stays with its tags, shares and
+activity, so the two tables join by name rather than by a foreign key. The files folder comes
+from the deployment; its name and its id, which the Mac compares as `providerId`, are
+installation settings (`storage.name`, `storage.id`), and administrators change the name on
+System > General. See [authentication](AUTH.md) and [storage](STORAGE.md).
 
-Local users are `app.local_users`: a username unique in any case, a scrypt hash and a disabled
-flag. Setup creates the first one and System > Users the rest; the local module's `admit`
-refuses a disabled user on every request, not only at sign-in. Folders shared between users
+Local users are `app.local_users`: a username unique in any case, a scrypt hash, a disabled
+flag and an optional storage limit ([storage](STORAGE.md#storageprovider)). Setup creates the
+first one and System > Users the rest; a disabled user is refused on every request, not only at
+sign-in, by the one query that resolves the request
+([authentication](AUTH.md#resolving-a-request)). Folders shared between users
 are `app.local_grants` (owner, folder path, grantee, read or write), served by
 `/api/v1/grants`. The grantee's storage shows each at `/Shared with me/<name>` (the folder's
-name, then `<name> (<owner>)` on a clash), confined to the owner's folder; a read-only grant
+name, then `<name> (<owner>)` on a clash), confined to the owner's folder; `Shared with me` is
+a reserved name at the top of every home, and a real folder of that name stays on disk out of
+sight ([storage](STORAGE.md#wiring)); a read-only grant
 refuses every change, and the grantee cannot rename, move or delete `Shared with me` or the
 shared folders themselves. A move between a user's files and a writable shared folder is one
-rename. Grants follow the owner's moves and deletes made through fdrive, and index scopes
-follow the grants ([scoping](SCOPING.md)).
+rename. Grants follow the owner's moves and deletes, made through fdrive or journaled by the
+indexer's watcher, and index scopes follow the grants ([scoping](SCOPING.md)). A grant follows
+its folder into the owner's Trash too, since that is a move like any other, so it never stays at a path a new folder can take; a
+purge deletes it. Something in a writable shared folder that the person it is shared with
+deletes goes to the owner's Trash, since it is the owner's file. Sharing refuses fdrive's own folders
+(`isReservedPath`, below), and the grantee's storage and index scopes refuse a grant in the
+owner's Trash or in the Mac's `/.fdrive-desktop` (`closedToShares`)
+([Trash](TRASH.md)).
 
-Metadata uses identity plus canonical virtual path. Application moves and indexer events
-propagate renames; index paths must be translated through the identity's scopes. A path
+fdrive keeps its own places inside each user's files, and one rule in `@fdrive/core` names them
+(`isReservedPath`): the Trash at `/.trash` and the Mac's `/.fdrive-desktop`
+(`RESERVED_FOLDERS`), in any case.
+Listings, the Mac, search, MCP and AI never show them; index queries leave them out in SQL
+before their limit. The indexer never walks `/.fdrive-desktop`; it does index the Trash, so
+moves into and out of it stay renames. OCR takes its PDFs from the index and leaves out all of these. Where a consumer differs it says so: links also never reach
+`/Shared with me`.
+
+Metadata uses identity plus canonical virtual path. fdrive changes files in one place, the
+[file operations](../apps/api/src/files/operations.ts): upload, mkdir, move, copy, Trash,
+restore and purge, for the web's file and Trash routes, MCP, AI chat, Office and a link's
+visitors alike. Each records its intent in personal activity, runs its storage call in one
+transaction with what grants access (grants, public links and Office files,
+[access.ts](../apps/api/src/files/access.ts)), records the outcome, and then lets tags,
+favorites, folder views, recents, chat references and the Mac's item handles follow, best
+effort: a failure there is a warning, and nothing it keeps grants access. What grants access
+fails closed. It changes before the storage call, so a refused change leaves the file where it
+was and fails the request. Trash's rows (`app.trash_items`) change in the same transaction: a
+delete writes its item's row first, as on its way, and the item arrives with what grants access;
+a restore or a purge removes the row with them ([Trash](TRASH.md#where-deleted-items-live)).
+The transaction holds each path the operation vacates, and an operation creating something
+at or below one waits for it, so a new item never appears where a link or share still points.
+Nothing is held while a client's body arrives: an upload stages its body first and holds its
+path only to publish it.
+A Mac write moves what grants access with its receipt instead. Moves made outside fdrive,
+which the indexer's watcher journals, carry metadata along when the API reads the
+[change journal](INDEXER.md#the-apis-reader); index paths must be translated through the
+identity's scopes. A path
 or content hash alone never grants another identity access. Public share links are fdrive's
-own: a module whose share strategy is `owned` (the local folder) keeps the share in
-`app.shares` and serves it through the owner's storage, which the share reaches only through
+own: fdrive keeps the share in `app.shares` and serves it through the owner's storage, which
+the share reaches only through
 the identity storage factory, only inside its paths, and only for the operations its scope
-allows. Trash, backup folders and `/Shared with me` are never reachable through a link.
-Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`.
+allows. Trash, `/Shared with me` and the Mac's `/.fdrive-desktop` are never reachable through a
+link. A link follows the item it names
+wherever it moves, so it never stays at a path where something new could appear: on every
+route other path-keyed metadata follows, through the Trash and its restores, the Mac's
+writes and moves the indexer's watcher journals. Inside a place no link reaches (Trash, say)
+it shows not found, and it works again once the item comes back out. A move inside a folder shared with someone counts in the owner's
+files; taken out of them, deleted, or purged from Trash, the item leaves its links, and a
+link left with nothing goes.
+Folder ZIP downloads are held to two at a time per link, an hour and `FDRIVE_JOB_MAX_BYTES`
+([zip-limits.ts](../apps/api/src/shares/zip-limits.ts)), and each counts one download. A link
+whose folder holds the owner's Trash, `/.fdrive-desktop` or `/Shared with me` cannot be
+downloaded as an archive, nor can one whose paths overlap or would land on one name (compared
+ignoring case); new links with several paths are refused on that last rule too.
 Protected share metadata must not leak before authentication. Share passwords are never
-stored in clear: a row holds only a scrypt hash in `password_hash`, which no share record
-projection returns; the public credential-cookie flow has separate protections. See the
-API's [share implementation](../apps/api/src/shares/).
+stored in clear: a row holds only a scrypt hash in `password_hash`, which only the public
+lookup reads, to verify a visitor, and no response carries; the owner sees `hasPassword`
+(`password_hash is not null`). The public credential-cookie flow has separate protections. A
+public request reads its share's row once, then works from it. A visitor's upload never
+replaces a file: a taken name is refused by storage, and the upload lands on the next free
+numbered name (`photo (2).jpg`), which the visitor is shown. See the API's
+[share implementation](../apps/api/src/shares/service.ts).
 
-Linking an already-owned identity transfers that login and its metadata, not the source
-account's administrator rights or API tokens. Re-authentication and session revocation
-rules in the authentication guide supersede the original account-linking briefs.
+Session revocation follows the [authentication guide](AUTH.md#session-revocation).
 
 Personal activity is separately owned by the initiating account, with the storage identity
-captured alongside it. History never transfers with tags/favorites and never extends the
+captured alongside it. History never extends the
 actorless administrator `system_events`. The append-only journal, file registry, copied
-native receipts, read aggregation and provider-specific Unknown evidence are documented in
-the [activity schema and API](plans/RECENT-ACTIVITY-SCHEMA.md),
-[taxonomy](plans/RECENT-ACTIVITY-EVENTS.md) and
-[producer inventory](plans/RECENT-ACTIVITY-COVERAGE.md).
+native receipts, read aggregation and Unknown observations are documented in
+[personal activity](ACTIVITY.md).
 
 ## Index authorization
 
-Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events, Office paths
-or MCP. Trusted configuration and live read authorization are separate requirements. Index
-scopes come from the provider's index root and the login's username, plus one per folder
-shared with it, never from a path a client sends. A login whose root is not indexed keeps
-ordinary file operations, including explicitly scoped [MCP file tools](MCP.md).
+Use [scoping](SCOPING.md) when touching search, thumbnails, metadata events or MCP. A login's
+scopes are its home in the files folder plus one per folder shared with it (`scopesFor`),
+computed for each request and never from a path a client sends; an index row they map to is the
+login's to see, with no storage read. The index has one root, the files folder, seeded as
+`idx.roots` row 1. While the files folder is not indexed, logins keep ordinary file operations,
+including explicitly scoped [MCP file tools](MCP.md).
 
 ## Office and recovery
 
-Office uses durable file UUIDs, session-bound tokens, callback verification and explicit
-edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
+Office uses durable file UUIDs keyed by owner and owner's path, session-bound tokens, callback
+verification and explicit edit admission. See [Office implementation](OFFICE-DEVELOPMENT.md) and [setup](OFFICE.md).
 Trash is a storage capability, not application-owned snapshot history; see [Trash](TRASH.md).
+
+## Database connections
+
+The API keeps four pools ([pools.ts](../apps/api/src/pools.ts)), and work takes them in
+this order:
+
+1. **Office**: a save holds its document's lock, and a connection, while its body arrives.
+2. **Write gate**: while backups are configured, a write holds the backups' snapshot gate,
+   shared, for the short section where it changes the files folder or the database in more
+   than one step, so no capture's snapshot sees half of it ([backups](BACKUPS.md#what-is-included)).
+   A file operation holds it from its storage call to its last follower, an upload from its
+   publish once its body is all here, and a Mac write for its commit (`WriteGate`). Nothing
+   holds it while a client's body arrives.
+3. **File operations**: a file operation's transaction holds the paths it changes while its
+   storage call runs (a rename, a mkdir, an upload's publish, a whole copy).
+4. **Main**: everything else, backups included.
+
+Work holding a connection from one pool waits only for a connection from a pool after it, never
+from its own or one before it. An Office save holds its Office connection while its upload
+publishes, the publish holds the gate while its file operation takes a connection, the file
+operation holds its connection while storage reads the main pool, and main pool work waits for
+no other pool. A cycle of waits needs a holder that waits for its own pool or an earlier one,
+so none forms however full the pools are; their sizes only set how much runs at once. Locks
+keep to the same pools: a request waits for a document's lock with an Office connection, for
+the gate with a write gate one and for a path's with a file operations one. A write inside
+another joins it instead of taking a second gate connection. One kind of wait falls outside
+this. A file operation or Office save can hold rows and locks that main pool work also takes (a
+link's row, the Office registry's lock), and main pool work then waits until that transaction
+commits. Every pool but the gate gives up on a connection after 30 seconds, so a cycle there
+ends in a failed request, not a stuck API. The gate waits as long as the writes before it take:
+none of them waits for anything a write waiting for the gate holds. `connection-pools.test.ts`
+fills each pool with waiting work and checks the rest of the API still answers and everything
+completes; with any of the three on the main pool, it fails. It also stalls more uploads than
+the gate has connections, mid-body, and checks other writes and a capture go through.
+
+The most connections each process opens at once, from `CONNECTION_BUDGET`. A test keeps the
+total within Postgres's `max_connections`, which [compose](../deploy/compose.yaml) sets to
+200, and checks the indexer's and OCR's numbers against their code.
+
+| Process | Holder | At most |
+| --- | --- | --- |
+| API | write gate pool | 16 |
+| API | Office pool | 10 |
+| API | file operations pool | 10 |
+| API | main pool | 10 |
+| API | the change journal's `LISTEN` | 1 |
+| Backup worker | its pool: its lock, a capture and their bookkeeping | 6 |
+| Indexer | one per thread that reads the database: three pools of up to 16 workers (scan, journal, watcher; `MAX_WORKERS`), ten threads of its own and eight HTTP handler threads (`HTTP_BLOCKING_THREADS`) | 66 |
+| OCR | a pass, the settings poll, one request on the event loop and two restores or deletes of kept originals (`ORIGINALS_AT_ONCE`) | 5 |
+| Operator | `psql`, the backup commands | 10 |
+| **Total** | of 200, 3 kept for superusers | **134** |
+
+The API's and the worker's pools connect on first use and close idle connections after 10
+seconds, so a quiet installation holds far fewer; the indexer keeps each thread's. The API's
+are named `fdrive api <pool>` and the worker's `fdrive backup worker` in `pg_stat_activity`. A
+capture taking its snapshot waits for running writes on one connection of its own pool: the
+worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
 
 ## UI and runtime decisions
 
 - Feature activation is persisted through onboarding/System settings. Optional processing
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
-- System pages are installation-wide and independent of the active login, and every page header
-  says so. System > General holds the files folder's name, reachability and Trash.
+- System pages are installation-wide and independent of the signed-in login, and every page
+  header says so. System > General holds the server address, the files folder's name and
+  health, and how long Trash keeps an item.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
@@ -152,13 +276,19 @@ thresholds and CI configuration are authoritative; do not copy historic phase ta
 
 ## Interface names and persistence
 
-Public share `usedDownloads` is fdrive's own counter; `app.shares.views` is its legacy column
-name. Write shares count uploads;
-read shares count downloads and full-size previews. Thumbnail views do not consume
-that budget. Names remain compatible with existing clients and stored data.
+Public share `usedDownloads` (`app.shares.used_downloads`) is fdrive's own counter. Write
+shares count uploads; read shares count downloads, archives, previews and peeks, each once
+however many reads it takes, and a limited link previews and peeks like any other. Audio and
+video, which a viewer streams in Range reads, are opened through the share
+(`POST .../preview`): it counts the preview up front, refuses it once nothing is left, and
+returns a token for that one file, that browser (an httpOnly visitor cookie on the share's
+path) and five minutes, which the download URL serves without counting again. The token holds
+no state: what it names is all it opens, and it opens nothing a full download by the same
+visitor would not. Every other preview is one counted download; a download without a token
+always counts. Thumbnails never count.
 
-A `TrashEntry.id` is an opaque provider entry identifier; the recycle-folder adapter
-uses its path relative to the trash root. Public System logs merge internal
+A Trash item's id is its row's id in `app.trash_items` and the name of its folder in
+`/.trash`. Public System logs merge internal
 `SystemEvent` rows with worker history. Share permission `scope` and index path
 scopes are separate typed concepts.
 
@@ -166,5 +296,5 @@ WOPI locks accept opaque text file IDs and have a 30-minute TTL. The Office rout
 resolve and authorize a durable Office file before accessing its lock; the generic
 lock repository therefore has no UUID foreign key. Lock reads/writes prune up to
 100 expired rows using the expiry index and skip rows another transaction holds.
-The five migration-created search indexes are also declared in Drizzle so schema
-comparison preserves them; migration 0005 registers existing indexes idempotently.
+The search indexes (trigram, full text and vector) are declared in Drizzle with the rest of
+the schema, so the baseline migration creates them like any other index.

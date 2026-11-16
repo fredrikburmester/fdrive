@@ -6,6 +6,10 @@ describe("fileIconKind", () => {
     expect(fileIconKind({ kind: "dir", ext: "", mime: null })).toBe("folder");
   });
 
+  it("returns link for a symbolic link whatever its name says", () => {
+    expect(fileIconKind({ kind: "symlink", ext: ".pdf", mime: "application/pdf" })).toBe("link");
+  });
+
   it("prefers an image mime over the extension", () => {
     expect(fileIconKind({ kind: "file", ext: ".bin", mime: "image/png" })).toBe("image");
   });

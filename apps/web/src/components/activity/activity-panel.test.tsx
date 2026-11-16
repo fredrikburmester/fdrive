@@ -7,6 +7,8 @@ import { useUploadStore } from "@/lib/upload/store";
 import type { UploadItem, UploadStatus } from "@/lib/upload/types";
 import { ActivityPanel } from "./activity-panel";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 function makeItem(index: number, status: UploadStatus): UploadItem {
   return {
     id: `item-${index}`,
@@ -53,6 +55,8 @@ describe("ActivityPanel", () => {
 
     const card = container.querySelector('[data-slot="activity-panel"]');
     expect(card?.className).toContain("max-h-[70vh]");
+    // Every finished upload offers to open or reveal what it wrote.
+    expect(screen.getAllByRole("button", { name: "Show in folder" })).toHaveLength(30);
   });
 
   it("shows extraction safety warnings for a completed job", () => {

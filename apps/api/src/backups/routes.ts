@@ -1,19 +1,16 @@
 import { open } from "node:fs/promises";
 import { Readable } from "node:stream";
-import { BackupRetainedError, readBounded, withBackupWriter } from "@fdrive/backup";
+import { BackupRetainedError, readBounded } from "@fdrive/backup";
 import {
-  BackupAttachmentInput,
   BackupDestinationInput,
   BackupRehearsal,
   BackupRunInput,
   BackupSchedule,
   BackupsResponse,
 } from "@fdrive/contracts";
-import type { Handler } from "hono";
 import { getCookie } from "hono/cookie";
 import { z } from "zod";
-import type { AppRouteGroups, AppVariables } from "../app.js";
-import type { PrincipalVariables } from "../auth/principal.js";
+import type { AppRouteGroups } from "../app.js";
 import { COOKIE_NAME } from "../auth/sessions.js";
 import { ApiHttpError } from "../errors.js";
 import { extractClientIp } from "../net.js";
@@ -52,10 +49,11 @@ async function parsed<T>(request: Request, schema: z.ZodType<T>): Promise<T> {
 export function registerBackupRoutes(
   groups: AppRouteGroups,
   module: BackupModule,
+  /** Checks the signed-in owner's own password, as a sign-in does. */
   reauthenticate: (
     accountId: string,
     identityId: string,
-    credential: Record<string, string>,
+    password: string,
     ip: string,
   ) => Promise<void>,
   trustedProxyHops = 1,
@@ -89,7 +87,6 @@ export function registerBackupRoutes(
   router.get(BASE, async (c) => {
     const config = await module.store.configuration();
     const destinations = await module.store.destinations();
-    const attachments = await module.store.attachments();
     const runs = await Promise.all(
       (await module.store.runs()).map(async (run) => ({
         id: run.id,
@@ -116,7 +113,6 @@ export function registerBackupRoutes(
       })),
     );
     const operationStatus = await module.engine.operations.status();
-    const inventories = await module.engine.operations.inventories(runs.map((run) => run.id));
     return c.json(
       BackupsResponse.parse({
         enabled: module.enabled,
@@ -132,38 +128,12 @@ export function registerBackupRoutes(
           id: row.id,
           name: row.name,
           type: row.type,
-          location:
-            row.type === "s3"
-              ? `${row.config.bucket}/${row.config.prefix}`
-              : String(row.config.prefix),
+          location: `${row.config.bucket}/${row.config.prefix}`,
           enabled: row.enabled,
           testedAt: row.tested_at?.toISOString() ?? null,
           schedule: row.config.schedule ?? null,
           nextRunAt: row.config.nextRun ?? null,
           retainedProbe: row.config.retainedProbe ?? null,
-        })),
-        attachments: attachments.map((row) => ({
-          id: row.id,
-          versionId: row.version_id,
-          label: row.label,
-          filename: row.filename,
-          sourceDate: row.source_date?.toISOString() ?? null,
-          notes: row.notes,
-          uploadedAt: row.uploaded_at.toISOString(),
-          bytes: row.bytes,
-          sha256: row.sha256,
-          lastCapturedBackupId:
-            runs.find(
-              (run) =>
-                run.state === "complete" &&
-                inventories[run.id]?.attachmentVersions.includes(row.version_id),
-            )?.id ?? null,
-          lastCapturedAt:
-            runs.find(
-              (run) =>
-                run.state === "complete" &&
-                inventories[run.id]?.attachmentVersions.includes(row.version_id),
-            )?.createdAt ?? null,
         })),
         runs,
       }),
@@ -173,13 +143,13 @@ export function registerBackupRoutes(
     fresh.delete(getCookie(c, COOKIE_NAME) as string);
     const body = await parsed(
       c.req.raw,
-      z.object({ credential: z.record(z.string(), z.string().max(4096)) }).strict(),
+      z.object({ password: z.string().min(1).max(1024) }).strict(),
     );
     const principal = c.get("principal");
     await reauthenticate(
       principal.accountId,
       principal.identityId,
-      body.credential,
+      body.password,
       extractClientIp(c, trustedProxyHops),
     );
     for (const [key, expiry] of fresh) if (expiry < Date.now()) fresh.delete(key);
@@ -318,50 +288,6 @@ export function registerBackupRoutes(
   });
   router.delete(`${BASE}/destinations/:id`, async (c) => {
     await module.store.deleteDestination(id(c.req.param("id")));
-    return c.json({ ok: true });
-  });
-  const upload: Handler<{ Variables: AppVariables & PrincipalVariables }> = async (c) => {
-    const metadata = c.req.header("x-backup-metadata");
-    if (!metadata || metadata.length > 16_000)
-      throw new ApiHttpError("bad_request", "Configuration metadata required");
-    let input: z.infer<typeof BackupAttachmentInput>;
-    try {
-      input = BackupAttachmentInput.parse(JSON.parse(Buffer.from(metadata, "base64").toString()));
-    } catch {
-      throw new ApiHttpError("bad_request", "Invalid configuration metadata");
-    }
-    if (!c.req.raw.body) throw new ApiHttpError("bad_request", "ZIP body required");
-    const replacing = c.req.param("id");
-    if (replacing && !(await module.store.attachment(id(replacing))))
-      throw new ApiHttpError("not_found", "Configuration bundle unavailable");
-    const key = await withBackupWriter(module.gatePool, () =>
-      module.attachments.upload(
-        input,
-        Readable.fromWeb(c.req.raw.body as import("node:stream/web").ReadableStream<Uint8Array>),
-        replacing ? id(replacing) : undefined,
-      ),
-    );
-    return c.json({ id: key }, 201);
-  };
-  router.post(`${BASE}/attachments`, upload);
-  router.put(`${BASE}/attachments/:id`, upload);
-  router.get(`${BASE}/attachments/:id/download`, async (c) => {
-    const row = await module.store.attachment(id(c.req.param("id")));
-    if (!row) throw new ApiHttpError("not_found", "Configuration bundle unavailable");
-    c.header("Content-Type", "application/zip");
-    c.header(
-      "Content-Disposition",
-      `attachment; filename="configuration.zip"; filename*=UTF-8''${encodeURIComponent(row.filename)}`,
-    );
-    c.header("Content-Length", row.bytes);
-    return c.body(
-      Readable.toWeb(await module.attachments.download(row)) as ReadableStream<Uint8Array>,
-    );
-  });
-  router.delete(`${BASE}/attachments/:id`, async (c) => {
-    await withBackupWriter(module.gatePool, () =>
-      module.store.deleteAttachment(id(c.req.param("id"))),
-    );
     return c.json({ ok: true });
   });
 }

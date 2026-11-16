@@ -3,12 +3,13 @@ import {
   ActivityFacts,
   ActivityFileResponse,
   ActivityLineageResponse,
-  ActivityLocationsResponse,
   ActivityRevisionsResponse,
   ClientActivityRequest,
   PersonalActivityAction,
+  PersonalActivityEvidence,
   PersonalActivityFilters,
   PersonalActivityResponse,
+  PersonalActivitySource,
 } from "./personal-activity";
 
 const id = "00000000-0000-4000-8000-000000000001";
@@ -38,16 +39,16 @@ describe("personal activity contracts", () => {
       }).path,
     ).toBe("/a");
   });
-  it("still reads a Trash event recorded with the strategy earlier versions stored", () => {
-    for (const trashStrategy of ["sftpgo_rule", "fdrive_move"])
-      expect(
-        ActivityFacts.safeParse({ path: "/a", trashLeaf: "/.trash/a/1", trashStrategy }).success,
-      ).toBe(true);
-    expect(ActivityFacts.safeParse({ path: "/a", trashStrategy: "native" }).success).toBe(false);
+  it("carries no value only remote storage produced", () => {
+    expect(ActivityFacts.safeParse({ path: "/a", trashLeaf: "/.trash/a/1" }).success).toBe(true);
+    for (const facts of [{ trashStrategy: "fdrive_move" }, { version: "etag" }])
+      expect(ActivityFacts.safeParse({ path: "/a", ...facts }).success).toBe(false);
+    expect(PersonalActivitySource.safeParse("refresh").success).toBe(false);
+    for (const evidence of ["provider_version", "refresh_comparison"])
+      expect(PersonalActivityEvidence.safeParse(evidence).success).toBe(false);
   });
   it("admits only reported gestures, never caller-supplied authorship or mutation outcomes", () => {
     const input = {
-      identityId: id,
       requestId: id,
       at: "2026-09-14T10:00:00Z",
       path: "/a",
@@ -55,6 +56,7 @@ describe("personal activity contracts", () => {
     };
     expect(ClientActivityRequest.safeParse(input).success).toBe(true);
     for (const patch of [
+      { identityId: id },
       { accountId: id },
       { actorAccountId: id },
       { action: "file.delete" },
@@ -64,6 +66,7 @@ describe("personal activity contracts", () => {
     expect(PersonalActivityFilters.parse({ limit: "100" }).limit).toBe(100);
     expect(PersonalActivityFilters.safeParse({ limit: "101" }).success).toBe(false);
     expect(PersonalActivityFilters.safeParse({ owner: id }).success).toBe(false);
+    expect(PersonalActivityFilters.safeParse({ identityId: id }).success).toBe(false);
   });
   it("validates private journey and paging response shapes", () => {
     expect(
@@ -82,15 +85,11 @@ describe("personal activity contracts", () => {
     expect(ActivityLineageResponse.parse({ items: [], nextCursor: null }).items).toEqual([]);
     expect(ActivityRevisionsResponse.parse({ items: [], nextCursor: null }).items).toEqual([]);
     expect(
-      ActivityLocationsResponse.parse({ items: [{ identityId: id, label: "Retired" }] }).items,
-    ).toHaveLength(1);
-    expect(
       PersonalActivityResponse.parse({
         items: [],
         nextCursor: null,
         historyStartsAt: null,
         retainedFrom: null,
-        coverage: { mutations: true, reads: true, observations: "refresh", observationGap: true },
       }).provisionalReads,
     ).toEqual([]);
   });

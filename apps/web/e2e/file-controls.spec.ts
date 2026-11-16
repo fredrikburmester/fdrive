@@ -1,5 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
+import { openSandbox } from "./support/sandbox.js";
 import { shareImageFixture } from "./support/share-fixture.js";
 import { uniqueName } from "./support/unique.js";
 import { fileInputLocator, uploadFiles } from "./support/upload.js";
@@ -10,22 +11,8 @@ function fileListRow(page: Page, name: string) {
   return listing(page).getByText(name, { exact: true });
 }
 
-async function createFolder(page: Page, name: string): Promise<void> {
-  await page.getByRole("button", { name: "New" }).click();
-  await page.getByRole("menuitem", { name: "New folder" }).click();
-  const dialog = page.getByRole("dialog");
-  await dialog.getByLabel("Folder name").fill(name);
-  await dialog.getByRole("button", { name: "Create" }).click();
-  await expect(dialog).toBeHidden();
-}
-
 async function createSandbox(page: Page): Promise<string> {
-  const sandbox = uniqueName("controls");
-  await page.goto("/files");
-  await createFolder(page, sandbox);
-  await listing(page).getByText(sandbox, { exact: true }).dblclick();
-  await expect(page).toHaveURL(new RegExp(`/files/${sandbox}$`));
-  return sandbox;
+  return openSandbox(page, "controls");
 }
 
 test.describe("file controls ux", () => {
@@ -174,11 +161,12 @@ test.describe("file controls ux", () => {
   });
 
   test("view menu Show thumbnails option persists across reload", async ({ page }) => {
-    await page.goto("/files");
+    const sandbox = await createSandbox(page);
     const name = `${uniqueName("list-thumb")}.png`;
     // The browser harness uses a fake indexer and never generates thumbnail files.
     await page.route(
-      (url) => url.pathname.endsWith("/thumb") && url.searchParams.get("path") === `/${name}`,
+      (url) =>
+        url.pathname.endsWith("/thumb") && url.searchParams.get("path") === `/${sandbox}/${name}`,
       async (route) => {
         expect(new URL(route.request().url()).searchParams.get("size")).toBe("256");
         await route.fulfill({ contentType: "image/png", body: shareImageFixture() });
@@ -192,7 +180,7 @@ test.describe("file controls ux", () => {
     await expect(fileListRow(page, name)).toBeVisible();
 
     // Open View dropdown menu
-    await page.getByRole("button", { name: "View" }).click();
+    await page.getByRole("button", { name: "View", exact: true }).click();
     const checkboxItem = page.getByRole("menuitemcheckbox", { name: /Show thumbnails/ });
     await expect(checkboxItem).toBeVisible();
     await expect(checkboxItem).toHaveAttribute("aria-checked", "false");
@@ -203,7 +191,7 @@ test.describe("file controls ux", () => {
     await expect(page.getByRole("menu", { name: "View" })).toBeHidden();
 
     // Use a decodable image; the seeded photo.jpg intentionally contains fake bytes.
-    const photoRow = page.locator(`[data-path="/${name}"]`);
+    const photoRow = page.locator(`[data-path="/${sandbox}/${name}"]`);
     await expect(photoRow.locator("img")).toBeVisible();
     await expect
       .poll(() =>
@@ -230,7 +218,7 @@ test.describe("file controls ux", () => {
       .toBe(true);
 
     // Open View menu again to verify checkbox state persists
-    await page.getByRole("button", { name: "View" }).click();
+    await page.getByRole("button", { name: "View", exact: true }).click();
     const reloadedCheckboxItem = page.getByRole("menuitemcheckbox", { name: /Show thumbnails/ });
     await expect(reloadedCheckboxItem).toHaveAttribute("aria-checked", "true");
   });

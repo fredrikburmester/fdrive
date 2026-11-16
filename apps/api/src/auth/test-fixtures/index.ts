@@ -1,257 +1,156 @@
-import { type Identity, IdentityLinksError, type Repos, type Session } from "@fdrive/db";
-import type { AccountIdentityOperations } from "../../accounts/types.ts";
+import { MeResponse } from "@fdrive/contracts";
+import { createMemoryRepos } from "@fdrive/db/testing";
+import type { FilesFolder } from "@fdrive/local";
+import type { Logger } from "pino";
+import { vi } from "vitest";
+import { createApp } from "../../app.js";
+import { loadConfig } from "../../config.js";
+import {
+  FAST_PASSWORDS,
+  filesFolderFixture,
+  seedLocalUsers,
+  writeHomeFiles,
+} from "../../local/test-fixtures/index.ts";
+import {
+  createAuthModule,
+  createLoginLimiter,
+  createPasswordCheck,
+  type Installation,
+} from "../index.js";
+import { createPrincipalFactory, type PrincipalResolver } from "../principal.js";
+import { createIdentityStorageFactory } from "../storage-factory.ts";
 
-/** Test double only. PostgreSQL ownership/lock guarantees have separate integration coverage. */
-export function memoryIdentityOperations(repos: Repos): AccountIdentityOperations {
-  const changed = new Map<string, Identity>();
-  const sessions = new Map<string, Session>();
-  const baseIdentities = { ...repos.identities };
-  const baseSessions = { ...repos.sessions };
-  repos.identities.get = async (id) => changed.get(id) ?? baseIdentities.get(id);
-  repos.identities.listAll = async () => {
-    const all = new Map((await baseIdentities.listAll()).map((row) => [row.id, row]));
-    for (const [id, row] of changed) all.set(id, row);
-    return [...all.values()];
-  };
-  repos.identities.listByAccount = async (accountId) =>
-    (await repos.identities.listAll()).filter((row) => row.accountId === accountId);
-  repos.identities.findByProviderUsername = async (providerId, username) =>
-    (await repos.identities.listAll()).find(
-      (row) => row.providerId === providerId && row.externalUsername === username,
-    ) ?? null;
-  repos.sessions.create = async (input) => {
-    const row = await baseSessions.create(input);
-    sessions.set(row.idHash, row);
-    return row;
-  };
-  repos.sessions.touch = async (id, input) => {
-    await baseSessions.touch(id, input);
-    const session = sessions.get(id);
-    if (session !== undefined) sessions.set(id, { ...session, ...input });
-  };
-  repos.sessions.delete = async (id) => {
-    sessions.delete(id);
-    await baseSessions.delete(id);
-  };
-  let tail = Promise.resolve();
-  async function atomic<T>(run: () => Promise<T>): Promise<T> {
-    const previous = tail;
-    let release = () => {};
-    tail = new Promise<void>((resolve) => {
-      release = resolve;
+/** The users every harness has, each signing in with `<username>-pass`. */
+export const HARNESS_USERS = ["alice", "bob", "carol", "dave", "eve", "frank"] as const;
+
+/**
+ * The API's auth routes over the deployment's local folder, as production
+ * pins it: a temporary storage root with a home per user holding `/a.docx`
+ * and `/report.txt`, and the users in the in-memory repos.
+ */
+export function authHarness(
+  options: {
+    principalResolver?: PrincipalResolver;
+    /**
+     * Wraps the files folder the harness serves, to change how its storage
+     * or admission behaves while the users keep their passwords.
+     */
+    folder?: (folder: FilesFolder) => Pick<FilesFolder, "storage" | "admit">;
+    /** The users the folder has, each signing in with `<username>-pass`; `HARNESS_USERS` by default. */
+    users?: readonly string[];
+    /** What `/auth/me` reports for the installation; Trash off and nothing indexed by default. */
+    installation?: () => Promise<Installation>;
+  } = {},
+) {
+  const now = { value: new Date("2026-09-07T00:00:00Z") };
+  const clock = () => now.value;
+  const repos = createMemoryRepos();
+  const master = Buffer.alloc(32, 13);
+  const local = filesFolderFixture(repos);
+  const config = loadConfig({
+    DATABASE_URL: "postgres://test/fdrive",
+    FDRIVE_STORAGE_ROOT: local.root,
+    FDRIVE_MASTER_KEY: master.toString("base64"),
+    FDRIVE_COOKIE_SECURE: "auto",
+  });
+  const usernames = options.users ?? HARNESS_USERS;
+  for (const username of usernames) {
+    writeHomeFiles(local.root, username, {
+      "/a.docx": `${username} data`,
+      "/report.txt": `${username} report`,
     });
-    await previous;
-    try {
-      return await run();
-    } finally {
-      release();
-    }
   }
-  // Match the provider-row lock held by production login/link transactions.
-  const updateProvider = repos.providers.update.bind(repos.providers);
-  repos.providers.update = (id, patch) => atomic(() => updateProvider(id, patch));
-  async function live(accountId: string, hash: string, at: Date) {
-    const session = await repos.sessions.getByIdHash(hash, at);
-    if (session === null || session.accountId !== accountId)
-      throw new IdentityLinksError("invalid_session");
-    return session;
-  }
-  async function owned(accountId: string, id: string) {
-    const identity = await repos.identities.get(id);
-    if (identity === null) throw new IdentityLinksError("missing_identity");
-    if (identity.accountId !== accountId) throw new IdentityLinksError("forbidden");
-    return identity;
-  }
-  async function revoke(identity: Identity) {
-    for (const token of await repos.apiTokens.listByAccount(identity.accountId))
-      if (token.identityId === identity.id)
-        await repos.apiTokens.delete(token.id, identity.accountId);
-  }
-  async function storeCredential(
-    identityId: string,
-    seal: (id: string) => { ciphertext: Uint8Array; keyId: string },
+  // The password check asks `local.users` whether a password is right and
+  // the folder whether a user is still active, so a test can spy on
+  // `users.verify` or `users.status` to shape what they see exactly as
+  // production would.
+  const folder = options.folder?.(local.folder) ?? local.folder;
+  const seeded = seedLocalUsers(
+    repos,
+    usernames.map((username) => ({ username, password: `${username}-pass` })),
+  );
+  const limiter = createLoginLimiter({ clock });
+  const checkPassword = createPasswordCheck({ limiter, users: local.users });
+  const storageFactory = createIdentityStorageFactory({ identities: repos.identities, folder });
+  const auth = createAuthModule({
+    repos,
+    clock,
+    config,
+    checkPassword,
+    principalFor: createPrincipalFactory({ folder }),
+    installation:
+      options.installation ?? (async () => ({ storageName: "Local folder", index: false })),
+  });
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
+  const app = createApp({
+    config,
+    clock,
+    logger,
+    version: "test",
+    startedAt: clock(),
+    principalResolver: options.principalResolver ?? auth.principalResolver,
+    setupRequired: async () => false,
+    registerRoutes: (groups) => {
+      auth.registerRoutes(groups);
+    },
+  });
+  async function call(
+    path: string,
+    options: {
+      cookie?: string;
+      method?: string;
+      body?: unknown;
+      headers?: Record<string, string>;
+    } = {},
   ) {
-    await repos.credentials.put({ identityId, ...seal(identityId) });
-    await repos.credentials.setCachedToken(identityId, null);
+    await seeded;
+    return app.request(path, {
+      method: options.method ?? "GET",
+      headers: {
+        "x-requested-with": "fdrive",
+        ...(options.cookie === undefined ? {} : { cookie: options.cookie }),
+        ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...options.headers,
+      },
+      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+    });
   }
-  async function transferMetadata(identity: Identity, accountId: string) {
-    const targets = new Map((await repos.tags.list(accountId)).map((tag) => [tag.name, tag]));
-    const remapped = new Map<string, string>();
-    const paths = new Set<string>();
-    for (const source of await repos.tags.list(identity.accountId)) {
-      const tagged = await repos.fileTags.pathsForTag(identity.id, source.id);
-      if (tagged.length === 0) continue;
-      const target =
-        targets.get(source.name) ??
-        (await repos.tags.create(accountId, {
-          name: source.name,
-          color: source.color,
-        }));
-      targets.set(source.name, target);
-      remapped.set(source.id, target.id);
-      for (const path of tagged) paths.add(path);
-    }
-    for (const [path, tags] of await repos.fileTags.tagsForPaths(identity.id, [...paths])) {
-      await repos.fileTags.setTags(
-        identity.id,
-        path,
-        tags.map((id) => remapped.get(id) ?? id),
-      );
-    }
-  }
-  async function verifyProvider(input: {
-    providerId: string;
-    verifiedProvider?: { type: string; baseUrl: string; allowDisabled?: boolean };
-  }) {
-    const provider = await repos.providers.get(input.providerId);
-    if (!provider) throw new IdentityLinksError("missing_provider");
-    const expected = input.verifiedProvider;
-    if (
-      expected !== undefined &&
-      (provider.type !== expected.type ||
-        provider.baseUrl !== expected.baseUrl ||
-        (!provider.enabled && !expected.allowDisabled))
-    )
-      throw new IdentityLinksError("invalid_session");
+  async function login(username = "alice") {
+    const response = await call("/api/v1/auth/login", {
+      method: "POST",
+      body: { username, password: `${username}-pass` },
+    });
+    const me = MeResponse.parse(await response.json());
+    const cookie = response.headers.get("set-cookie")?.split(";")[0];
+    if (!cookie) throw new Error("Missing cookie");
+    return { cookie, me };
   }
   return {
-    loginVerified: (input) =>
-      atomic(async () => {
-        await verifyProvider(input);
-        let identity = await repos.identities.findByProviderUsername(
-          input.providerId,
-          input.username,
-        );
-        const setupClaim = input.setupClaim;
-        if (setupClaim !== undefined) {
-          const current = await repos.settings.get(setupClaim.key);
-          if (current !== null) {
-            const desired = {
-              version: 1,
-              state: "claiming",
-              accountId: identity?.accountId,
-              baseUrl: setupClaim.baseUrl,
-            };
-            if (
-              identity === null ||
-              !(await repos.settings.compareAndSet(setupClaim.key, desired, desired))
-            )
-              throw new IdentityLinksError("setup_claimed");
-          }
-        }
-        if (identity === null) {
-          const account = await repos.accounts.create({ displayName: input.username });
-          identity = await repos.identities.create({
-            accountId: account.id,
-            providerId: input.providerId,
-            externalUsername: input.username,
-          });
-        }
-        const revoke =
-          input.compareCredential?.(identity.id, await repos.credentials.get(identity.id)) ??
-          input.revokeOtherSessions;
-        if (setupClaim !== undefined) {
-          const desired = {
-            version: 1,
-            state: "claiming",
-            accountId: identity.accountId,
-            baseUrl: setupClaim.baseUrl,
-          };
-          await repos.settings.compareAndSet(setupClaim.key, null, desired);
-        }
-        identity = { ...identity, lastLoginAt: input.at };
-        changed.set(identity.id, identity);
-        await storeCredential(identity.id, input.sealCredential);
-        if (revoke === true)
-          for (const session of [...sessions.values()])
-            if (session.accountId === identity.accountId)
-              await repos.sessions.delete(session.idHash);
-        const sessionInput = {
-          ...input.session,
-          accountId: identity.accountId,
-          activeIdentityId: identity.id,
-          createdAt: input.at,
-          lastSeenAt: input.at,
-        };
-        const session = await repos.sessions.create(sessionInput);
-        await repos.sessions.touch(session.idHash, {
-          lastSeenAt: input.at,
-          expiresAt: session.expiresAt,
-        });
-        return { identity, session };
-      }),
-    linkVerified: (input) =>
-      atomic(async () => {
-        await verifyProvider(input);
-        if (input.requestingSessionIdHash)
-          await live(input.accountId, input.requestingSessionIdHash, input.at);
-        let identity = await repos.identities.findByProviderUsername(
-          input.providerId,
-          input.username,
-        );
-        if (identity === null)
-          identity = await repos.identities.create({
-            accountId: input.accountId,
-            providerId: input.providerId,
-            externalUsername: input.username,
-          });
-        if (identity.accountId !== input.accountId) {
-          await transferMetadata(identity, input.accountId);
-          for (const session of sessions.values())
-            if (
-              session.accountId === identity.accountId &&
-              session.activeIdentityId === identity.id
-            )
-              await repos.sessions.delete(session.idHash);
-          await revoke(identity);
-        }
-        identity = { ...identity, accountId: input.accountId, lastLoginAt: input.at };
-        changed.set(identity.id, identity);
-        await storeCredential(identity.id, input.sealCredential);
-        return identity;
-      }),
-    unlink: (input) =>
-      atomic(async () => {
-        if (input.requestingSessionIdHash)
-          await live(input.accountId, input.requestingSessionIdHash, input.at);
-        const identity = await owned(input.accountId, input.identityId);
-        const remaining = (await repos.identities.listByAccount(input.accountId))
-          .filter((row) => row.id !== input.identityId)
-          .sort((a, b) => a.id.localeCompare(b.id))[0];
-        if (!remaining) throw new IdentityLinksError("last_identity");
-        const account = await repos.accounts.create({ displayName: identity.externalUsername });
-        await transferMetadata(identity, account.id);
-        const moved = { ...identity, accountId: account.id };
-        changed.set(moved.id, moved);
-        await revoke(identity);
-        for (const session of [...sessions.values()])
-          if (session.accountId === input.accountId && session.activeIdentityId === identity.id) {
-            await repos.sessions.delete(session.idHash);
-            if (session.idHash === input.requestingSessionIdHash)
-              await repos.sessions.create({ ...session, activeIdentityId: remaining.id });
-          }
-        return { identity: moved, remainingIdentityId: remaining.id };
-      }),
-    switchActive: (input) =>
-      atomic(async () => {
-        await owned(input.accountId, input.identityId);
-        const session = await live(input.accountId, input.sessionIdHash, input.at);
-        await repos.sessions.delete(session.idHash);
-        await repos.sessions.create({ ...session, activeIdentityId: input.identityId });
-      }),
-    rotateSession: (input) =>
-      atomic(async () => {
-        const previous = await live(input.accountId, input.oldSessionIdHash, input.at);
-        await owned(input.accountId, input.activeIdentityId);
-        const rotated = {
-          ...previous,
-          idHash: input.newSessionIdHash,
-          activeIdentityId: input.activeIdentityId,
-          lastSeenAt: input.at,
-        };
-        const next = await repos.sessions.create(rotated);
-        await repos.sessions.delete(previous.idHash);
-        return next;
-      }),
+    now,
+    clock,
+    repos,
+    master,
+    config,
+    /** The storage root: each user's files are under `<root>/<username>`. */
+    root: local.root,
+    /** What the files folder asks about users; spy on it to shape sign-ins. */
+    users: local.users,
+    passwords: FAST_PASSWORDS,
+    /** Resolves to the users' logins once they exist; `call` and `login` await it. */
+    seeded,
+    limiter,
+    checkPassword,
+    auth,
+    logger,
+    app,
+    call,
+    login,
+    storageFactory,
   };
+}
+export type AuthHarness = ReturnType<typeof authHarness>;
+export function cookieFrom(response: Response): string {
+  const cookie = response.headers.get("set-cookie")?.split(";")[0];
+  if (!cookie) throw new Error("Missing session cookie");
+  return cookie;
 }

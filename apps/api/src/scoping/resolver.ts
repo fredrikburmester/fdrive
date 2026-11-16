@@ -1,77 +1,45 @@
 import { isSafeSegment, type Scope } from "@fdrive/core";
-import type { Identity } from "@fdrive/db";
-import type { ProviderService } from "../providers/service.ts";
-import type { ConfiguredMappingsResult, VerifiedIndexScopesResult } from "./types.ts";
+import { SHARED_WITH_ME } from "@fdrive/local";
+import { ApiHttpError } from "../errors.js";
+import type { ReceivedFolder } from "../local/grants.js";
 
 /**
- * Where each identity's files sit under the index roots. A login's home is
- * always `<root>/<username>` on the index root its provider names
- * (`ProviderModule.indexRootName`), shown at "/" in its virtual filesystem;
- * nothing is configured per identity. See `docs/SCOPING.md`.
+ * Where each login's files sit in the files folder. Scopes are computed for
+ * every request from the username and the grants it has now, so a revoked
+ * grant stops at once. See `docs/SCOPING.md`.
  */
 export interface ScopeResolver {
   /**
-   * The identity's trusted scopes, whether or not their root is indexed:
-   * Office and index events use these. Reads the provider row only, never
-   * storage or the indexer.
+   * The scopes of the login named `username`: its home, `/<username>` in
+   * the files folder shown at "/", then one per folder shared with it, at
+   * `/Shared with me/<name>`. One grants query; reads neither storage nor
+   * the index. An index row these scopes map to and back
+   * (`roundTripVirtualPath`) is the login's to see.
    */
-  configuredMappings(identity: Identity): Promise<ConfiguredMappingsResult>;
-  /**
-   * The configured scopes whose root is indexed. Index-backed features
-   * (search, duplicates, thumbnails, folder sizes, extraction, MCP) must use
-   * this, and must still check each result with a live read.
-   */
-  verifiedIndexScopes(identity: Identity): Promise<VerifiedIndexScopesResult>;
+  scopesFor(username: string): Promise<readonly Scope[]>;
 }
-
-/**
- * More scopes for one identity, appended after its home: for example
- * another user's folder shown at `/Shared with me/<name>`, as
- * `{ rootName: home.rootName, fsPrefix: "/<owner>/<path>", virtualPrefix:
- * "/Shared with me/<name>" }`. Each scope must be canonical, and its
- * `virtualPrefix` must not be "/". A scope nested inside the home shadows
- * the home's own folder at that path: the scope helpers pick the longest
- * prefix, and `roundTripVirtualPath` drops index rows from the shadowed
- * folder.
- */
-export type ExtraScopes = (identity: Identity, home: Scope) => Promise<readonly Scope[]>;
 
 export interface CreateScopeResolverDeps {
-  readonly providers: Pick<ProviderService, "get">;
-  /** The names in `FDRIVE_INDEX_ROOTS`; empty when nothing is indexed. */
-  readonly indexRootNames: Iterable<string>;
-  /** Defaults to none. */
-  readonly extraScopes?: ExtraScopes;
+  /** The folders others share with `username`, each named as it appears under `Shared with me`. */
+  readonly received: (
+    username: string,
+  ) => Promise<readonly Pick<ReceivedFolder, "owner" | "path" | "name">[]>;
 }
 
-/** Builds the `ScopeResolver`, the single source of truth for what identities may read from the index. */
+/** Builds the `ScopeResolver`, the single source of truth for what logins may read from the index. */
 export function createScopeResolver(deps: CreateScopeResolverDeps): ScopeResolver {
-  const indexed = new Set(deps.indexRootNames);
-
-  async function configuredMappings(identity: Identity): Promise<ConfiguredMappingsResult> {
-    const resolved = await deps.providers.get(identity.providerId);
-    if (resolved === null || !resolved.provider.enabled) {
-      return { available: false, reason: "provider_mismatch" };
-    }
-    const rootName = resolved.module.indexRootName?.(resolved.instance) ?? null;
-    if (rootName === null) return { available: false, reason: "no_roots" };
-    // The username names the home folder, so it must be exactly one segment.
-    if (!isSafeSegment(identity.externalUsername)) {
-      return { available: false, reason: "invalid_configuration" };
-    }
-    const home: Scope = { rootName, fsPrefix: `/${identity.externalUsername}`, virtualPrefix: "/" };
-    const extra = deps.extraScopes === undefined ? [] : await deps.extraScopes(identity, home);
-    return { available: true, providerId: resolved.provider.id, scopes: [home, ...extra] };
-  }
-
-  async function verifiedIndexScopes(identity: Identity): Promise<VerifiedIndexScopesResult> {
-    const configured = await configuredMappings(identity);
-    if (!configured.available) return configured;
-    const scopes = configured.scopes.filter((scope) => indexed.has(scope.rootName));
-    return scopes.length > 0
-      ? { available: true, scopes }
-      : { available: false, reason: "no_roots" };
-  }
-
-  return { configuredMappings, verifiedIndexScopes };
+  return {
+    async scopesFor(username) {
+      // The username names the home folder, so it must be exactly one segment.
+      if (!isSafeSegment(username)) {
+        throw new ApiHttpError("forbidden", "this login has no valid home folder");
+      }
+      const home: Scope = { fsPrefix: `/${username}`, virtualPrefix: "/" };
+      const shared = (await deps.received(username)).map((folder) => ({
+        fsPrefix: `/${folder.owner}${folder.path === "/" ? "" : folder.path}`,
+        virtualPrefix: `/${SHARED_WITH_ME}/${folder.name}`,
+      }));
+      return [home, ...shared];
+    },
+  };
 }

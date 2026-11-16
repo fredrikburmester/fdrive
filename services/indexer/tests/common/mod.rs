@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
-use fdrive_indexer::config::Config;
+use fdrive_indexer::config::{Config, ROOT_ID, ROOT_NAME};
 use fdrive_indexer::features::{FeatureConfiguration, FeatureValues};
 use fdrive_indexer::indexer::RootContext;
 use postgres::{Client, NoTls};
@@ -121,6 +121,16 @@ pub fn connect(url: &str) -> Client {
     Client::connect(url, NoTls).unwrap()
 }
 
+/// An `idx.roots` row beside the files root, for queries that must keep to their root.
+pub fn other_root(c: &mut Client, name: &str) -> i64 {
+    c.query_one(
+        r#"INSERT INTO "idx"."roots" (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id::bigint"#,
+        &[&name],
+    )
+    .unwrap()
+    .get(0)
+}
+
 /// Records the installation id and writes `root`'s `.fdrive-files` marker with it, as the API
 /// does when it first accepts the files folder. Returns the id.
 pub fn mark_files_folder(url: &str, root: &std::path::Path) -> String {
@@ -155,25 +165,20 @@ pub fn features(values: FeatureValues) -> FeatureConfiguration {
 pub fn config(url: &str, root: &std::path::Path, thumbs: &std::path::Path, ml: &str) -> Arc<Config> {
     let mut cfg = Config::from_vars(|_| None).unwrap();
     cfg.database_url = url.to_owned();
-    cfg.roots = vec![("r".to_owned(), root.to_path_buf())];
+    cfg.root = root.to_path_buf();
     cfg.thumbs_dir = thumbs.to_path_buf();
-    cfg.embed_url = format!("{ml}/text");
-    cfg.tika_url = format!("{ml}/extract");
-    cfg.image_embed_url = format!("{ml}/image");
+    cfg.ml_url = ml.to_owned();
     cfg.workers = 2;
     Arc::new(cfg)
 }
 
-/// A root context registered in the database, with the given features.
+/// The files root's context, its folder marked, with the given features.
 pub fn context(cfg: &Arc<Config>, values: FeatureValues) -> Arc<RootContext> {
-    let (name, path) = cfg.roots[0].clone();
-    mark_files_folder(&cfg.database_url, &path);
-    let mut client = connect(&cfg.database_url);
-    let root_id = fdrive_indexer::db::upsert_root(&mut client, &name).unwrap();
+    mark_files_folder(&cfg.database_url, &cfg.root);
     Arc::new(RootContext::new(
-        &name,
-        root_id,
-        path,
+        ROOT_NAME,
+        ROOT_ID,
+        cfg.root.clone(),
         Arc::clone(cfg),
         features(values),
     ))

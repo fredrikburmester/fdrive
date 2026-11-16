@@ -2,9 +2,10 @@
 
 import type { MeResponse } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { SearchShortcutProvider } from "@/lib/search/shortcut";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AppSidebar } from "./app-sidebar";
 
@@ -25,37 +26,25 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
-const ada: MeResponse["identities"][number] = makeIdentity({ capabilities: { trash: true } });
+const ada: MeResponse["identity"] = makeIdentity();
 
-const me = makeMe({
-  identities: [ada],
-  activeIdentityId: "one",
-});
-
-/** `me` with its only login's capabilities overridden. */
-function withCapabilities(overrides: Partial<MeResponse["identities"][number]["capabilities"]>) {
-  return {
-    ...me,
-    identities: [{ ...ada, capabilities: { ...ada.capabilities, ...overrides } }],
-  };
-}
+const me = makeMe({ identity: ada });
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   client.setQueryData(["auth", "me"], account);
-  client.setQueryData(["trash", "status"], {
-    available: true,
-    path: "/.trash",
-    retentionHours: null,
-  });
   client.setQueryData(["favorites", "list"], []);
   client.setQueryData(["recents", "list"], []);
   client.setQueryData(["tags", "list"], []);
+  client.setQueryData(["saved-searches", "list"], []);
+  client.setQueryData(["grants", "list"], { owned: [], received: [] });
   return render(
     <QueryClientProvider client={client}>
-      <SidebarProvider>
-        <AppSidebar />
-      </SidebarProvider>
+      <SearchShortcutProvider>
+        <SidebarProvider>
+          <AppSidebar />
+        </SidebarProvider>
+      </SearchShortcutProvider>
     </QueryClientProvider>,
   );
 }
@@ -92,50 +81,34 @@ it("orders navigation as Files tree, metadata sections, then Shares and Trash at
   expect(isBefore(sharesLink, trashLink)).toBe(true);
 });
 
+it("links Photos above My activity", async () => {
+  renderSidebar();
+  const photos = await screen.findByRole("link", { name: "Photos" });
+  expect(photos.getAttribute("href")).toBe("/photos");
+  expect(isBefore(photos, screen.getByRole("link", { name: "My activity" }))).toBe(true);
+});
+
 it("links the fdrive wordmark to the root of Files", async () => {
   renderSidebar();
   const wordmark = await screen.findByRole("link", { name: "fdrive" });
   expect(wordmark.getAttribute("href")).toBe("/files");
 });
 
-it("hides Trash when no linked login has one", async () => {
-  renderSidebar(withCapabilities({ trash: false }));
-  await screen.findByRole("link", { name: "Shares" });
-  expect(screen.queryByRole("link", { name: "Trash" })).toBeNull();
-});
-
-it("hides Shares when no linked login can share", async () => {
-  renderSidebar(withCapabilities({ shares: false }));
-  await screen.findByRole("link", { name: "Files" });
-  expect(screen.queryByRole("link", { name: "Shares" })).toBeNull();
-});
-
-it("shows Shares and Trash when any linked login has them, and names each login's provider type", async () => {
-  renderSidebar({
-    ...me,
-    identities: [
-      { ...ada, capabilities: { ...ada.capabilities, shares: false, trash: false } },
-      {
-        ...ada,
-        id: "two",
-        username: "bob",
-        providerLabel: "Other",
-        capabilities: { ...ada.capabilities, trash: true, shares: true },
-      },
-    ],
-  });
+it("always shows Trash, and names the signed-in login and its storage", async () => {
+  renderSidebar();
   await screen.findByRole("link", { name: "Shares" });
   expect(screen.getByRole("link", { name: "Trash" })).toBeTruthy();
-  expect(screen.getByRole("img", { name: "fdrive" })).toBeTruthy();
+  expect(screen.getByText("ada")).toBeTruthy();
+  expect(screen.getByText("Main")).toBeTruthy();
 });
 
-it("applies tighter vertical nav item spacing via scoped descendant styles on SidebarContent", () => {
+it("closes from its own header button, beside the wordmark", async () => {
   const { container } = renderSidebar();
-  const content = container.querySelector('[data-slot="sidebar-content"]');
-  expect(content?.className).toContain("gap-0");
-  expect(content?.className).toContain("[&_[data-sidebar=group]]:py-1");
-  expect(content?.className).toContain("[&_[data-sidebar=group-label]]:h-7");
-  expect(content?.className).toContain("[&_[data-sidebar=menu]]:gap-0");
+  const sidebar = container.querySelector('[data-slot="sidebar"]');
+  expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Close sidebar" }));
+  expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
 });
 
 it("nests feature pages beneath Features and keeps other System pages separate", async () => {

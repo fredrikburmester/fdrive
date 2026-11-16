@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
-import type { DesktopItemRecord, DesktopOperationRecord, DesktopRepo } from "@fdrive/db";
+import type {
+  DesktopAccessMove,
+  DesktopItemRecord,
+  DesktopOperationRecord,
+  DesktopRepo,
+  NativeActivityFacts,
+} from "@fdrive/db";
+import { type MemoryTrashItemRepo, memoryTrashItemRepo } from "../trash-items.js";
 
-export function memoryRepo() {
+/** `DesktopRepo` in memory; a receipt's Trash change lands in `trash`, Trash's rows. */
+export function memoryRepo(trash: MemoryTrashItemRepo = memoryTrashItemRepo()) {
   const items = new Map<string, DesktopItemRecord>();
   const operations = new Map<string, DesktopOperationRecord>();
+  /** What each completed receipt recorded for history, by operation ID. */
+  const completed = new Map<string, NativeActivityFacts>();
+  /** What grants access that each completed receipt moved, by operation ID. */
+  const moved = new Map<string, DesktopAccessMove>();
   const repo: DesktopRepo = {
     async ensure(identityId, path, kind) {
       const item = await repo.at(identityId, path);
@@ -15,8 +27,6 @@ export function memoryRepo() {
         path,
         kind,
         metadataVersion: randomUUID(),
-        contentVersion: null,
-        originalPath: null,
         deletedAt: null,
       };
       items.set(result.id, result);
@@ -121,41 +131,38 @@ export function memoryRepo() {
             (["receiving", "uploading"].includes(value.state) && age(value) > retention.idleMs) ||
             (value.state === "conflict" && age(value) > retention.conflictMs) ||
             (["acknowledged", "cancelled"].includes(value.state) &&
-              age(value) > retention.retainMs &&
-              !value.result?.reclaimedAt),
+              age(value) > retention.retainMs),
         )
         .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
         .slice(0, limit)
         .map((value) => ({ ...value }));
     },
-    async uncertain(limit) {
-      return [...operations.values()]
-        .filter((value) => ["committing", "uncertain"].includes(value.state))
-        .sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime())
-        .slice(0, limit)
-        .map((value) => ({ ...value }));
-    },
-    async reclaim(identityId, accountId, id, at) {
+    async forget(identityId, accountId, id) {
       const old = operations.get(identityId + id);
-      if (
-        !old ||
-        old.accountId !== accountId ||
-        !["acknowledged", "cancelled"].includes(old.state) ||
-        old.result?.reclaimedAt
-      )
+      if (!old || old.accountId !== accountId || !["acknowledged", "cancelled"].includes(old.state))
         return false;
-      operations.set(identityId + id, {
-        ...old,
-        result: { ...old.result, reclaimedAt: at.toISOString() },
-      });
+      operations.delete(identityId + id);
       return true;
     },
-    async captureEffects(_identityId, _accountId, context) {
-      return { ...context, snapshots: [] };
-    },
-    async complete(identityId, accountId, id, result) {
-      return repo.transition(identityId, accountId, id, "committing", "completed", result);
+    async complete(identityId, accountId, id, result, activity, access, change) {
+      const done = await repo.transition(
+        identityId,
+        accountId,
+        id,
+        "committing",
+        "completed",
+        result,
+      );
+      if (done) completed.set(id, activity);
+      if (done && access) moved.set(id, access);
+      if (done && change) {
+        const tx = trash.transaction();
+        if ("entered" in change) await tx.changes.entered(change.entered, change.leaf);
+        else await tx.changes.left(change.left);
+        tx.commit();
+      }
+      return done;
     },
   };
-  return { repo, items, operations };
+  return { repo, items, operations, completed, moved, trash };
 }

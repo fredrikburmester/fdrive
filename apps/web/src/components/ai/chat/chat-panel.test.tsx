@@ -37,8 +37,6 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/client", () => ({
   apiClient: mocks.client,
-  snapshotTabApiClient: () => mocks.client,
-  pinTabIdentity: vi.fn(),
 }));
 vi.mock("next/navigation", () => ({
   usePathname: () => mocks.pathname,

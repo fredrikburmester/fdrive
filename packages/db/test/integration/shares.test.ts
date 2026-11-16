@@ -1,19 +1,17 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   type CreateDbResult,
   createDb,
-  createIdentityLinksRepo,
   createShareRepo,
   migrate,
   type ShareInsertInput,
   type ShareOwnedUpdate,
   type ShareRepo,
 } from "../../src/index.js";
-import { accounts, identities, providers, shares } from "../../src/schema/app.js";
+import { accounts, identities, shares } from "../../src/schema/app.js";
 
-const providerId = "00000000-0000-0000-0000-000000000001";
 const accountId = "00000000-0000-0000-0000-000000000011";
 const targetAccountId = "00000000-0000-0000-0000-000000000012";
 const identityId = "00000000-0000-0000-0000-000000000021";
@@ -66,7 +64,6 @@ beforeAll(async () => {
     });
   }
   await migrate(first.db);
-  await first.db.insert(providers).values({ id: providerId, type: "local", baseUrl: "local" });
   a = createShareRepo(first.db);
   b = createShareRepo(second.db);
 });
@@ -83,8 +80,8 @@ beforeEach(async () => {
   await first.db.execute(sql`truncate app.accounts cascade`);
   await first.db.insert(accounts).values([{ id: accountId }, { id: targetAccountId }]);
   await first.db.insert(identities).values([
-    { id: identityId, accountId, providerId, externalUsername: "alice" },
-    { id: otherIdentity, accountId: targetAccountId, providerId, externalUsername: "bob" },
+    { id: identityId, accountId, username: "alice" },
+    { id: otherIdentity, accountId: targetAccountId, username: "bob" },
   ]);
 });
 
@@ -97,7 +94,7 @@ describe("PostgreSQL shares", () => {
       updatedAt: at,
       paths: ["/folder"],
       hasPassword: false,
-      views: 0,
+      usedDownloads: 0,
     });
     const updated = await b.updateOwned(identityId, original.id, {
       ...update,
@@ -122,7 +119,7 @@ describe("PostgreSQL shares", () => {
       presentation: "gallery",
       updatedAt: later,
     });
-    expect(await a.get(original.id)).toEqual(updated);
+    expect(await a.get(original.id)).toEqual({ ...updated, passwordHash: "hash-1" });
     expect(await a.getOwned(identityId, original.id)).toEqual(updated);
     expect(await first.db.select().from(shares)).toHaveLength(1);
   });
@@ -150,11 +147,11 @@ describe("PostgreSQL shares", () => {
     expect(await a.listOwned(identityId)).toEqual([one]);
     expect(await a.updateOwned(otherIdentity, one.id, update)).toBeNull();
     expect(await a.removeOwned(otherIdentity, one.id)).toBe(false);
-    expect(await a.get(one.id)).toEqual(one);
+    expect(await a.getOwned(identityId, one.id)).toEqual(one);
     expect(await a.removeOwned(identityId, one.id)).toBe(true);
     expect(await a.removeOwned(identityId, one.id)).toBe(false);
     expect(await a.get(one.id)).toBeNull();
-    expect(await a.get(two.id)).toEqual(two);
+    expect(await a.getOwned(otherIdentity, two.id)).toEqual(two);
     expect(await first.db.select().from(identities)).toHaveLength(2);
   });
 
@@ -177,26 +174,79 @@ describe("PostgreSQL shares", () => {
     expect(await a.listOwned(accountId)).toEqual([]);
   });
 
-  it("keeps the same share when its identity transfers to another account", async () => {
-    const share = await a.insert(input);
-    await createIdentityLinksRepo(first.db).linkVerified({
-      accountId: targetAccountId,
-      providerId,
-      username: "alice",
-      at,
-      sealCredential: () => ({ ciphertext: new Uint8Array([1]), keyId: "test" }),
+  it("follows a move: the exact path, what is inside a folder, never a sibling prefix or another identity", async () => {
+    const folder = await a.insert({ ...input, paths: ["/docs"] });
+    const many = await a.insert({
+      ...input,
+      paths: ["/docs/a b%20.txt", "/docsx/b.txt", "/docs/deep/c", "/other"],
     });
-    const [identity] = await first.db
-      .select()
-      .from(identities)
-      .where(eq(identities.id, identityId));
-    expect(identity?.accountId).toBe(targetAccountId);
-    expect(await a.get(share.id)).toEqual(share);
-    expect(await a.getOwned(identityId, share.id)).toEqual(share);
-    expect(await a.getOwned(otherIdentity, share.id)).toBeNull();
+    const file = await a.insert({ ...input, paths: ["/docs"] });
+    const foreign = await a.insert({ ...input, identityId: otherIdentity, paths: ["/docs/a"] });
+    await b.movePrefix(identityId, "/docs", "/archive/docs", true);
+    expect(await a.getOwned(identityId, folder.id)).toEqual({
+      ...folder,
+      paths: ["/archive/docs"],
+    });
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/archive/docs/a b%20.txt",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+      "/other",
+    ]);
+    expect((await a.get(file.id))?.updatedAt).toEqual(at);
+    expect(await a.getOwned(otherIdentity, foreign.id)).toEqual(foreign);
+    // A file's move rewrites only that path; one onto another shared path keeps it once.
+    await a.movePrefix(identityId, "/archive/docs/deep", "/deep", false);
+    expect((await a.get(many.id))?.paths).toContain("/archive/docs/deep/c");
+    await a.movePrefix(identityId, "/archive/docs/a b%20.txt", "/other", false);
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/other",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+    ]);
+    await a.movePrefix(identityId, "/nothing", "/else", true);
+    expect((await a.get(many.id))?.paths).toEqual([
+      "/other",
+      "/docsx/b.txt",
+      "/archive/docs/deep/c",
+    ]);
+    await expect(a.movePrefix(identityId, "/", "/x", true)).rejects.toThrow(TypeError);
+    await expect(a.movePrefix(identityId, "/x", "x", true)).rejects.toThrow(TypeError);
   });
 
-  it("stores the password only as a hash no record carries, and no extra runtime properties", async () => {
+  it("drops deleted paths, removes a share left with none, and keeps other identities' shares", async () => {
+    const many = await a.insert({
+      ...input,
+      paths: ["/docs/a b%20.txt", "/docsx/b.txt", "/docs/deep/c", "/other"],
+    });
+    const only = await a.insert({ ...input, paths: ["/docs"], passwordHash: "hash" });
+    const foreign = await a.insert({ ...input, identityId: otherIdentity, paths: ["/docs"] });
+    await b.deletePrefix(identityId, "/docs", false);
+    expect((await a.get(many.id))?.paths).toHaveLength(4);
+    expect(await a.get(only.id)).toBeNull();
+    await b.deletePrefix(identityId, "/docs", true);
+    expect(await a.getOwned(identityId, many.id)).toEqual({
+      ...many,
+      paths: ["/docsx/b.txt", "/other"],
+    });
+    expect(await a.getOwned(otherIdentity, foreign.id)).toEqual(foreign);
+    await a.deletePrefix(identityId, "/docsx/b.txt", false);
+    await a.deletePrefix(identityId, "/other", true);
+    expect(await a.get(many.id)).toBeNull();
+    expect(await first.db.select().from(shares)).toHaveLength(1);
+    await expect(a.deletePrefix(identityId, "/", true)).rejects.toThrow(TypeError);
+  });
+
+  it("loses neither of two moves of one share's paths made at once", async () => {
+    const paths = Array.from({ length: 20 }, (_, i) => `/f${i}/x`);
+    const share = await a.insert({ ...input, paths });
+    await Promise.all(
+      paths.map((_, i) => (i % 2 ? a : b).movePrefix(identityId, `/f${i}`, `/g${i}`, true)),
+    );
+    expect((await a.get(share.id))?.paths).toEqual(paths.map((_, i) => `/g${i}/x`));
+  });
+
+  it("stores the password only as a hash only the public lookup carries, and no extra runtime properties", async () => {
     const share = await a.insert({
       ...input,
       password: "do-not-store",
@@ -211,7 +261,6 @@ describe("PostgreSQL shares", () => {
       "created_at",
       "description",
       "expires_at",
-      "has_password",
       "id",
       "identity_id",
       "max_downloads",
@@ -221,17 +270,16 @@ describe("PostgreSQL shares", () => {
       "presentation",
       "scope",
       "updated_at",
-      "views",
+      "used_downloads",
     ]);
-    // The one secret-bearing column is read by one method and never rides on a record.
+    // The one secret-bearing column rides only on the public lookup, which verifies against it.
     const locked = await a.insert({ ...input, passwordHash: "hash-1" });
     expect(locked).toMatchObject({ hasPassword: true });
     expect(locked).not.toHaveProperty("passwordHash");
-    expect(await a.get(locked.id)).not.toHaveProperty("passwordHash");
     expect(await a.getOwned(identityId, locked.id)).not.toHaveProperty("passwordHash");
     expect((await a.listOwned(identityId))[0]).not.toHaveProperty("passwordHash");
-    expect(await a.passwordHash(locked.id)).toBe("hash-1");
-    expect(await a.passwordHash(share.id)).toBeNull();
+    expect(await a.get(locked.id)).toEqual({ ...locked, passwordHash: "hash-1" });
+    expect(await a.get(share.id)).toMatchObject({ hasPassword: false, passwordHash: null });
   });
 
   it("keeps, replaces and removes a password on update", async () => {
@@ -250,18 +298,18 @@ describe("PostgreSQL shares", () => {
       maxDownloads: 3,
       updatedAt: new Date(later.getTime() + 1000),
     });
-    expect(await a.passwordHash(locked.id)).toBe("hash-1");
+    expect((await a.get(locked.id))?.passwordHash).toBe("hash-1");
     expect(
       (await a.updateOwned(identityId, locked.id, { ...update, passwordHash: "hash-2" }))
         ?.hasPassword,
     ).toBe(true);
-    expect(await a.passwordHash(locked.id)).toBe("hash-2");
+    expect((await a.get(locked.id))?.passwordHash).toBe("hash-2");
     expect(
       (await a.updateOwned(identityId, locked.id, { ...update, passwordHash: null }))?.hasPassword,
     ).toBe(false);
-    expect(await a.passwordHash(locked.id)).toBeNull();
+    expect((await a.get(locked.id))?.passwordHash).toBeNull();
     expect(await a.removeOwned(identityId, locked.id)).toBe(true);
-    expect(await a.passwordHash(locked.id)).toBeNull();
+    expect(await a.get(locked.id)).toBeNull();
   });
 
   it("consumes downloads concurrently up to the limit and never past expiry", async () => {
@@ -270,28 +318,14 @@ describe("PostgreSQL shares", () => {
       Array.from({ length: 30 }, (_, i) => (i % 2 ? a : b).consume(limited.id, at)),
     );
     expect(outcomes.filter((row) => row !== null)).toHaveLength(10);
-    expect((await a.get(limited.id))?.views).toBe(10);
+    expect((await a.get(limited.id))?.usedDownloads).toBe(10);
     expect(await a.consume(limited.id, at)).toBeNull();
     const unlimited = await a.insert(input);
-    expect((await a.consume(unlimited.id, at))?.views).toBe(1);
+    expect((await a.consume(unlimited.id, at))?.usedDownloads).toBe(1);
     const expiring = await a.insert({ ...input, expiresAt: later });
-    expect((await a.consume(expiring.id, at))?.views).toBe(1);
+    expect((await a.consume(expiring.id, at))?.usedDownloads).toBe(1);
     expect(await a.consume(expiring.id, later)).toBeNull();
     expect(await a.consume("00000000-0000-4000-8000-000000000099", at)).toBeNull();
-  });
-
-  it("refuses a password flag the stored hash contradicts", async () => {
-    for (const [hasPassword, hash] of [
-      [true, null],
-      [false, "hash"],
-    ] as const)
-      await expect(
-        first.db.execute(sql`
-          insert into app.shares(identity_id, name, scope, paths, has_password, password_hash)
-          values (${identityId}::uuid, 'x', 'read', array['/'], ${hasPassword}, ${hash})
-        `),
-      ).rejects.toMatchObject({ cause: { constraint: "shares_password_hash_kind" } });
-    expect(await first.db.select().from(shares)).toHaveLength(0);
   });
 
   it("rejects invalid input atomically and validates every method before IO", async () => {
@@ -299,14 +333,13 @@ describe("PostgreSQL shares", () => {
     await expect(
       a.updateOwned(identityId, share.id, { ...update, maxDownloads: -1 }),
     ).rejects.toThrow(TypeError);
-    expect(await a.get(share.id)).toEqual(share);
+    expect(await a.getOwned(identityId, share.id)).toEqual(share);
     const closed = createDb("postgresql://unused:unused@127.0.0.1:1/unused");
     await closed.close();
     const repo = createShareRepo(closed.db);
     await expect(repo.insert({ ...input, paths: [] })).rejects.toThrow(TypeError);
     await expect(repo.insert({ ...input, passwordHash: "" })).rejects.toThrow(TypeError);
     await expect(repo.updateOwned(identityId, "bad", update)).rejects.toThrow(TypeError);
-    await expect(repo.passwordHash("bad")).rejects.toThrow(TypeError);
     await expect(repo.consume("bad", at)).rejects.toThrow(TypeError);
     await expect(repo.get("bad")).rejects.toThrow(TypeError);
     await expect(repo.getOwned(identityId, "bad")).rejects.toThrow(TypeError);

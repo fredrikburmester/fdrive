@@ -2,13 +2,9 @@ import { describe, expect, it } from "vitest";
 import { queryKeys } from "./keys.ts";
 
 describe("queryKeys", () => {
-  it("folder view keys isolate identities and paths with a shared reset prefix", () => {
+  it("folder view keys isolate paths with a shared reset prefix", () => {
     expect(queryKeys.folderViews.all()).toEqual(["folder-views"]);
-    expect(queryKeys.folderViews.path("alice", "/photos")).toEqual([
-      "folder-views",
-      "alice",
-      "/photos",
-    ]);
+    expect(queryKeys.folderViews.path("/photos")).toEqual(["folder-views", "/photos"]);
   });
   it("AI keys separate status, one run per id, and the admin settings", () => {
     expect(queryKeys.ai.status()).toEqual(["ai", "status"]);
@@ -33,6 +29,15 @@ describe("queryKeys", () => {
     expect(queryKeys.fs.folderSize("/photos")).toEqual(["fs", "folder-size", "/photos"]);
   });
 
+  it("storage.usage() builds a stable key", () => {
+    expect(queryKeys.storage.usage()).toEqual(["storage", "usage"]);
+  });
+
+  it("photo keys separate the timeline from one photo's details", () => {
+    expect(queryKeys.photos.list()).toEqual(["photos", "list"]);
+    expect(queryKeys.photos.details("/a.jpg")).toEqual(["photos", "details", "/a.jpg"]);
+  });
+
   it("account.tokens() builds a stable key", () => {
     expect(queryKeys.account.tokens()).toEqual(["account", "tokens"]);
   });
@@ -49,15 +54,16 @@ describe("queryKeys", () => {
     expect(queryKeys.favorites.list()).toEqual(["favorites", "list"]);
   });
 
+  it("savedSearches.list() builds a stable key", () => {
+    expect(queryKeys.savedSearches.list()).toEqual(["saved-searches", "list"]);
+  });
+
   it("recents.list() builds a stable key", () => {
     expect(queryKeys.recents.list()).toEqual(["recents", "list"]);
   });
 
-  it("trash.status() builds a stable key", () => {
-    expect(queryKeys.trash.status()).toEqual(["trash", "status"]);
-  });
-
   it("trash.list() builds a stable key", () => {
     expect(queryKeys.trash.list()).toEqual(["trash", "list"]);
+    expect(queryKeys.trash.settings()).toEqual(["trash", "settings"]);
   });
 });

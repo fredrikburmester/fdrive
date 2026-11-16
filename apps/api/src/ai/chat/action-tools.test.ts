@@ -1,22 +1,20 @@
 import { createHash } from "node:crypto";
 import type { ChatActionProposal } from "@fdrive/contracts";
-import { StorageError, type StorageProvider, type TrashProvider } from "@fdrive/core";
+import { StorageError } from "@fdrive/core";
 import { createMemoryStorage } from "@fdrive/core/testing";
 import type { IndexQueries } from "@fdrive/db";
 import { describe, expect, it, vi } from "vitest";
 import { activityFixture } from "../../../test/activity-fixture.js";
+import { recordingFileOperations, testFileOperations } from "../../../test/file-operations.js";
+import { memoryTrashItemRepo } from "../../../test/trash-items.js";
 import type { Principal } from "../../auth/principal.js";
-import { type BusEvent, createEventBus } from "../../events/bus.js";
 import type { McpToolDeps } from "../../mcp/handlers.js";
-import { buildIdentity } from "../../scoping/test-fixtures/index.ts";
 import { type ActionTool, createChatActionTools, MAX_WRITE_BYTES } from "./action-tools.ts";
 
 const IDENTITY = "223e4567-e89b-42d3-a456-426614174000";
 const CONVERSATION = "323e4567-e89b-42d3-a456-426614174000";
 
-function setup(
-  options: { files?: Record<string, string>; referenced?: string[]; trash?: boolean } = {},
-) {
+function setup(options: { files?: Record<string, string>; referenced?: string[] } = {}) {
   const base = createMemoryStorage(
     options.files ?? {
       "/Inbox/a.txt": "hello",
@@ -25,9 +23,7 @@ function setup(
       "/Docs/taken.txt": "x",
     },
   );
-  const storage: StorageProvider = options.trash
-    ? Object.assign(base, { trash: {} as TrashProvider })
-    : base;
+  const storage = base;
   const principal: Principal = {
     accountId: "a",
     identityId: IDENTITY,
@@ -38,20 +34,17 @@ function setup(
   const mcp: McpToolDeps = {
     indexQueries: {} as IndexQueries,
     searchService: { search: async () => Promise.reject(new Error("unexpected")) },
-    scopeResolver: {
-      verifiedIndexScopes: async () => ({ available: false, reason: "no_connection" as const }),
-    },
-    identities: { get: async () => buildIdentity() },
+    scopeResolver: { scopesFor: async () => [] },
+    indexed: async () => false,
     publicUrl: async () => null,
     indexerClient: null,
-    writesEnabled: false,
     clock: () => new Date("2026-09-18T10:00:00.000Z"),
-    ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
   };
-  const bus = createEventBus();
-  const events: BusEvent[] = [];
-  bus.subscribe({ identityId: IDENTITY }, (event) => events.push(event));
   const activity = activityFixture(() => new Date("2026-09-18T10:00:00.000Z"));
+  const trash = memoryTrashItemRepo();
+  const recorded = recordingFileOperations(
+    testFileOperations({ activity: activity.service, trashRepo: trash }),
+  );
   const tools = createChatActionTools({
     mcp,
     principal,
@@ -63,12 +56,7 @@ function setup(
     },
     indexed: false,
     conversationId: CONVERSATION,
-    fs: {
-      bus,
-      clock: () => new Date("2026-09-18T10:00:00.000Z"),
-      activity: activity.service,
-      ...(options.trash ? { trashPathForStorage: () => "/.Trash" } : {}),
-    },
+    files: recorded.files,
   });
   const tool = (name: string): ActionTool => {
     const found = tools.find((candidate) => candidate.spec.name === name);
@@ -82,19 +70,54 @@ function setup(
     proposal: ChatActionProposal,
     edits?: Parameters<ActionTool["apply"]>[1],
   ) => tool(name).apply(proposal, edits, new AbortController().signal);
-  return { storage, tools, tool, verify, apply, events, activity };
+  return { storage, tools, tool, verify, apply, activity, calls: recorded.calls, trash };
 }
 
 const sha = (text: string) => createHash("sha256").update(text).digest("hex");
 
 describe("createChatActionTools", () => {
-  it("offers trash only where the login has a Trash", () => {
-    expect(setup().tools.map((tool) => tool.spec.name)).toEqual([
+  it("applies every card through the file operations", async () => {
+    const { verify, apply, calls } = setup();
+    await apply(
       "move_items",
+      await verify("move_items", {
+        summary: "s",
+        moves: [{ path: "/Inbox/a.txt", destination: "/Docs", reason: "r" }],
+      }),
+    );
+    await apply(
       "rename_items",
+      await verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/Docs/readme.md", name: "README.md", reason: "r" }],
+      }),
+    );
+    await apply(
+      "trash_items",
+      await verify("trash_items", {
+        summary: "s",
+        items: [{ path: "/Inbox/scan.pdf", reason: "r" }],
+      }),
+    );
+    await apply(
       "write_text_file",
+      await verify("write_text_file", {
+        summary: "s",
+        path: "/Inbox/notes.md",
+        mode: "create",
+        text: "notes",
+      }),
+    );
+    expect(calls).toEqual([
+      "move /Inbox/a.txt",
+      "move /Docs/readme.md",
+      "trash /Inbox/scan.pdf",
+      "upload /Inbox/notes.md",
     ]);
-    expect(setup({ trash: true }).tools.map((tool) => tool.spec.name)).toEqual([
+  });
+
+  it("always offers trash, since every login has a Trash", () => {
+    expect(setup().tools.map((tool) => tool.spec.name)).toEqual([
       "move_items",
       "rename_items",
       "trash_items",
@@ -105,7 +128,7 @@ describe("createChatActionTools", () => {
 
 describe("move_items", () => {
   it("verifies moves like Organize does and applies the ones the person kept", async () => {
-    const { verify, apply, storage, events, tool } = setup();
+    const { verify, apply, storage, tool } = setup();
     expect(
       tool("move_items").activity({
         summary: "",
@@ -143,7 +166,6 @@ describe("move_items", () => {
     });
     await expect(storage.stat("/Docs/notes/a.txt")).resolves.toBeDefined();
     await expect(storage.stat("/Docs/readme.md")).resolves.toBeDefined();
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["mkdir", "move"]);
   });
 
   it("applies every non-conflicting suggestion by default and reports failures", async () => {
@@ -188,7 +210,7 @@ describe("move_items", () => {
 
 describe("rename_items", () => {
   it("verifies new names in place and renames the ones the person kept, with their edits", async () => {
-    const { verify, apply, storage, events, activity, tool } = setup({
+    const { verify, apply, storage, activity, tool } = setup({
       referenced: ["/Inbox", "/Docs"],
     });
     expect(
@@ -274,7 +296,6 @@ describe("rename_items", () => {
     await expect(storage.stat("/Documents/intro.md")).resolves.toBeDefined();
     await expect(storage.stat("/Documents/taken.txt")).resolves.toBeDefined();
     await expect(storage.stat("/Inbox/scan.pdf")).resolves.toBeDefined();
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["move"]);
     expect(activity.operations.map((operation) => [operation.action, operation.source])).toEqual([
       ["file.rename", "ai"],
       ["file.rename", "ai"],
@@ -328,7 +349,6 @@ describe("rename_items", () => {
 
   it("refuses the root, the Trash, paths as names, unreferenced items and proposals that change nothing", async () => {
     const { verify } = setup({
-      trash: true,
       referenced: ["/"],
       files: { "/Inbox/a.txt": "a", "/Inbox/A\u030Arsbesked.txt": "b" },
     });
@@ -341,7 +361,7 @@ describe("rename_items", () => {
     await expect(
       verify("rename_items", {
         summary: "s",
-        renames: [{ path: "/.Trash/x", name: "y", reason: "r" }],
+        renames: [{ path: "/.trash/x", name: "y", reason: "r" }],
       }),
     ).rejects.toThrow(/Trash/);
     for (const name of ["/Docs/a.txt", "..", "  "])
@@ -370,9 +390,8 @@ describe("rename_items", () => {
     ).rejects.toThrow(/not referenced/);
   });
 
-  it("never lets an item take the Trash folder's name, proposed or typed", async () => {
+  it("never lets an item take the name of one of fdrive's own folders, proposed or typed", async () => {
     const { verify, apply, storage } = setup({
-      trash: true,
       referenced: ["/"],
       files: { "/notes.txt": "a" },
     });
@@ -381,7 +400,13 @@ describe("rename_items", () => {
         summary: "s",
         renames: [{ path: "/notes.txt", name: ".Trash", reason: "r" }],
       }),
-    ).rejects.toThrow("/notes.txt cannot be named .Trash: that is the Trash.");
+    ).rejects.toThrow("/notes.txt cannot be named .Trash: that name is fdrive's own.");
+    await expect(
+      verify("rename_items", {
+        summary: "s",
+        renames: [{ path: "/notes.txt", name: ".fdrive-desktop", reason: "r" }],
+      }),
+    ).rejects.toThrow("/notes.txt cannot be named .fdrive-desktop: that name is fdrive's own.");
 
     const proposal = await verify("rename_items", {
       summary: "s",
@@ -395,14 +420,41 @@ describe("rename_items", () => {
       toolResult: 'Could not rename /notes.txt: ".Trash" is not a usable name.',
     });
     await expect(storage.stat("/notes.txt")).resolves.toBeDefined();
-    await expect(storage.stat("/.Trash")).rejects.toMatchObject({ kind: "not_found" });
+    await expect(storage.stat("/.trash")).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("proposes a case-only rename on a disk that finds the item under its new spelling", async () => {
+    const { verify, storage } = setup();
+    const stat = storage.stat.bind(storage);
+    // A disk that ignores case finds "/Inbox/a.txt" as "/Inbox/A.txt" and reports its stored name.
+    vi.spyOn(storage, "stat").mockImplementation(async (path) =>
+      path === "/Inbox/A.txt" || path === "/Inbox/TAKEN.txt"
+        ? { ...(await stat("/Inbox/a.txt")), path: "/Inbox/a.txt" }
+        : stat(path),
+    );
+    const proposal = await verify("rename_items", {
+      summary: "s",
+      renames: [
+        { path: "/Inbox/a.txt", name: "A.txt", reason: "r" },
+        { path: "/Inbox/scan.pdf", name: "TAKEN.txt", reason: "r" },
+      ],
+    });
+    expect(proposal).toMatchObject({
+      items: [
+        { path: "/Inbox/a.txt", name: "A.txt", conflict: false },
+        { path: "/Inbox/scan.pdf", name: "TAKEN.txt", conflict: true },
+      ],
+    });
   });
 
   it("passes on storage failures while checking whether a name is taken", async () => {
     const { verify, storage } = setup();
-    vi.spyOn(storage, "statFile").mockRejectedValueOnce(
-      new StorageError("upstream_unavailable", "storage is down"),
-    );
+    const stat = storage.stat.bind(storage);
+    vi.spyOn(storage, "stat").mockImplementation(async (path) => {
+      if (path === "/Inbox/b.txt")
+        throw new StorageError("upstream_unavailable", "storage is down");
+      return stat(path);
+    });
     await expect(
       verify("rename_items", {
         summary: "s",
@@ -414,8 +466,7 @@ describe("rename_items", () => {
 
 describe("trash_items", () => {
   it("verifies referenced items with their kinds and trashes the ones kept", async () => {
-    const { verify, apply, storage, events } = setup({
-      trash: true,
+    const { verify, apply, storage, trash } = setup({
       referenced: ["/Inbox", "/Docs"],
     });
 
@@ -446,21 +497,24 @@ describe("trash_items", () => {
     });
     await expect(storage.stat("/Inbox/a.txt")).rejects.toMatchObject({ kind: "not_found" });
     await expect(storage.stat("/Docs")).resolves.toBeDefined();
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["delete"]);
+    // Into Trash, never deleted for good: nothing a chat applies is unrecoverable.
+    expect((await trash.list(IDENTITY, 10)).items.map((item) => item.originalPath)).toEqual([
+      "/Inbox/a.txt",
+    ]);
     expect(await apply("trash_items", proposal, { paths: [] })).toMatchObject({
       outcome: "Nothing was trashed.",
     });
   });
 
   it("refuses the root, the Trash and items that are not referenced", async () => {
-    const { verify } = setup({ trash: true, referenced: ["/"] });
+    const { verify } = setup({ referenced: ["/"] });
     await expect(
       verify("trash_items", { summary: "s", items: [{ path: "/", reason: "r" }] }),
     ).rejects.toThrow(/root/);
     await expect(
-      verify("trash_items", { summary: "s", items: [{ path: "/.Trash/x", reason: "r" }] }),
+      verify("trash_items", { summary: "s", items: [{ path: "/.trash/x", reason: "r" }] }),
     ).rejects.toThrow(/Trash/);
-    const narrow = setup({ trash: true, referenced: ["/Docs"] });
+    const narrow = setup({ referenced: ["/Docs"] });
     await expect(
       narrow.verify("trash_items", {
         summary: "s",
@@ -472,7 +526,7 @@ describe("trash_items", () => {
 
 describe("write_text_file", () => {
   it("proposes a new text file beside a referenced item and creates it", async () => {
-    const { verify, apply, storage, events } = setup({ referenced: ["/Inbox/scan.pdf"] });
+    const { verify, apply, storage } = setup({ referenced: ["/Inbox/scan.pdf"] });
 
     const proposal = await verify("write_text_file", {
       summary: "A readable version.",
@@ -495,7 +549,6 @@ describe("write_text_file", () => {
       toolResult: "Created /Inbox/scan-notes.md.",
     });
     expect((await storage.stat("/Inbox/scan-notes.md")).size).toBe(14);
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["create"]);
     // A second apply of the same card finds the name taken and reports it instead of throwing.
     expect(
       await apply("write_text_file", proposal, { path: "/Inbox/scan-notes.md" }),
@@ -505,7 +558,7 @@ describe("write_text_file", () => {
   });
 
   it("replaces a referenced text file only with the hash it was read at", async () => {
-    const { verify, apply, storage, events } = setup();
+    const { verify, apply, storage } = setup();
     const current = sha("# Hi");
 
     await expect(
@@ -551,7 +604,6 @@ describe("write_text_file", () => {
     expect(await apply("write_text_file", proposal)).toMatchObject({
       outcome: "Replaced /Docs/readme.md.",
     });
-    expect(events.map((event) => event.type === "fs" && event.op)).toEqual(["update"]);
   });
 
   it("refuses binary names, places outside the references, taken names and oversized text", async () => {
@@ -608,7 +660,7 @@ describe("action tools: edge cases", () => {
   };
 
   it("refuses a card of another kind", async () => {
-    const { apply } = setup({ trash: true });
+    const { apply } = setup();
     await expect(apply("move_items", trashProposal)).rejects.toThrow("not a move proposal");
     await expect(apply("trash_items", moveProposal)).rejects.toThrow("not a trash proposal");
     await expect(apply("write_text_file", moveProposal)).rejects.toThrow("not a write proposal");
@@ -629,7 +681,7 @@ describe("action tools: edge cases", () => {
   });
 
   it("describes a single trashed item", () => {
-    const { tool } = setup({ trash: true });
+    const { tool } = setup();
     expect(
       tool("trash_items").activity({ summary: "", items: [{ path: "/Inbox/a.txt", reason: "" }] }),
     ).toBe("Proposed trashing a.txt");
@@ -638,7 +690,6 @@ describe("action tools: edge cases", () => {
   it("refuses writes to invalid, trashed, folder, oversized and binary targets", async () => {
     const big = "x".repeat(MAX_WRITE_BYTES + 1);
     const { verify } = setup({
-      trash: true,
       referenced: ["/Docs", "/Inbox"],
       files: { "/Docs/readme.md": "# Hi", "/Inbox/big.txt": big, "/Inbox/bytes.bin": "\0\x01\x02" },
     });
@@ -646,7 +697,7 @@ describe("action tools: edge cases", () => {
       verify("write_text_file", { summary: "s", path: "/bad\0", mode: "create", text: "x" }),
     ).rejects.toThrow(/not a valid path/);
     await expect(
-      verify("write_text_file", { summary: "s", path: "/.Trash/x.md", mode: "create", text: "x" }),
+      verify("write_text_file", { summary: "s", path: "/.trash/x.md", mode: "create", text: "x" }),
     ).rejects.toThrow(/Trash/);
     await expect(
       verify("write_text_file", {
@@ -726,7 +777,7 @@ describe("history for approved chat actions", () => {
   });
 
   it("records a trash and a written file with the same provenance", async () => {
-    const { verify, apply, activity } = setup({ trash: true, referenced: ["/Inbox/a.txt"] });
+    const { verify, apply, activity } = setup({ referenced: ["/Inbox/a.txt"] });
 
     await apply(
       "trash_items",

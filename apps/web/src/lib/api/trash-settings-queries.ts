@@ -1,16 +1,15 @@
 "use client";
 
-import type { TrashSettingsUpdateRequest } from "@fdrive/contracts";
+import type { TrashSettings } from "@fdrive/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
 import { queryKeys } from "./keys";
 
-/** The Trash settings of the files folder's storage row. */
-export function useSystemTrash(providerId: string, enabled = true) {
+/** How long Trash keeps an item, which the Trash page, the delete dialog and System > General say. */
+export function useTrashSettings() {
   return useQuery({
-    queryKey: queryKeys.system.trash(providerId),
-    queryFn: () => apiClient.systemTrash(providerId),
-    enabled,
+    queryKey: queryKeys.trash.settings(),
+    queryFn: () => apiClient.trashSettings(),
   });
 }
 
@@ -18,16 +17,9 @@ export function useUpdateTrashSettings() {
   const client = useQueryClient();
   return useMutation({
     meta: { systemActivity: ["general"], systemActivityBackground: false },
-    mutationFn: (input: TrashSettingsUpdateRequest) => apiClient.systemUpdateTrash(input),
-    onSuccess: async (data) => {
-      client.setQueryData(queryKeys.system.trash(data.providerId), data);
-      await Promise.all([
-        client.invalidateQueries({ queryKey: ["trash"] }),
-        // Each login's `capabilities.trash` (sidebar Trash, "Move to Trash") follows this setting.
-        client.invalidateQueries({ queryKey: queryKeys.auth.me() }),
-        client.invalidateQueries({ queryKey: ["fs"] }),
-        client.invalidateQueries({ queryKey: ["search"] }),
-      ]);
+    mutationFn: (input: TrashSettings) => apiClient.systemUpdateTrash(input),
+    onSuccess: (data) => {
+      client.setQueryData(queryKeys.trash.settings(), data);
     },
   });
 }

@@ -4,6 +4,7 @@ import { officeConfig } from "./config.ts";
 
 const base = {
   DATABASE_URL: "postgres://unused",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 const office = {

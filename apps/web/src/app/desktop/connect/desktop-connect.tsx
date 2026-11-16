@@ -1,11 +1,10 @@
 "use client";
 
-import type { MeResponse } from "@fdrive/contracts";
+import type { DesktopAccessMode, MeResponse } from "@fdrive/contracts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import { apiClient } from "@/lib/api/client";
 import { describeApiError } from "@/lib/api/errors";
 import { queryKeys } from "@/lib/api/keys";
@@ -23,23 +22,17 @@ export function DesktopConnect({
     initialData: initialMe,
     staleTime: 0,
   });
-  const identities = me.data.identities;
-  const [selected, setSelected] = useState<string[]>([]);
-  const [access, setAccess] = useState<Record<string, "read" | "full">>({});
+  const identity = me.data.identity;
+  const [access, setAccess] = useState<DesktopAccessMode>("read");
   const request = useQuery({
     queryKey: ["desktop-pairing", requestId],
     queryFn: () => apiClient.desktopPairing(requestId),
     retry: false,
   });
+  // A Mac app that cannot write is only ever granted read access.
   const approval = useMutation({
     mutationFn: () =>
-      request.data?.supportsWrites
-        ? apiClient.approveDesktopPairing(
-            requestId,
-            selected,
-            Object.fromEntries(selected.map((id) => [id, access[id] ?? "read"])),
-          )
-        : apiClient.approveDesktopPairing(requestId, selected),
+      apiClient.approveDesktopPairing(requestId, request.data?.supportsWrites ? access : "read"),
   });
   const approved = approval.isSuccess || request.data?.approved;
   return (
@@ -50,7 +43,7 @@ export function DesktopConnect({
           <CardDescription>
             {approved
               ? "Return to the Mac app to open your locations in Finder."
-              : "Choose the storage logins and access for this Mac."}
+              : "Choose what this Mac may do with your files."}
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
@@ -69,52 +62,24 @@ export function DesktopConnect({
               >
                 {request.data.code}
               </p>
-              <fieldset className="flex flex-col gap-3" disabled={approval.isPending}>
-                <legend className="mb-2 text-sm font-medium">Storage logins</legend>
-                {identities.map((identity) => (
-                  <label
-                    key={identity.id}
-                    htmlFor={`desktop-${identity.id}`}
-                    className="flex items-center gap-3 rounded-lg border p-3 text-sm"
+              <div className="min-w-0 break-words rounded-lg border p-3 text-sm">
+                <p>{me.data.storageName}</p>
+                <p className="text-muted-foreground">{identity.username}</p>
+              </div>
+              {request.data.supportsWrites && (
+                <label className="flex flex-col gap-2 text-sm">
+                  Access
+                  <select
+                    className="h-10 rounded-md border bg-background px-3"
+                    value={access}
+                    disabled={approval.isPending}
+                    onChange={(event) => setAccess(event.target.value === "full" ? "full" : "read")}
                   >
-                    <Checkbox
-                      id={`desktop-${identity.id}`}
-                      checked={selected.includes(identity.id)}
-                      onCheckedChange={(checked) =>
-                        setSelected((current) =>
-                          checked === true
-                            ? [...current, identity.id]
-                            : current.filter((id) => id !== identity.id),
-                        )
-                      }
-                    />
-                    <span className="min-w-0 break-words">
-                      {identity.providerLabel}
-                      <span className="block text-muted-foreground">{identity.username}</span>
-                    </span>
-                  </label>
-                ))}
-              </fieldset>
-              {request.data.supportsWrites &&
-                selected.map((id) => (
-                  <label key={id} className="flex flex-col gap-2 text-sm">
-                    {identities.find((identity) => identity.id === id)?.providerLabel} access
-                    <select
-                      className="h-10 rounded-md border bg-background px-3"
-                      value={access[id] ?? "read"}
-                      disabled={approval.isPending}
-                      onChange={(event) =>
-                        setAccess((current) => ({
-                          ...current,
-                          [id]: event.target.value === "full" ? "full" : "read",
-                        }))
-                      }
-                    >
-                      <option value="read">Read only</option>
-                      <option value="full">Read and write</option>
-                    </select>
-                  </label>
-                ))}
+                    <option value="read">Read only</option>
+                    <option value="full">Read and write</option>
+                  </select>
+                </label>
+              )}
               <p className="text-sm text-muted-foreground">
                 {request.data.supportsWrites
                   ? "Write access lets this Mac change files where the storage supports safe writes. "
@@ -122,11 +87,8 @@ export function DesktopConnect({
                 Connections expire after one year and can be revoked from Account → API tokens.
               </p>
               {approval.isError && <p role="alert">{describeApiError(approval.error)}</p>}
-              <Button
-                disabled={selected.length === 0 || approval.isPending}
-                onClick={() => approval.mutate()}
-              >
-                {approval.isPending ? "Connecting…" : "Allow selected logins"}
+              <Button disabled={approval.isPending} onClick={() => approval.mutate()}>
+                {approval.isPending ? "Connecting…" : "Allow this Mac"}
               </Button>
             </>
           )}

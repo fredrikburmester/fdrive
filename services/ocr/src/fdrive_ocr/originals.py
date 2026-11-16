@@ -25,9 +25,9 @@ STATE_MISSING = "missing"
 REFUSAL_TARGET_MISSING = "target_missing"
 REFUSAL_TARGET_CHANGED = "target_changed"
 
-#: Status written to `idx.ocr_log` for a restored file's own `(size, mtime_ns)`
-#: key. The done-log is presence-keyed, so this is what stops the next pass
-#: from immediately OCR'ing the file straight back again.
+#: Status written to `idx.ocr_log` for a restored file's content. The done-log
+#: is presence-keyed, so this is what stops the next pass from immediately
+#: OCR'ing the file straight back again.
 STATUS_RESTORED = "restored"
 
 

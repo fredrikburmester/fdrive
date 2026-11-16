@@ -1,4 +1,4 @@
-import type { FsEntry, ProviderCapabilities, ReceivedGrant } from "@fdrive/contracts";
+import type { FsEntry, ReceivedGrant } from "@fdrive/contracts";
 import { isRoot } from "@fdrive/core";
 
 /**
@@ -32,20 +32,22 @@ export function receivedGrantFor(
 }
 
 /**
- * Whether "Share with people" applies: a folder of this login's own, on
- * storage that shares between its users, never all of its files and never
- * something already shared with it.
+ * Whether a delete of `paths` goes only to this login's own Trash, where Undo can restore it:
+ * nothing lies in a folder shared with it, whose items go to their owner's Trash.
  */
-export function canShareWithPeople(
-  entry: Pick<FsEntry, "kind" | "path">,
-  capabilities: Pick<ProviderCapabilities, "shareWithPeople">,
+export function goesToOwnTrash(
+  paths: readonly string[],
+  received: readonly ReceivedGrant[],
 ): boolean {
-  return (
-    capabilities.shareWithPeople &&
-    entry.kind === "dir" &&
-    !isRoot(entry.path) &&
-    !isUnderSharedWithMe(entry.path)
-  );
+  return paths.every((path) => receivedGrantFor(path, received) === undefined);
+}
+
+/**
+ * Whether "Share with people" applies: a folder of this login's own, never
+ * all of its files and never something already shared with it.
+ */
+export function canShareWithPeople(entry: Pick<FsEntry, "kind" | "path">): boolean {
+  return entry.kind === "dir" && !isRoot(entry.path) && !isUnderSharedWithMe(entry.path);
 }
 
 /**
@@ -121,12 +123,11 @@ export interface EntryRestrictions {
 
 export function entryRestrictions(
   entry: Pick<FsEntry, "kind" | "path">,
-  capabilities: Pick<ProviderCapabilities, "shareWithPeople">,
   received: readonly ReceivedGrant[],
 ): EntryRestrictions {
   const grant = receivedGrantFor(entry.path, received);
   return {
-    shareWithPeople: canShareWithPeople(entry, capabilities),
+    shareWithPeople: canShareWithPeople(entry),
     publicLink: !isUnderSharedWithMe(entry.path),
     leave: grant !== undefined && grant.path === entry.path ? grant : null,
     locked: lockedReason(entry.path, received),

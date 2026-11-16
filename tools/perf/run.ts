@@ -16,7 +16,7 @@ import {
   runSearch,
   runUploadSmallBurst,
 } from "./scenarios.js";
-import { startPerfStack } from "./stack.js";
+import { EMBED_MODEL, startPerfStack } from "./stack.js";
 export function resultsDir(): string {
   return join(import.meta.dirname, "results");
 }
@@ -98,16 +98,14 @@ async function main() {
           totalMemory: totalmem(),
           browserVersion,
           layoutChecks,
-          model: stack.teiRuntime.model,
-          teiImage: stack.teiRuntime.image,
-          teiPlatform: stack.teiRuntime.platform,
-          teiSource: stack.teiRuntime.source,
+          model: EMBED_MODEL,
+          mlImage: stack.mlImage,
           embeddingDimensions: 384,
           searchFiles: 25000,
           contentTemplates: 32,
           repeatedTemplateEmbeddings: true,
           downloadBytes: 512 * 1024 * 1024,
-          storage: "temporary host folder, api local storage RW and indexer RO bind mount",
+          storage: "temporary host folder the api serves as its local storage",
         },
         results,
         budgets,

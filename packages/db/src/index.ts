@@ -7,11 +7,19 @@ import * as activitySchema from "./schema/activity.js";
 import * as appSchema from "./schema/app.js";
 import * as idxSchema from "./schema/idx.js";
 
+export { INDEX_ROOT_ID, INDEX_ROOT_NAME } from "./index-root.js";
 export { resolveMigrationsFolder } from "./migrations-path.js";
 export * from "./parse-database-url.js";
+export {
+  type AccessChange,
+  type AccessRepo,
+  createAccessRepo,
+  type PathLock,
+} from "./repos/access.js";
 export { type ActivityRepo, appendActivityOutcome, createActivityRepo } from "./repos/activity.js";
 export { type ActivityExportsRepo, createActivityExportsRepo } from "./repos/activity-exports.js";
 export { activityMetadataUnchanged, captureActivityMetadata } from "./repos/activity-metadata.js";
+export type { NativeActivityFacts } from "./repos/activity-native.js";
 export {
   type ActivityObservationsRepo,
   createActivityObservationsRepo,
@@ -25,55 +33,36 @@ export {
 export * from "./repos/activity-types.js";
 export { createAiChatRepo } from "./repos/ai-chats.js";
 export {
+  CHANGES_CHANNEL,
+  CHANGES_RETENTION,
+  type Change,
+  type ChangeContent,
+  type ChangeInput,
+  type ChangeJournal,
+  type ChangeMovedStamp,
+  type ChangePage,
+  type ChangeSource,
+  type ChangeStamp,
+  type ChangeWriter,
+  createChangeJournal,
+  createChangeWriter,
+} from "./repos/changes.js";
+export {
   createDesktopRepo,
+  type DesktopAccessMove,
   type DesktopItemRecord,
   type DesktopOperationRecord,
   type DesktopRepo,
   type DesktopRetention,
+  type DesktopShareMove,
+  type DesktopTrashChange,
 } from "./repos/desktop.js";
-export { createDesktopEffectsRepo } from "./repos/desktop-effects.js";
-export type {
-  DesktopEffectContext,
-  DesktopEffectEvent,
-  DesktopEffectStatus,
-  DesktopEffectsRepo,
-} from "./repos/desktop-effects-types.js";
-export {
-  createDesktopPublishLock,
-  DesktopPublishBusyError,
-  type DesktopPublishLock,
-  type DesktopPublishLockOptions,
-} from "./repos/desktop-publish-lock.js";
 export { createFilesFolderFacts, createRepos } from "./repos/drizzle.js";
-export { createIdentityLinksRepo } from "./repos/identity-links.js";
-export type {
-  IdentityLinksErrorCode,
-  IdentityLinksRepo,
-  LinkVerifiedInput,
-  LoginSessionInput,
-  LoginVerifiedInput,
-  LoginVerifiedResult,
-  RotateSessionInput,
-  SealedIdentityCredential,
-  SwitchActiveIdentityInput,
-  UnlinkIdentityInput,
-  UnlinkIdentityResult,
-} from "./repos/identity-links-types.js";
-export {
-  IdentityLinksError,
-  validateIdentityLinkId,
-  validateLinkVerified,
-  validateLoginVerified,
-  validateRotateSession,
-  validateSealedIdentityCredential,
-  validateSessionIdHash,
-  validateSwitchActiveIdentity,
-  validateUnlinkIdentity,
-} from "./repos/identity-links-types.js";
 export type {
   ContentHit,
   DuplicateGroup,
   DuplicateLocation,
+  ExtensionBytes,
   FileFilter,
   FilenameHit,
   FilenameOptions,
@@ -83,14 +72,20 @@ export type {
   FulltextOptions,
   ImageEmbeddingStats,
   ImageSearchHit,
+  IndexExclusion,
+  IndexedContent,
   IndexedFile,
   IndexQueries,
+  IndexRef,
   IndexStats,
-  MoveRecord,
+  PhotoCursor,
+  PhotoDetails,
+  PhotoOptions,
+  PhotoRow,
   RecencyDecay,
   ScopeClause,
+  ScopedReadOptions,
   ScopePrefix,
-  SearchQueryOptions,
   SimilarFile,
 } from "./repos/index-queries.js";
 export {
@@ -98,14 +93,24 @@ export {
   escapeLikePattern,
   toScopeClauses,
 } from "./repos/index-queries.js";
+export type {
+  LocalUserUpdate,
+  Login,
+  LoginErrorCode,
+  LoginRepo,
+  LoginSessionInput,
+  NewLocalUser,
+  SetupOwner,
+  SignInInput,
+  SignInResult,
+} from "./repos/logins-types.js";
 export {
-  createIndexWorkWriter,
-  INDEX_WORK_CHANNEL,
-  INDEX_WORK_RETENTION,
-  type IndexWorkContent,
-  type IndexWorkInput,
-  type IndexWorkWriter,
-} from "./repos/index-work.js";
+  LoginError,
+  SETUP_OWNER_KEY,
+  validateNewLocalUser,
+  validateSessionIdHash,
+  validateSignIn,
+} from "./repos/logins-types.js";
 export { createOfficeFileRepo } from "./repos/office-files.js";
 export type {
   MemoryOfficeFileOptions,
@@ -121,6 +126,7 @@ export { createOfficeWriteScope } from "./repos/office-write-scope.js";
 export { createShareRepo } from "./repos/shares.js";
 export type {
   MemoryShareOptions,
+  PublicShareRecord,
   ShareInsertInput,
   ShareListOptions,
   ShareOwnedUpdate,
@@ -142,6 +148,15 @@ export {
   validateSharePath,
 } from "./repos/shares-state.js";
 export { createSystemEventRepo } from "./repos/system-events.js";
+export {
+  createTrashItemRepo,
+  type PendingTrashItem,
+  type TrashItem,
+  type TrashItemChanges,
+  type TrashItemPage,
+  type TrashItemRepo,
+  trashItemChanges,
+} from "./repos/trash-items.js";
 export type {
   Account,
   AccountRepo,
@@ -153,8 +168,6 @@ export type {
   AiChatSharing,
   ApiToken,
   ApiTokenRepo,
-  Credential,
-  CredentialRepo,
   Favorite,
   FavoriteKind,
   FavoriteRepo,
@@ -175,11 +188,11 @@ export type {
   LocalUserPatch,
   LocalUserRepo,
   MetadataPathRepo,
-  Provider,
-  ProviderRepo,
   Recent,
   RecentRepo,
   Repos,
+  SavedSearch,
+  SavedSearchRepo,
   Session,
   SessionRepo,
   SettingsRepo,
@@ -218,6 +231,11 @@ export type Db = NodePgDatabase<Schema>;
 export interface CreateDbOptions {
   readonly max?: number;
   /**
+   * Names the pool's connections in `pg_stat_activity` (`application_name`),
+   * so the server shows which pool holds each connection.
+   */
+  readonly applicationName?: string;
+  /**
    * Bounds how long a caller waits for a free connection. Unset, `pg` queues
    * forever, so a pool held by slow work stalls every other query indefinitely
    * instead of failing something the caller can retry.
@@ -247,6 +265,7 @@ export function createPool(connectionString: string, opts: CreateDbOptions = {})
   const pool = new Pool({
     connectionString,
     ...(opts.max === undefined ? {} : { max: opts.max }),
+    ...(opts.applicationName === undefined ? {} : { application_name: opts.applicationName }),
     ...(opts.connectionTimeoutMillis === undefined
       ? {}
       : { connectionTimeoutMillis: opts.connectionTimeoutMillis }),

@@ -5,11 +5,11 @@ import type { OrganizeItem, OrganizeSubmission } from "./agent.ts";
 import { buildProposal } from "./proposal.ts";
 
 function file(path: string): OrganizeItem {
-  return { path, kind: "file", size: 1, modifiedAt: null };
+  return { path, kind: "file", size: 1, modifiedAt: new Date(0) };
 }
 
 function dir(path: string): OrganizeItem {
-  return { path, kind: "dir", size: 0, modifiedAt: null };
+  return { path, kind: "dir", size: 0, modifiedAt: new Date(0) };
 }
 
 function drive() {
@@ -38,13 +38,11 @@ function build(input: {
   items: readonly OrganizeItem[];
   submission: OrganizeSubmission;
   storage?: StorageProvider;
-  trashPath?: string | null;
 }) {
   return buildProposal({
     storage: input.storage ?? drive(),
     items: input.items,
     submission: input.submission,
-    trashPath: input.trashPath ?? null,
   });
 }
 
@@ -187,22 +185,29 @@ describe("buildProposal", () => {
     ]);
   });
 
-  it("keeps an item in place when the destination is in Trash", async () => {
+  it("keeps an item in place when the destination is in one of fdrive's own folders", async () => {
     const proposal = await build({
-      items: [file("/Inbox/a.pdf"), file("/Inbox/b.pdf"), file("/Inbox/c.pdf")],
-      trashPath: "/.Trash",
+      items: [
+        file("/Inbox/a.pdf"),
+        file("/Inbox/b.pdf"),
+        file("/Inbox/c.pdf"),
+        file("/Inbox/d.pdf"),
+      ],
       submission: submission({
         moves: [
-          move("/Inbox/a.pdf", "/.Trash"),
-          move("/Inbox/b.pdf", "/.Trash/2024"),
-          move("/Inbox/c.pdf", "/.Trash-not/2024"),
+          move("/Inbox/a.pdf", "/.trash"),
+          move("/Inbox/b.pdf", "/.trash/2024"),
+          move("/Inbox/c.pdf", "/.trash-not/2024"),
+          move("/Inbox/d.pdf", "/.fdrive-desktop/staging"),
         ],
       }),
     });
 
+    const reason = "The suggested folder is in Trash or another of fdrive's own folders.";
     expect(proposal.unchanged).toEqual([
-      { path: "/Inbox/a.pdf", reason: "The suggested folder is in Trash." },
-      { path: "/Inbox/b.pdf", reason: "The suggested folder is in Trash." },
+      { path: "/Inbox/a.pdf", reason },
+      { path: "/Inbox/b.pdf", reason },
+      { path: "/Inbox/d.pdf", reason },
     ]);
     expect(proposal.suggestions.map((s) => s.path)).toEqual(["/Inbox/c.pdf"]);
   });
@@ -279,7 +284,8 @@ describe("buildProposal", () => {
       ...memory,
       stat: async (path) => {
         if (path === "/Private") throw new StorageError("forbidden", "denied");
-        if (path === "/Finance/Receipts/c.pdf") throw new StorageError("rate_limited", "slow down");
+        if (path === "/Finance/Receipts/c.pdf")
+          throw new StorageError("upstream_unavailable", "slow down");
         return memory.stat(path);
       },
     };

@@ -12,8 +12,8 @@ import { expect, vi } from "vitest";
 
 const exec = promisify(execFile);
 const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url));
-/** Where every container sees the local folder, as `FDRIVE_INDEX_ROOTS`' `indexerPath` would. */
-const ROOT_IN_CONTAINER = "/roots/files";
+/** Where every container sees the files folder, as in a deployment. */
+const ROOT_IN_CONTAINER = "/data";
 
 async function command(program: string, args: string[], timeout = 30_000): Promise<string> {
   const result = await exec(program, args, { timeout, maxBuffer: 8 * 1024 * 1024 });
@@ -163,12 +163,12 @@ export class LocalIndexerStack {
       "infinity",
     ]);
     await this.run("indexer", [
+      "-p",
+      "127.0.0.1::8010",
       "-v",
       `${this.folder.root}:${ROOT_IN_CONTAINER}:ro`,
       "-e",
       "DATABASE_URL=postgres://fdrive:disposable-test-password@db:5432/fdrive",
-      "-e",
-      `INDEX_ROOTS=files=${ROOT_IN_CONTAINER}`,
       "-e",
       "SCAN_INTERVAL_SECONDS=3600",
       "-e",
@@ -183,6 +183,11 @@ export class LocalIndexerStack {
       },
       { timeout: 60_000, interval: 100 },
     );
+  }
+
+  /** The indexer's internal HTTP API, as this host reaches it. */
+  async indexerUrl(): Promise<string> {
+    return `http://127.0.0.1:${await this.port("indexer", 8010)}`;
   }
 
   /**

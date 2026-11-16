@@ -1,6 +1,6 @@
 //! A fake `ml` server for integration tests: the text embedding, extraction and image
-//! units the indexer calls, with switches to make each route fail or hang, and a log of
-//! every request it saw.
+//! units the indexer calls under its one URL, with switches to make each route fail or
+//! hang, and a log of every request it saw.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 pub const TEXT_EMBED: &str = "/text/embed";
 pub const TEXT_HEALTH: &str = "/text/health";
-pub const TIKA: &str = "/extract/tika";
+pub const EXTRACT: &str = "/extract/tika";
 pub const IMAGE_HEALTH: &str = "/image/health";
 pub const IMAGE_EMBED: &str = "/image/embed/image";
 
@@ -43,7 +43,7 @@ impl Seen {
 struct Inner {
     overrides: HashMap<String, (u16, String)>,
     seen: Vec<Seen>,
-    tika_text: String,
+    extract_text: String,
     image_model: String,
     held: HashMap<String, tokio::sync::watch::Sender<bool>>,
 }
@@ -88,7 +88,7 @@ impl FakeMl {
         let shared: Shared = Arc::new(Mutex::new(Inner {
             overrides: HashMap::new(),
             seen: Vec::new(),
-            tika_text: "extracted office document text that is long enough to keep".to_owned(),
+            extract_text: "extracted office document text that is long enough to keep".to_owned(),
             image_model: "model-a".to_owned(),
             held: HashMap::new(),
         }));
@@ -121,8 +121,8 @@ impl FakeMl {
         self
     }
 
-    pub fn set_tika_text(&self, text: &str) {
-        lock(&self.shared).tika_text = text.to_owned();
+    pub fn set_extract_text(&self, text: &str) {
+        lock(&self.shared).extract_text = text.to_owned();
     }
 
     pub fn set_image_model(&self, model: &str) {
@@ -187,13 +187,13 @@ async fn handle(State(shared): State<Shared>, request: Request) -> Response {
             .collect(),
         body: body.to_vec(),
     };
-    let (gate, overridden, tika_text, image_model) = {
+    let (gate, overridden, extract_text, image_model) = {
         let mut inner = lock(&shared);
         inner.seen.push(seen.clone());
         (
             inner.held.get(&seen.path).map(tokio::sync::watch::Sender::subscribe),
             inner.overrides.get(&seen.path).cloned(),
-            inner.tika_text.clone(),
+            inner.extract_text.clone(),
             inner.image_model.clone(),
         )
     };
@@ -214,7 +214,7 @@ async fn handle(State(shared): State<Shared>, request: Request) -> Response {
             axum::Json(json!(vectors)).into_response()
         }
         ("GET", TEXT_HEALTH) => StatusCode::OK.into_response(),
-        ("PUT", TIKA) => (StatusCode::OK, tika_text).into_response(),
+        ("PUT", EXTRACT) => (StatusCode::OK, extract_text).into_response(),
         ("GET", IMAGE_HEALTH) => {
             axum::Json(json!({"status": "ok", "model": image_model, "dim": IMAGE_DIM, "device": "cpu"})).into_response()
         }

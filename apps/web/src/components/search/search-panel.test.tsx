@@ -38,13 +38,7 @@ function stubMatchMedia(mobile: boolean) {
     value: mobile ? 390 : 1024,
   });
 }
-const me = makeMe({
-  identities: [
-    makeIdentity(),
-    makeIdentity({ id: "two", username: "bob", providerLabel: "Other" }),
-  ],
-  activeIdentityId: "one",
-});
+const me = makeMe({ identity: makeIdentity() });
 const hit: SearchHit = {
   name: "same.txt",
   path: "/same.txt",
@@ -100,7 +94,7 @@ function renderPanel(client: QueryClient) {
   );
 }
 
-it("searches only the active login when several logins are linked", async () => {
+it("searches the signed-in login and reports partial results", async () => {
   stubMatchMedia(false);
   const search = vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "same",
@@ -118,8 +112,6 @@ it("searches only the active login when several logins are linked", async () => 
   });
   await waitFor(() => expect(screen.getAllByText("same.txt")).toHaveLength(1));
   expect(search).toHaveBeenCalledWith("same", { limit: 20 });
-  expect(screen.queryByRole("button", { name: "All linked logins" })).toBeNull();
-  expect(screen.queryByText("ada · Main")).toBeNull();
   expect(screen.getByText("Some text results omitted.")).toBeDefined();
 });
 
@@ -618,13 +610,13 @@ it("shows Search is not available when both text and visual search are unavailab
   await waitFor(() => expect(screen.getByText("Search is not available.")).toBeDefined());
 });
 
-it("keeps permanent scope failures unavailable without startup wording", async () => {
+it("says the files are not indexed without an indexer", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
     available: false,
     semantic: false,
     images: false,
-    reason: "no_roots",
+    reason: "not_indexed",
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "ready",
@@ -642,20 +634,16 @@ it("keeps permanent scope failures unavailable without startup wording", async (
   });
 
   await waitFor(() =>
-    expect(
-      screen.getByText("Search is not available for this login. Its folder is not indexed."),
-    ).toBeDefined(),
+    expect(screen.getByText("Search is not available. Your files are not indexed.")).toBeDefined(),
   );
-  expect(screen.queryByText("Search is starting… Retrying automatically.")).toBeNull();
 });
 
-it("starts visual search when transient status recovery enables images", async () => {
+it("starts visual search once the status turns images on", async () => {
   stubMatchMedia(false);
   vi.spyOn(apiClient, "searchStatus").mockResolvedValue({
-    available: false,
+    available: true,
     semantic: false,
     images: false,
-    reason: "indexer_unreachable",
   });
   vi.spyOn(apiClient, "search").mockResolvedValue({
     query: "sunset",
@@ -672,12 +660,7 @@ it("starts visual search when transient status recovery enables images", async (
   });
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);
-  client.setQueryData(["search", "status"], {
-    available: false,
-    semantic: false,
-    images: false,
-    reason: "indexer_unreachable",
-  });
+  client.setQueryData(["search", "status"], { available: true, semantic: false, images: false });
   renderPanel(client);
 
   fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
@@ -994,4 +977,83 @@ it("renders visible File type label in the filter bar", async () => {
   renderPanel(client);
 
   expect(screen.getByText("File type:")).toBeDefined();
+});
+
+it("opens on a saved search's query and filters, in the folder it was saved in", async () => {
+  stubMatchMedia(false);
+  pathnameMock.mockReturnValue("/files/Elsewhere");
+  const search = vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  render(
+    <QueryClientProvider client={client}>
+      <SearchPanel
+        open
+        onOpenChange={vi.fn()}
+        saved={{ id: "s1", name: "Same", query: "same", type: "documents", folder: "/Work" }}
+      />
+    </QueryClientProvider>,
+  );
+
+  await screen.findByText("same.txt");
+  expect(screen.getByDisplayValue("same")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Documents" }).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Only in Work" }).getAttribute("aria-pressed")).toBe(
+    "true",
+  );
+  expect(search).toHaveBeenCalledWith("same", {
+    limit: 20,
+    ext: expect.stringContaining(".pdf"),
+    folder: "/Work",
+  });
+});
+
+it("saves the query and filters under the name typed, defaulting to the query", async () => {
+  stubMatchMedia(false);
+  pathnameMock.mockReturnValue("/files/Work");
+  vi.spyOn(apiClient, "search").mockResolvedValue({
+    query: "same",
+    sections: { folders: [], files: [hit], content: [] },
+    degraded: false,
+    unavailable: false,
+    tookMs: 1,
+  });
+  const create = vi.spyOn(apiClient, "createSavedSearch").mockImplementation(async (req) => ({
+    id: "s1",
+    ...req,
+  }));
+  const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+  client.setQueryData(["auth", "me"], me);
+  renderPanel(client);
+
+  expect(screen.getByRole("button", { name: "Save search" }).hasAttribute("disabled")).toBe(true);
+  fireEvent.change(screen.getByPlaceholderText("Search files, content, and images..."), {
+    target: { value: "same" },
+  });
+  await screen.findByText("same.txt");
+  fireEvent.click(screen.getByRole("button", { name: "This folder only" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save search" }));
+  const name = await screen.findByRole("textbox", { name: "Name" });
+  expect((name as HTMLInputElement).value).toBe("same");
+  fireEvent.keyDown(name, { key: "Enter" });
+  fireEvent.change(name, { target: { value: "  " } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith({
+      name: "same",
+      query: "same",
+      type: "any",
+      folder: "/Work",
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("textbox", { name: "Name" })).toBeNull());
 });

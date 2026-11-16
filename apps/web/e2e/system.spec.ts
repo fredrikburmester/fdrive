@@ -15,9 +15,7 @@ async function clickSave(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Save", exact: true }).dispatchEvent("click");
 }
 
-test("alice (admin) finds the files folder under System > General, where the retired Storage page now leads", async ({
-  page,
-}) => {
+test("alice (admin) finds the files folder under System > General", async ({ page }) => {
   await page.goto("/files");
 
   // The files folder is the only storage, so System has no Storage page.
@@ -26,19 +24,6 @@ test("alice (admin) finds the files folder under System > General, where the ret
   await page.getByRole("link", { name: "General" }).click();
   await expect(page).toHaveURL(/\/system\/general$/);
   await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
-
-  // Bookmarks of the old page land on General.
-  await page.goto("/system/storage");
-  await expect(page).toHaveURL(/\/system\/general$/);
-  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
-  await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
-});
-
-test("the retired /system/connection route redirects to General", async ({ page }) => {
-  await page.goto("/system/connection");
-
-  await expect(page).toHaveURL(/\/system\/general$/);
-  await expect(page.getByRole("heading", { name: "General" })).toBeVisible();
 });
 
 test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
@@ -57,23 +42,24 @@ test("alice (admin) sees the Search embedding server and OCR as not configured i
   await page.getByRole("link", { name: "Semantic search", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
-  await expect(page.getByText("Not configured: set FDRIVE_EMBED_URL.")).toBeVisible();
+  await expect(page.getByText("Not configured: set FDRIVE_ML_URL.")).toBeVisible();
 
   await page.getByRole("link", { name: "Searchable PDFs" }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 });
 
-test("alice (admin) sees the Indexer page render the fake indexer's root, counts, last scan, and errors sample", async ({
+test("alice (admin) sees the Indexer page render the fake indexer's watcher, counts, last scan, and errors sample", async ({
   page,
 }) => {
   await page.goto("/system/indexer");
 
   await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
+  await expect(page.getByText("Watcher on", { exact: true })).toBeVisible();
 
-  // Counts by status: one row per (root, status) pair from the fake's
-  // `GET /stats`, including the "indexed" row this bug's symptom curl showed.
-  const indexedRow = page.getByRole("row", { name: /files/ }).filter({ hasText: "indexed" });
+  // Counts by status: one row per status from the fake's `GET /stats`,
+  // including the "indexed" row this bug's symptom curl showed.
+  const indexedRow = page.getByRole("row", { name: /^indexed/ });
   await expect(indexedRow).toBeVisible();
   await expect(indexedRow.getByText("10", { exact: true })).toBeVisible();
 
@@ -89,7 +75,7 @@ test("alice (admin) sees the Indexer page render the fake indexer's root, counts
   await expect(page.getByRole("heading", { name: "indexer log" })).toBeVisible();
 });
 
-test("alice (admin) can reindex the files root and sees a toast reporting how many files were marked", async ({
+test("alice (admin) can reindex the files folder and sees a toast reporting how many files were marked", async ({
   page,
 }) => {
   await page.goto("/system/indexer");
@@ -99,8 +85,6 @@ test("alice (admin) can reindex the files root and sees a toast reporting how ma
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText(/Re-extracts text and re-embeds/)).toBeVisible();
 
-  await dialog.getByLabel("Root").click();
-  await page.getByRole("option", { name: "files" }).click();
   await expect(dialog.getByRole("checkbox")).toHaveCount(0);
 
   await dialog.getByRole("button", { name: "Reindex", exact: true }).click();
@@ -123,10 +107,7 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
   ).toBeVisible();
   await expect(dialog.getByText(/Text and search data are not touched/)).toBeVisible();
 
-  // Root defaults to "All roots"; scope to the fake's one root and turn on
-  // force to exercise every field this dialog now sends.
-  await dialog.getByLabel("Root").click();
-  await page.getByRole("option", { name: "files" }).click();
+  // Scope to a folder and turn on force to exercise every field this dialog sends.
   await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
   await dialog.getByRole("switch", { name: "Regenerate existing thumbnails" }).click();
 
@@ -141,11 +122,7 @@ test("alice (admin) can rebuild scoped thumbnails from the Thumbnails page with 
       response.request().method() === "POST",
   );
   await dialog.getByRole("button", { name: "Rebuild", exact: true }).click();
-  expect((await request).postDataJSON()).toEqual({
-    root: "files",
-    path: "alice/docs",
-    force: true,
-  });
+  expect((await request).postDataJSON()).toEqual({ path: "alice/docs", force: true });
   expect((await response).status()).toBe(202);
   await expect(dialog).toBeHidden();
   await expect(
@@ -213,7 +190,7 @@ test("alice (admin) can save the indexer's settings even while the indexer sidec
 });
 
 test.describe("bob (not admin)", () => {
-  // bob is not in FDRIVE_ADMIN_USERS, so this spec logs in as bob itself
+  // bob holds no administrator account, so this spec logs in as bob itself
   // rather than reusing the alice storage state the "chromium" project
   // otherwise applies by default.
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -233,8 +210,7 @@ test.describe("bob (not admin)", () => {
 
     await expect(page.getByRole("link", { name: "Users" })).toBeHidden();
 
-    const connectionRes = await page.request.get("/api/v1/admin/providers");
-    expect(connectionRes.status()).toBe(403);
+    expect((await page.request.get("/api/v1/system/storage")).status()).toBe(403);
     expect((await page.request.get("/api/v1/admin/users")).status()).toBe(403);
 
     for (const path of [
@@ -251,12 +227,7 @@ test.describe("bob (not admin)", () => {
   test("is sent back to /files when typing a System page's address directly", async ({ page }) => {
     await loginAs(page, "bob", "bob-password");
 
-    for (const path of [
-      "/system/storage",
-      "/system/general",
-      "/system/features",
-      "/system/users",
-    ]) {
+    for (const path of ["/system/general", "/system/features", "/system/users"]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/files$/);
       await expect(page.getByRole("heading", { name: "General" })).toHaveCount(0);
@@ -313,14 +284,11 @@ for (const scope of ["index", "thumbnails"] as const) {
     await page.getByRole("main").getByRole("button", { name: trigger, exact: true }).click();
     dialog = page.getByRole("dialog");
     if (isIndex) {
-      await expect(dialog.getByLabel("Path (optional)")).toBeDisabled();
-      await dialog.getByLabel("Root", { exact: true }).click();
-      await page.getByRole("option", { name: "files" }).click();
       await dialog.getByLabel("Path (optional)").fill(" alice/docs ");
     }
     await dialog.getByRole("button", { name: action, exact: true }).click();
     await expect(dialog).toBeHidden();
-    expect(requests).toEqual([isIndex ? { root: "files", path: "alice/docs" } : {}]);
+    expect(requests).toEqual([isIndex ? { path: "alice/docs" } : {}]);
     await expect(page.getByText("Running · 2 of 4 processed · 0 errors")).toBeVisible();
     await expect(
       page.getByRole("main").getByRole("button", { name: trigger, exact: true }),

@@ -10,49 +10,6 @@ export function originalFolderLabel(originalPath: string): string {
   return isRoot(parent) ? "Home" : parent;
 }
 
-/**
- * Formats a positive hour count as a day count: whole days print without a
- * decimal ("2 days"), everything else rounds to at most one decimal place
- * ("1.5 days"), and exactly one day is singular ("1 day").
- */
-export function retentionDaysLabel(retentionHours: number): string {
-  const days = Math.round((retentionHours / 24) * 10) / 10;
-  const formatted = Number.isInteger(days) ? String(days) : days.toFixed(1);
-  return `${formatted} ${days === 1 ? "day" : "days"}`;
-}
-
-/**
- * The Trash page and delete dialog's retention sentence, or `null` when
- * retention is not configured (fdrive never enforces it itself either way,
- * this is purely informational).
- */
-export function retentionNote(retentionHours: number | null): string | null {
-  if (retentionHours === null) {
-    return null;
-  }
-  return `Items in Trash are removed automatically after ${retentionDaysLabel(retentionHours)}.`;
-}
-
-export interface TrashAvailability {
-  readonly available: boolean;
-  readonly retentionHours: number | null;
-}
-
-/**
- * What the delete confirmation should promise. The login's `trash`
- * capability decides between "Move to Trash" and a permanent delete, the
- * same source the row menu labels read, so the two never disagree; the
- * separately cached trash status only contributes its retention note.
- */
-export function trashAvailabilityFor(
-  capabilities: { readonly trash: boolean },
-  status: { readonly retentionHours: number | null } | null | undefined,
-): TrashAvailability | null {
-  return capabilities.trash
-    ? { available: true, retentionHours: status?.retentionHours ?? null }
-    : null;
-}
-
 export interface DeleteDialogCopy {
   readonly title: string;
   readonly description: string;
@@ -61,41 +18,57 @@ export interface DeleteDialogCopy {
   readonly pendingLabel: string;
 }
 
+/** "1 day" or "N days". */
+export function dayCountLabel(days: number): string {
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
 /**
- * The delete confirmation dialog's title, body, and confirm button labels:
- * "Move to Trash" copy when the active identity's storage exposes a trash,
- * otherwise the permanent-delete copy. `names` is the list of entries being
- * acted on, in display order; a single entry is quoted by name, more than
+ * When Trash deletes what it holds, for the Trash page and the delete
+ * dialog, or `null` until the setting has loaded.
+ */
+export function retentionNote(retentionDays: number | undefined): string | null {
+  return retentionDays === undefined
+    ? null
+    : `Items in Trash are deleted permanently after ${dayCountLabel(retentionDays)}.`;
+}
+
+/** One item the delete dialog asks about: its name, and whose Trash it goes to when not the login's. */
+export interface DeleteItem {
+  readonly name: string;
+  /** The owner of the folder shared with the login that holds it; their Trash takes it. */
+  readonly owner?: string | undefined;
+}
+
+/**
+ * The delete confirmation dialog's title, body, and confirm button labels.
+ * Every delete moves to Trash: the login's own, or, for an item in a folder
+ * shared with it, the owner's, which keeps it `retentionDays` (when known)
+ * before deleting it permanently. A single item is quoted by name, more than
  * one is summarized by count. `pendingLabel` replaces `confirmLabel` while
  * the request runs, which can be a while for a large folder or selection.
  */
 export function deleteDialogCopy(
-  names: readonly string[],
-  trash: TrashAvailability | null | undefined,
+  items: readonly DeleteItem[],
+  retentionDays: number | undefined,
 ): DeleteDialogCopy {
-  const count = names.length;
-  const first = names[0];
-  const subject = count === 1 && first !== undefined ? `"${first}"` : `${count} items`;
-
-  if (trash?.available === true) {
-    const note = retentionNote(trash.retentionHours);
-    const description =
-      note === null
-        ? `${subject} will be moved to Trash.`
-        : `${subject} will be moved to Trash. ${note}`;
-    return {
-      title: "Move to Trash?",
-      description,
-      confirmLabel: "Move to Trash",
-      pendingLabel: "Moving to Trash…",
-    };
-  }
-
+  const count = items.length;
+  const first = items[0];
+  const subject = count === 1 && first !== undefined ? `"${first.name}"` : `${count} items`;
+  const owners = new Set(items.map((item) => item.owner));
+  const owner = owners.size === 1 ? first?.owner : undefined;
+  const sentences = [
+    `${subject} will be moved to ${owner === undefined ? "Trash" : `${owner}'s Trash`}.`,
+  ];
+  if (owners.size > 1)
+    sentences.push("Items in folders shared with you go to their owner's Trash.");
+  const note = retentionNote(retentionDays);
+  if (note !== null) sentences.push(note);
   return {
-    title: `Delete ${count === 1 ? "item" : "items"}?`,
-    description: `${subject} will be permanently deleted. This cannot be undone.`,
-    confirmLabel: "Delete",
-    pendingLabel: "Deleting…",
+    title: "Move to Trash?",
+    description: sentences.join(" "),
+    confirmLabel: "Move to Trash",
+    pendingLabel: "Moving to Trash…",
   };
 }
 

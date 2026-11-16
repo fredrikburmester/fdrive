@@ -7,18 +7,17 @@ import type {
 import {
   baseName,
   changeBaseName,
+  isReservedPath,
   isSafeSegment,
   isStorageError,
   isUnderPath,
   normalizePath,
   parentPath,
+  StorageError,
 } from "@fdrive/core";
 import { z } from "zod";
 import type { ActivityCallContext } from "../../activity/fs-context.js";
-import { recordActivity } from "../../activity/fs-context.js";
-import { requireUnoccupiedTarget } from "../../fs/mutations.js";
-import type { FsRoutesDeps } from "../../fs/routes.js";
-import { moveMany, publishFsEvent, trashMany } from "../../fs/routes.js";
+import { type FileOperations, fileActor, moveMany, trashMany } from "../../files/operations.js";
 import { decodeText } from "../../mcp/content.js";
 import type { OrganizeItem } from "../organize/agent.ts";
 import { buildProposal } from "../organize/proposal.ts";
@@ -28,10 +27,8 @@ import { type ActionOutcome, type ActionTool, defineActionTool } from "./actions
 import { DOCUMENT_EXTENSIONS, readBytes, referencedArg } from "./tools.ts";
 
 export interface ChatActionToolsDeps extends DriveToolsDeps {
-  readonly fs: Pick<
-    FsRoutesDeps,
-    "bus" | "clock" | "metadata" | "activity" | "trashPathForStorage"
-  >;
+  /** Applies what the person approved, the way every other change to files is made. */
+  readonly files: FileOperations;
   /** The chat whose proposal the person approved, recorded with every action it applies. */
   readonly conversationId: string;
 }
@@ -49,10 +46,6 @@ function activityContext(deps: ChatActionToolsDeps): ActivityCallContext {
 export const MAX_WRITE_BYTES = 1024 * 1024;
 const MAX_ACTION_ITEMS = 500;
 
-function trashPathOf(deps: DriveToolsDeps): string | null {
-  return deps.mcp.trashPathForStorage?.(deps.principal.storage) ?? deps.mcp.trashPath ?? null;
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof AiToolError) return error.message;
   if (isStorageError(error)) return error.message;
@@ -63,7 +56,7 @@ async function statItem(deps: DriveToolsDeps, path: string): Promise<OrganizeIte
   const stat = await deps.principal.storage.stat(path);
   if (stat.kind !== "dir" && stat.kind !== "file")
     throw new AiToolError(`${path} is neither a file nor a folder.`);
-  return { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt ?? null };
+  return { path, kind: stat.kind, size: stat.size, modifiedAt: stat.modifiedAt };
 }
 
 function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
@@ -108,7 +101,6 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
             moves: args.moves.map((move) => ({ ...move, path: move.path })),
             unchanged: [],
           },
-          trashPath: trashPathOf(deps),
         });
         if (proposal.suggestions.length === 0)
           throw new AiToolError(
@@ -142,7 +134,7 @@ function moveItemsTool(deps: ChatActionToolsDeps): ActionTool {
             toolResult: "The person kept no moves.",
           };
         const results = await moveMany(
-          deps.fs,
+          deps.files,
           deps.principal,
           { items, createParents: true },
           activityContext(deps),
@@ -212,7 +204,7 @@ function trashItemsTool(deps: ChatActionToolsDeps): ActionTool {
             results: [],
             toolResult: "The person kept no items.",
           };
-        const results = await trashMany(deps.fs, deps.principal, items, activityContext(deps));
+        const results = await trashMany(deps.files, deps.principal, items, activityContext(deps));
         const mapped: ChatActionResult[] = results.map((result) =>
           result.ok
             ? { path: result.path, ok: true }
@@ -262,20 +254,23 @@ function movedResults(results: readonly MoveManyResult[]): ChatActionResult[] {
   );
 }
 
-async function occupied(storage: DriveToolsDeps["principal"]["storage"], target: string) {
+/**
+ * Whether something other than `path` is at `target`, so a proposal names
+ * only targets that are free. A disk that ignores case finds `path` itself
+ * under a new spelling of its name, which a rename may take.
+ */
+async function occupied(
+  storage: DriveToolsDeps["principal"]["storage"],
+  target: string,
+  path?: string,
+) {
   try {
-    await requireUnoccupiedTarget(storage, target);
-    return false;
+    const found = await storage.stat(target);
+    return found.path !== path;
   } catch (error) {
-    if (isStorageError(error) && error.kind === "conflict") return true;
+    if (isStorageError(error) && error.kind === "not_found") return false;
     throw error;
   }
-}
-
-/** A rename keeps its folder, so the only way into the Trash is taking the Trash folder's own name. */
-function isTrashPath(deps: DriveToolsDeps, target: string): boolean {
-  const trashPath = trashPathOf(deps);
-  return trashPath !== null && (target === trashPath || isUnderPath(trashPath, target));
 }
 
 function depth(path: string): number {
@@ -324,10 +319,11 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
             );
           if (alreadyNamed(path, name)) continue;
           const target = changeBaseName(path, name);
-          if (isTrashPath(deps, target))
-            throw new AiToolError(`${path} cannot be named ${name}: that is the Trash.`);
+          if (isReservedPath(target))
+            throw new AiToolError(`${path} cannot be named ${name}: that name is fdrive's own.`);
           const stat = await statItem(deps, path);
-          const conflict = targets.has(target) || (await occupied(deps.principal.storage, target));
+          const conflict =
+            targets.has(target) || (await occupied(deps.principal.storage, target, path));
           targets.add(target);
           items.push({ path, kind: stat.kind, name, reason: rename.reason, conflict });
         }
@@ -349,7 +345,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           if (!allowed.has(rename.path) || items.some((item) => item.path === rename.path))
             continue;
           const name = cleanName(rename.name);
-          if (name === null || isTrashPath(deps, changeBaseName(rename.path, name)))
+          if (name === null || isReservedPath(changeBaseName(rename.path, name)))
             invalid.push({
               path: rename.path,
               ok: false,
@@ -370,7 +366,7 @@ function renameItemsTool(deps: ChatActionToolsDeps): ActionTool {
           items.length === 0
             ? []
             : await moveMany(
-                deps.fs,
+                deps.files,
                 deps.principal,
                 { items },
                 activityContext(deps),
@@ -415,7 +411,6 @@ function assertTextName(path: string): void {
 async function checkWriteTarget(
   deps: ChatActionToolsDeps,
   input: { path: string; mode: "create" | "replace"; expectedSha256: string | null },
-  signal: AbortSignal,
 ): Promise<{ path: string; sha256: string | null }> {
   let path: string;
   try {
@@ -423,16 +418,16 @@ async function checkWriteTarget(
   } catch {
     throw new AiToolError(`"${input.path}" is not a valid path.`);
   }
-  const trashPath = trashPathOf(deps);
-  if (trashPath !== null && (path === trashPath || isUnderPath(trashPath, path)))
-    throw new AiToolError("That path is in the Trash.");
+  if (isReservedPath(path))
+    throw new AiToolError("That path is in fdrive's own folders, like the Trash.");
   assertTextName(path);
   if (input.mode === "create") {
     if (!besideReference(deps, path))
       throw new AiToolError(
         `${path} is not next to a ${deps.focus.adjective} item; new files go into a ${deps.focus.adjective} folder or beside a ${deps.focus.adjective} file.`,
       );
-    await requireUnoccupiedTarget(deps.principal.storage, path);
+    if (await occupied(deps.principal.storage, path))
+      throw new StorageError("conflict", `something already exists at ${path}`);
     return { path, sha256: null };
   }
   const stored = await referencedArg(deps, path);
@@ -442,7 +437,7 @@ async function checkWriteTarget(
     throw new AiToolError(
       `${stored} is larger than ${MAX_WRITE_BYTES} bytes and cannot be replaced.`,
     );
-  const read = await readBytes(deps, stored, MAX_WRITE_BYTES, signal);
+  const read = await readBytes(deps, stored, MAX_WRITE_BYTES);
   if (read === null || decodeText(read.bytes) === null)
     throw new AiToolError(`${stored} is not a UTF-8 text file and cannot be replaced.`);
   if (input.expectedSha256 === null)
@@ -479,12 +474,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
     {
       activity: (args) =>
         `${args.mode === "create" ? "Drafted" : "Rewrote"} ${baseName(args.path)}`,
-      async verify(args, signal) {
-        const target = await checkWriteTarget(
-          deps,
-          { path: args.path, mode: args.mode, expectedSha256: args.expected_sha256 ?? null },
-          signal,
-        );
+      async verify(args) {
+        const target = await checkWriteTarget(deps, {
+          path: args.path,
+          mode: args.mode,
+          expectedSha256: args.expected_sha256 ?? null,
+        });
         return {
           kind: "write",
           summary: args.summary,
@@ -500,16 +495,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
         const rawPath = edits?.path ?? proposal.path;
         let path: string;
         try {
-          ({ path } = await checkWriteTarget(
-            deps,
-            {
-              path: rawPath,
-              mode,
-              expectedSha256:
-                mode === "replace" && rawPath === proposal.path ? proposal.expectedSha256 : null,
-            },
-            signal,
-          ));
+          ({ path } = await checkWriteTarget(deps, {
+            path: rawPath,
+            mode,
+            expectedSha256:
+              mode === "replace" && rawPath === proposal.path ? proposal.expectedSha256 : null,
+          }));
         } catch (error) {
           const message = errorMessage(error);
           return {
@@ -520,22 +511,12 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
         }
         const bytes = Buffer.from(proposal.text, "utf8");
         try {
-          await recordActivity(
-            deps.fs.activity,
-            deps.principal,
-            {
-              ...activityContext(deps),
-              action: mode === "create" ? "file.create" : "file.save",
-              requested: { path, kind: "file", conversationId: deps.conversationId },
-            },
-            () =>
-              deps.principal.storage.upload(path, bytes, {
-                overwrite: mode === "replace",
-                contentLength: bytes.length,
-                signal,
-              }),
-            () => ({ path, kind: "file", size: bytes.length }),
-          );
+          await deps.files.upload(fileActor(deps.principal, activityContext(deps)), path, bytes, {
+            action: mode === "create" ? "file.create" : "file.save",
+            overwrite: mode === "replace",
+            contentLength: bytes.length,
+            signal,
+          });
         } catch (error) {
           const message = errorMessage(error);
           return {
@@ -544,7 +525,6 @@ function writeTextFileTool(deps: ChatActionToolsDeps): ActionTool {
             toolResult: `Could not write ${path}: ${message}`,
           };
         }
-        publishFsEvent(deps.fs, deps.principal, mode === "create" ? "create" : "update", [path]);
         const outcome = `${mode === "create" ? "Created" : "Replaced"} ${path}.`;
         return { outcome, results: [{ path, ok: true, target: path }], toolResult: outcome };
       },
@@ -560,16 +540,12 @@ export const ACTION_TOOL_NAMES: Record<ChatActionProposal["kind"], string> = {
   write: "write_text_file",
 };
 
-/**
- * The chat's write tools. Trash is only offered where the login's storage
- * has a configured Trash, so nothing a chat proposes is unrecoverable.
- */
+/** The chat's write tools. Removing goes to Trash, so nothing a chat proposes is unrecoverable. */
 export function createChatActionTools(deps: ChatActionToolsDeps): ActionTool[] {
-  const trashable = deps.principal.storage.trash !== undefined && trashPathOf(deps) !== null;
   return [
     moveItemsTool(deps),
     renameItemsTool(deps),
-    ...(trashable ? [trashItemsTool(deps)] : []),
+    trashItemsTool(deps),
     writeTextFileTool(deps),
   ];
 }

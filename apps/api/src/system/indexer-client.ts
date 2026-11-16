@@ -1,7 +1,6 @@
 import type {
   IndexerErrorSample,
   IndexerHealth,
-  IndexerRootStats,
   IndexerStats,
   IndexerThumbnailRebuildJob,
   IndexerThumbnailsRebuildResponse,
@@ -17,10 +16,8 @@ import { callSidecar, type SidecarRequestDeps, type SidecarResult } from "./side
  */
 const IndexerHealthRaw = z.object({
   ok: z.boolean(),
-  roots: z.array(z.string()),
-  watcher: z.record(z.string(), z.boolean()),
+  watcher: z.boolean(),
   embed_ok: z.boolean(),
-  schema_version: z.number().int().nullable(),
 });
 
 const IndexerLastScanRaw = z.object({
@@ -30,14 +27,6 @@ const IndexerLastScanRaw = z.object({
   files_changed: z.number().int(),
   files_deleted: z.number().int(),
   errors: z.number().int(),
-});
-
-const IndexerRootStatsRaw = z.object({
-  root: z.string(),
-  counts_by_status: z.record(z.string(), z.number().int()),
-  chunks: z.number().int(),
-  chunks_embedded: z.number().int(),
-  last_scan: IndexerLastScanRaw.nullable(),
 });
 
 const IndexerErrorSampleRaw = z.object({
@@ -63,7 +52,10 @@ const IndexerThumbnailRebuildRaw = z.object({
 });
 
 const IndexerStatsRaw = z.object({
-  roots: z.array(IndexerRootStatsRaw),
+  counts_by_status: z.record(z.string(), z.number().int()),
+  chunks: z.number().int(),
+  chunks_embedded: z.number().int(),
+  last_scan: IndexerLastScanRaw.nullable(),
   thumbnails: z.number().int(),
   image_embeddings: z.number().int().optional(),
   queue_depth: z.number().int(),
@@ -85,30 +77,8 @@ const IndexerThumbnailsRebuildRaw = z.object({
 function toIndexerHealth(raw: z.infer<typeof IndexerHealthRaw>): IndexerHealth {
   return {
     ok: raw.ok,
-    roots: raw.roots,
     watcher: raw.watcher,
     embedOk: raw.embed_ok,
-    schemaVersion: raw.schema_version,
-  };
-}
-
-function toIndexerRootStats(raw: z.infer<typeof IndexerRootStatsRaw>): IndexerRootStats {
-  return {
-    root: raw.root,
-    countsByStatus: raw.counts_by_status,
-    chunks: raw.chunks,
-    chunksEmbedded: raw.chunks_embedded,
-    lastScan:
-      raw.last_scan === null
-        ? null
-        : {
-            startedAt: raw.last_scan.started_at,
-            finishedAt: raw.last_scan.finished_at,
-            filesSeen: raw.last_scan.files_seen,
-            filesChanged: raw.last_scan.files_changed,
-            filesDeleted: raw.last_scan.files_deleted,
-            errors: raw.last_scan.errors,
-          },
   };
 }
 
@@ -133,7 +103,20 @@ function toIndexerThumbnailRebuildJob(
 
 function toIndexerStats(raw: z.infer<typeof IndexerStatsRaw>): IndexerStats {
   return {
-    roots: raw.roots.map(toIndexerRootStats),
+    countsByStatus: raw.counts_by_status,
+    chunks: raw.chunks,
+    chunksEmbedded: raw.chunks_embedded,
+    lastScan:
+      raw.last_scan === null
+        ? null
+        : {
+            startedAt: raw.last_scan.started_at,
+            finishedAt: raw.last_scan.finished_at,
+            filesSeen: raw.last_scan.files_seen,
+            filesChanged: raw.last_scan.files_changed,
+            filesDeleted: raw.last_scan.files_deleted,
+            errors: raw.last_scan.errors,
+          },
     thumbnails: raw.thumbnails,
     ...(raw.image_embeddings === undefined ? {} : { imageEmbeddings: raw.image_embeddings }),
     queueDepth: raw.queue_depth,
@@ -168,9 +151,7 @@ export interface IndexerClientDeps extends SidecarRequestDeps {
  * `exactOptionalPropertyTypes`.
  */
 export interface ThumbnailsRebuildOptions {
-  /** Omitted rebuilds every configured root. */
-  readonly root?: string | undefined;
-  /** Omitted rebuilds the whole root; otherwise a single file or directory subtree. */
+  /** Omitted rebuilds the whole files folder; otherwise a single file or directory subtree. */
   readonly path?: string | undefined;
   /** Delete and rewrite thumbnails that already exist, instead of only filling in missing ones. */
   readonly force?: boolean | undefined;
@@ -178,19 +159,12 @@ export interface ThumbnailsRebuildOptions {
 
 /** A typed client for the indexer's internal HTTP API. See `docs/INDEXER.md`. */
 export interface IndexerClient {
-  clearIndex(options?: {
-    root?: string | undefined;
-    path?: string | undefined;
-  }): Promise<SidecarResult<IndexerClearResponse>>;
+  clearIndex(options?: { path?: string | undefined }): Promise<SidecarResult<IndexerClearResponse>>;
   clearThumbnails(): Promise<SidecarResult<IndexerClearResponse>>;
   health(): Promise<SidecarResult<IndexerHealth>>;
   stats(): Promise<SidecarResult<IndexerStats>>;
   /** `thumbnails: true` also queues a best-effort thumbnail rebuild over the same scope. */
-  reindex(
-    root: string,
-    path?: string,
-    thumbnails?: boolean,
-  ): Promise<SidecarResult<{ marked: number }>>;
+  reindex(path?: string, thumbnails?: boolean): Promise<SidecarResult<{ marked: number }>>;
   thumbnailsRebuild(
     options?: ThumbnailsRebuildOptions,
   ): Promise<SidecarResult<IndexerThumbnailsRebuildResponse>>;
@@ -235,7 +209,7 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
       return result.ok ? { ok: true, data: toIndexerStats(result.data) } : result;
     },
 
-    async reindex(root, path, thumbnails) {
+    async reindex(path, thumbnails) {
       const result = await callSidecar(
         deps.baseUrl,
         "/reindex",
@@ -243,7 +217,6 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
         {
           method: "POST",
           jsonBody: {
-            root,
             ...(path !== undefined ? { path } : {}),
             ...(thumbnails !== undefined ? { thumbnails } : {}),
           },
@@ -261,7 +234,6 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
         {
           method: "POST",
           jsonBody: {
-            ...(options?.root !== undefined ? { root: options.root } : {}),
             ...(options?.path !== undefined ? { path: options.path } : {}),
             ...(options?.force !== undefined ? { force: options.force } : {}),
           },
@@ -279,7 +251,6 @@ export function createIndexerClient(deps: IndexerClientDeps): IndexerClient {
         {
           method: "POST",
           jsonBody: {
-            ...(options?.root !== undefined ? { root: options.root } : {}),
             ...(options?.path !== undefined ? { path: options.path } : {}),
             ...(options?.force !== undefined ? { force: options.force } : {}),
           },

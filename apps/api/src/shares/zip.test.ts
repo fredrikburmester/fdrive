@@ -1,7 +1,9 @@
-import { ApiError, PublicShare } from "@fdrive/contracts";
+import { symlinkSync } from "node:fs";
+import { join } from "node:path";
+import { ApiError, PublicShare, ShareEntriesResponse } from "@fdrive/contracts";
 import { describe, expect, it, vi } from "vitest";
 import * as yauzl from "yauzl";
-import { cookieFrom, patchStorage, sharesHarness } from "./test-fixtures/index.ts";
+import { cookieFrom, sharesHarness } from "./test-fixtures/index.ts";
 
 const pub = (id: string) => `/api/v1/public/shares/${id}`;
 type Harness = ReturnType<typeof sharesHarness>;
@@ -46,7 +48,7 @@ async function error(response: Response) {
 
 describe("archive downloads of a public share", () => {
   it("zips a folder share as one download, and answers HEAD without spending one", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/folder/a.txt", "alpha");
     h.write("/folder/sub/b.txt", "bravo");
     h.write("/.trash/old.txt", "gone");
@@ -65,6 +67,41 @@ describe("archive downloads of a public share", () => {
     expect(zip.headers.get("cache-control")).toBe("no-store");
     expect(await unzip(zip)).toEqual({ "folder/a.txt": "alpha", "folder/sub/b.txt": "bravo" });
     expect(await used(h, id)).toBe(1);
+  });
+
+  it("never reaches the Trash through a symbolic link in the shared folder", async () => {
+    const h = sharesHarness();
+    h.write("/folder/a.txt", "alpha");
+    h.write("/.trash/old.txt", "gone");
+    h.write("/.fdrive-desktop/mac/secret.txt", "the Mac's");
+    // Left by a writer outside fdrive, such as SMB: fdrive never makes links.
+    symlinkSync(join(h.root, "alice", ".trash"), join(h.root, "alice", "folder", "bin"));
+    symlinkSync("../.fdrive-desktop", join(h.root, "alice", "folder", "desk"));
+    const cookie = await h.login();
+    const { id } = await h.create(cookie, { name: "Holiday", paths: ["/folder"] });
+    const listing = ShareEntriesResponse.parse(
+      await (await h.request(`${pub(id)}/entries`)).json(),
+    );
+    expect(Object.fromEntries(listing.items.map((entry) => [entry.name, entry.kind]))).toEqual({
+      "a.txt": "file",
+      bin: "symlink",
+      desk: "symlink",
+    });
+    for (const suffix of [
+      "/entries?path=/bin",
+      "/download?path=/bin/old.txt",
+      "/download?path=/bin",
+      "/entries?path=/desk/mac",
+      "/download?path=/desk/mac/secret.txt",
+    ]) {
+      // Storage refuses the path; a visitor hears only that it is unavailable.
+      const response = await h.request(`${pub(id)}${suffix}`);
+      expect(response.status, suffix).toBe(502);
+      expect(await response.text(), suffix).not.toMatch(/gone|the Mac's|symbolic/);
+    }
+    expect(await unzip(await h.request(`${pub(id)}/archive`))).toEqual({
+      "folder/a.txt": "alpha",
+    });
   });
 
   it("zips every path of an archive share under its own name", async () => {
@@ -102,8 +139,8 @@ describe("archive downloads of a public share", () => {
     );
   });
 
-  it("never carries the Trash or a backup folder into an archive", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+  it("never carries the Trash into an archive, and zips an old backup folder like any other", async () => {
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
     h.write("/folder/.fdrive-backups/b", "backup");
     h.write("/clean/a.txt", "alpha");
@@ -113,11 +150,12 @@ describe("archive downloads of a public share", () => {
     const refused = await h.request(`${pub(home.id)}/archive`);
     expect(refused.status).toBe(403);
     expect((await error(refused)).message).toContain("Trash");
-    // A backup folder anywhere inside is refused by the owner's storage.
-    const folder = await h.create(cookie, { paths: ["/folder"] });
-    expect((await h.request(`${pub(folder.id)}/archive`)).status).toBe(403);
     expect(await used(h, home.id)).toBe(0);
-    expect(await used(h, folder.id)).toBe(0);
+    // Backups no longer go into the files folder: what one left there is the owner's.
+    const folder = await h.create(cookie, { paths: ["/folder"] });
+    expect(await unzip(await h.request(`${pub(folder.id)}/archive`))).toEqual({
+      "folder/.fdrive-backups/b": "backup",
+    });
     // A folder beside the Trash is unaffected.
     const clean = await h.create(cookie, { paths: ["/clean"] });
     expect(await unzip(await h.request(`${pub(clean.id)}/archive`))).toEqual({
@@ -126,7 +164,7 @@ describe("archive downloads of a public share", () => {
   });
 
   it("refuses a carried-over share whose paths are hidden now or would collide", async () => {
-    const h = sharesHarness({ trashPath: "/.trash" });
+    const h = sharesHarness();
     h.write("/.trash/old.txt", "gone");
     h.write("/one/report.txt", "one");
     h.write("/two/report.txt", "two");
@@ -149,20 +187,8 @@ describe("archive downloads of a public share", () => {
       at: h.clock(),
     });
     expect((await h.request(`${pub(id)}/archive`)).status).toBe(404);
-    expect(await used(h, id)).toBe(0);
-  });
-
-  it("is unsupported on storage without a zip", async () => {
-    const h = sharesHarness({ local: patchStorage(({ zip: _zip, ...storage }) => storage) });
-    h.write("/folder/a.txt", "alpha");
-    const cookie = await h.login();
-    const { id } = await h.create(cookie, { paths: ["/folder"] });
-    const refused = await h.request(`${pub(id)}/archive`);
-    expect(refused.status).toBe(400);
-    expect(await error(refused)).toMatchObject({
-      kind: "unsupported",
-      details: { capability: "zip" },
-    });
+    expect((await h.request(pub(id))).status).toBe(404);
+    expect((await h.shares.get(id))?.usedDownloads).toBe(0);
   });
 
   it("holds each share to its concurrent archives, and frees a slot when one ends", async () => {

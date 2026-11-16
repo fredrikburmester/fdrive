@@ -40,7 +40,7 @@ async function stopSharingEverything(owner: Page): Promise<void> {
   }
 }
 
-test("an owner shares a folder to view, then to edit, and the person it is shared with uploads and leaves", async ({
+test("an owner shares a folder to view, then to edit, and the person it is shared with uploads, moves to the owner's Trash and leaves", async ({
   page,
 }) => {
   test.setTimeout(120_000);
@@ -113,8 +113,11 @@ test("an owner shares a folder to view, then to edit, and the person it is share
       page.getByText(`${PEOPLE_GUEST.username} can now edit ${PEOPLE_FOLDER}.`),
     ).toBeVisible();
 
-    // Now the guest uploads, and the file lands in the owner's folder on disk.
+    // Now the guest uploads, and the file lands in the owner's folder on disk. The owner,
+    // looking at the folder already, sees it arrive without a reload.
     const name = "from-the-guest.txt";
+    await page.goto(`/files/${encodeURIComponent(PEOPLE_FOLDER)}`);
+    await expect(listing(page).getByText(PEOPLE_FILE, { exact: true })).toBeVisible();
     await guest.goto(SHARED_HREF);
     await expect(guest.getByRole("button", { name: "New" })).toBeEnabled();
     await uploadFiles(guest, [{ name, mimeType: "text/plain", contents: "added by the guest" }]);
@@ -128,8 +131,43 @@ test("an owner shares a folder to view, then to edit, and the person it is share
         { timeout: 15_000 },
       )
       .toBe("added by the guest");
-    await page.goto(`/files/${encodeURIComponent(PEOPLE_FOLDER)}`);
     await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath("owner-sees-guest-upload-live.png") });
+
+    // And the other way: what the owner adds reaches the guest's open folder live.
+    const fromOwner = `from-the-owner-${test.info().retry}.txt`;
+    await uploadFiles(page, [{ name: fromOwner, mimeType: "text/plain", contents: "owner's" }]);
+    await expect(listing(guest).getByText(fromOwner, { exact: true })).toBeVisible();
+    await guest.screenshot({ path: test.info().outputPath("guest-sees-owner-upload-live.png") });
+
+    // The guest moves it to Trash: it is the owner's file, so the owner's Trash takes it.
+    await guest.goto(SHARED_HREF);
+    await listing(guest).getByText(name, { exact: true }).click({ button: "right" });
+    await guest.getByRole("menuitem", { name: "Move to Trash" }).click();
+    const confirm = guest.getByRole("alertdialog");
+    await expect(confirm).toContainText(`will be moved to ${PEOPLE_OWNER.username}'s Trash.`);
+    await confirm.getByRole("button", { name: "Move to Trash" }).click();
+    await expect(confirm).toBeHidden();
+    await expect(listing(guest).getByText(name, { exact: true })).toBeHidden();
+    await guest.goto("/trash");
+    await expect(guest.getByRole("heading", { name: "Trash", exact: true })).toBeVisible();
+    await expect(guest.locator("table tbody tr").filter({ hasText: name })).toHaveCount(0);
+    await page.goto("/trash");
+    const binned = page.locator("table tbody tr").filter({ hasText: name });
+    await expect(binned).toContainText(`/${PEOPLE_FOLDER}`);
+    // The owner restores it into the shared folder.
+    await binned.getByRole("checkbox", { name: `Select ${name}` }).check();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByText("Restored 1 item.")).toBeVisible();
+    await expect
+      .poll(
+        async () =>
+          readFile(homePath(PEOPLE_OWNER.username, `/${PEOPLE_FOLDER}/${name}`), "utf8").catch(
+            () => null,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe("added by the guest");
 
     // The guest leaves: the folder disappears for them and stays the owner's.
     await guest.goto("/files/Shared%20with%20me");

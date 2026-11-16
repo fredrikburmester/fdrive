@@ -1,4 +1,5 @@
 import type { StorageProvider } from "@fdrive/core";
+import { createMemoryStorage } from "@fdrive/core/testing";
 import { createMemoryRepos } from "@fdrive/db/testing";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.js";
@@ -9,41 +10,22 @@ import { createTokenService } from "./service.js";
 
 const REQUIRED_ENV = {
   DATABASE_URL: "postgres://localhost/fdrive",
+  FDRIVE_STORAGE_ROOT: "/srv/files",
   FDRIVE_MASTER_KEY: Buffer.alloc(32, 4).toString("base64"),
 };
 
-function notImplemented(): never {
-  throw new Error("not implemented in this fake");
-}
-
-const FAKE_STORAGE: StorageProvider = {
-  list: notImplemented,
-  stat: notImplemented,
-  statFile: notImplemented,
-  download: notImplemented,
-  upload: notImplemented,
-  mkdir: notImplemented,
-  move: notImplemented,
-  copy: notImplemented,
-  deleteFile: notImplemented,
-  deleteDir: notImplemented,
-  setModifiedAt: notImplemented,
-  zip: notImplemented,
-};
+const FAKE_STORAGE: StorageProvider = createMemoryStorage();
 
 async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.000Z")) {
   const repos = createMemoryRepos();
-  const provider = await repos.providers.ensure({ type: "local", baseUrl: "http://dav.test" });
   const account = await repos.accounts.create({ displayName: "Alice" });
   const identity = await repos.identities.create({
     accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
+    username: "alice",
   });
 
   const service = createTokenService({
     apiTokens: repos.apiTokens,
-    identities: repos.identities,
     clock,
     generateToken: () => "fdr_fixed",
   });
@@ -68,10 +50,7 @@ async function buildApp(clock: () => Date = () => new Date("2026-01-01T00:00:00.
     } as never,
     version: "1.0.0",
     startedAt: new Date(0),
-    connectionStatus: async () => ({
-      required: false,
-      providers: [{ type: "local", host: "Local folder" }],
-    }),
+    setupRequired: async () => false,
     principalResolver: async () => principal,
     registerRoutes: (groups) => {
       registerTokenRoutes(groups, { service });
@@ -92,8 +71,8 @@ describe("token routes: GET /account/tokens", () => {
   });
 
   it("lists a previously created token without its secret", async () => {
-    const { app, account, service } = await buildApp();
-    await service.create(account.id, { name: "Claude" });
+    const { app, principal, service } = await buildApp();
+    await service.create(principal, { name: "Claude" });
 
     const res = await app.request("/api/v1/account/tokens");
     const body = (await res.json()) as { items: { name: string }[] };
@@ -106,19 +85,21 @@ describe("token routes: GET /account/tokens", () => {
 });
 
 describe("token routes: POST /account/tokens", () => {
-  it("creates a token and returns it once, plus its summary", async () => {
-    const { app, identity } = await buildApp();
+  it("creates a token for the session's login and returns it once, plus its summary", async () => {
+    const { app, identity, repos } = await buildApp();
 
     const res = await app.request("/api/v1/account/tokens", {
       method: "POST",
       headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
       body: JSON.stringify({ name: "Claude" }),
     });
-    const body = (await res.json()) as { token: string; item: { identityId: string } };
+    const body = (await res.json()) as { token: string; item: { id: string } };
 
     expect(res.status).toBe(201);
     expect(body.token).toBe("fdr_fixed");
-    expect(body.item.identityId).toBe(identity.id);
+    expect(body.item).not.toHaveProperty("identityId");
+    const [stored] = await repos.apiTokens.listByAccount(identity.accountId);
+    expect(stored).toMatchObject({ id: body.item.id, identityId: identity.id });
   });
 
   it("the created token then shows up in the list", async () => {
@@ -160,8 +141,8 @@ describe("token routes: POST /account/tokens", () => {
     expect(res.status).toBe(400);
   });
 
-  it("rejects an identityId that does not belong to the account", async () => {
-    const { app } = await buildApp();
+  it("ignores a login named in the body: a token acts as the session's login", async () => {
+    const { app, identity, repos } = await buildApp();
 
     const res = await app.request("/api/v1/account/tokens", {
       method: "POST",
@@ -172,31 +153,16 @@ describe("token routes: POST /account/tokens", () => {
       }),
     });
 
-    expect(res.status).toBe(400);
-  });
-
-  it("rejects a non-canonical identityId before service access", async () => {
-    const { app, service } = await buildApp();
-    const create = vi.spyOn(service, "create");
-
-    const res = await app.request("/api/v1/account/tokens", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
-      body: JSON.stringify({
-        name: "Claude",
-        identityId: "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF",
-      }),
-    });
-
-    expect(res.status).toBe(400);
-    expect(create).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    const [stored] = await repos.apiTokens.listByAccount(identity.accountId);
+    expect(stored?.identityId).toBe(identity.id);
   });
 });
 
 describe("token routes: DELETE /account/tokens/:id", () => {
   it("revokes a token belonging to the account", async () => {
-    const { app, account, service } = await buildApp();
-    const created = await service.create(account.id, { name: "Claude" });
+    const { app, principal, service } = await buildApp();
+    const created = await service.create(principal, { name: "Claude" });
 
     const res = await app.request(`/api/v1/account/tokens/${created.item.id}`, {
       method: "DELETE",
@@ -220,18 +186,8 @@ describe("token routes: DELETE /account/tokens/:id", () => {
   });
 });
 
-it("defaults new tokens to the active login and persists normalized per-token permissions", async () => {
-  const { app, account, repos, principal } = await buildApp();
-  const provider = await repos.providers.ensure({
-    type: "local",
-    baseUrl: "https://other.invalid",
-  });
-  const second = await repos.identities.create({
-    accountId: account.id,
-    providerId: provider.id,
-    externalUsername: "alice",
-  });
-  Object.assign(principal, { identityId: second.id });
+it("persists normalized per-token permissions", async () => {
+  const { app } = await buildApp();
   const response = await app.request("/api/v1/account/tokens", {
     method: "POST",
     headers: { "content-type": "application/json", "x-requested-with": "fdrive" },
@@ -242,7 +198,7 @@ it("defaults new tokens to the active login and persists normalized per-token pe
   });
   expect(response.status).toBe(201);
   expect(await response.json()).toMatchObject({
-    item: { identityId: second.id, access: { mode: "organize", paths: ["/docs"] } },
+    item: { access: { mode: "organize", paths: ["/docs"] } },
   });
 });
 

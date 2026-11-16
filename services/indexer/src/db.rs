@@ -3,7 +3,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -12,7 +12,7 @@ use postgres::{Client, NoTls};
 use serde_json::Value;
 
 use crate::chunking::PDF_EXTS;
-use crate::events::{Event, to_json};
+use crate::photo::Photo;
 use crate::settings::RawSettings;
 
 pub const SWEEP_BATCH: usize = 5_000;
@@ -69,82 +69,34 @@ impl Db {
     }
 }
 
-pub fn read_schema_version(client: &mut Client) -> Result<Option<i64>> {
-    let row = client.query_opt(
-        r#"SELECT version::bigint FROM "idx"."schema_version" ORDER BY version DESC LIMIT 1"#,
-        &[],
-    );
-    match row {
-        Ok(row) => Ok(row.map(|r| r.get(0))),
-        Err(error) if error.is_closed() || error.as_db_error().is_none() => Err(error.into()),
-        Err(_) => Ok(None),
-    }
-}
-
-/// Wait for the compatible schema and the failure-history, work-queue and folder tables
-/// before any processing. They came without a version bump, which OCR waits for too.
-pub fn wait_for_schema_version(
-    db: &Db,
-    expected: i64,
-    timeout: Duration,
-    log: &dyn Fn(&str),
-    sleep: &dyn Fn(Duration),
-) -> Result<Option<i64>> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let (version, ready) = db.with(|c| {
-            let version = read_schema_version(c)?;
-            let row = c.query_one(
-                "SELECT to_regclass('idx.processing_failures')::text, to_regclass('idx.work')::text, \
-                 to_regclass('idx.folders')::text",
-                &[],
-            )?;
-            let tables: [Option<String>; 3] = [row.get(0), row.get(1), row.get(2)];
-            Ok((version, tables.iter().all(Option::is_some)))
-        })?;
-        if version == Some(expected) && ready {
-            return Ok(version);
-        }
-        let seen = version.map_or("None".to_owned(), |v| v.to_string());
-        if Instant::now() >= deadline {
-            log(&format!(
-                "schema not ready (expected {expected}, last seen: {seen}, requires processing_failures, work and folders); giving up"
-            ));
-            return Ok(None);
-        }
-        log(&format!(
-            "waiting for idx.schema_version = {expected} and the processing_failures, work and folders migrations (last seen: {seen})"
-        ));
-        sleep(Duration::from_secs(5));
-    }
-}
-
-pub fn upsert_root(c: &mut Client, name: &str) -> Result<i64> {
-    let row = c.query_one(
-        r#"INSERT INTO "idx"."roots" (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id::bigint"#,
-        &[&name],
-    )?;
-    Ok(row.get(0))
-}
-
 /// One `idx.files` row as a scan sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestRow {
     pub size: i64,
     pub mtime_ns: i64,
+    /// The status its retries are decided on (`retry_status`).
     pub status: String,
-    pub deleted: bool,
     pub sha256: Option<String>,
     pub image_embedded: bool,
     pub thumbnail_failed: bool,
+}
+
+/// The status an unchanged row's retry is decided on (`indexer::should_retry_unchanged`): its
+/// `text_status`, but `excluded:image_dir` for an image excluded by its folder, which only OCR
+/// lifts. Other exclusions keep their reason in `error` alone.
+pub fn retry_status(text_status: String, error: Option<&str>) -> String {
+    match error {
+        Some(reason @ "excluded:image_dir") => reason.to_owned(),
+        _ => text_status,
+    }
 }
 
 /// Every row of a root with its content key, whether that key has an image embedding,
 /// and whether its last thumbnail attempt failed, in one query.
 pub fn scan_manifest(c: &mut Client, root_id: i64) -> Result<HashMap<String, ManifestRow>> {
     let rows = c.query(
-        r#"SELECT f.path, f.size::bigint, f.mtime_ns::bigint, f.text_status, f.deleted_at IS NOT NULL, f.sha256,
-                  e.content_key IS NOT NULL, p.id IS NOT NULL
+        r#"SELECT f.path, f.size::bigint, f.mtime_ns::bigint, f.text_status, f.sha256,
+                  e.content_key IS NOT NULL, p.id IS NOT NULL, f.error
            FROM "idx"."files" f
            LEFT JOIN "app"."image_embeddings" e ON e.content_key = f.sha256
            LEFT JOIN "idx"."processing_failures" p ON p.root_id = f.root_id AND p.path = f.path
@@ -160,11 +112,10 @@ pub fn scan_manifest(c: &mut Client, root_id: i64) -> Result<HashMap<String, Man
                 ManifestRow {
                     size: r.get(1),
                     mtime_ns: r.get(2),
-                    status: r.get(3),
-                    deleted: r.get(4),
-                    sha256: r.get(5),
-                    image_embedded: r.get(6),
-                    thumbnail_failed: r.get(7),
+                    status: retry_status(r.get(3), r.get(7)),
+                    sha256: r.get(4),
+                    image_embedded: r.get(5),
+                    thumbnail_failed: r.get(6),
                 },
             )
         })
@@ -180,30 +131,55 @@ pub fn pending_count(c: &mut Client, root_id: i64) -> Result<i64> {
     .get(0))
 }
 
+/// The inode and change time (nanoseconds) of the file a row's digest describes
+/// (`idx.files.inode`, `ctime_ns`): the file a read of the indexer's own hashed, when that
+/// read began after the file had settled and saw no change while it ran, or the file the API
+/// published the hashed bytes as, or either of those once the API renamed it. `inode` holds
+/// the unsigned inode number's 64 bits, as stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub inode: i64,
+    pub ctime_ns: i64,
+}
+
+/// What writing a row's digest does to its stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StampUpdate {
+    /// The digest was not read just now: the row keeps its stamp while the digest stays the
+    /// same, and a different digest has none.
+    Keep,
+    /// The digest was just read, or came from the API: this is the stamp the read earned
+    /// or the API's hint carried, if any.
+    Set(Option<Stamp>),
+}
+
 /// The row `process_file` checks under its path lock.
 #[derive(Debug, Clone)]
 pub struct FileRow {
     pub size: i64,
     pub mtime_ns: i64,
     pub status: String,
-    pub deleted: bool,
     pub sha256: Option<String>,
     pub error: Option<String>,
+    pub stamp: Option<Stamp>,
 }
 
 pub fn file_row(c: &mut Client, root_id: i64, path: &str) -> Result<Option<FileRow>> {
     let row = c.query_opt(
-        r#"SELECT size::bigint, mtime_ns::bigint, text_status, deleted_at IS NOT NULL, sha256, error
+        r#"SELECT size::bigint, mtime_ns::bigint, text_status, sha256, error, inode::bigint, ctime_ns::bigint
            FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2"#,
         &[&root_id, &path],
     )?;
-    Ok(row.map(|r| FileRow {
-        size: r.get(0),
-        mtime_ns: r.get(1),
-        status: r.get(2),
-        deleted: r.get(3),
-        sha256: r.get(4),
-        error: r.get(5),
+    Ok(row.map(|r| {
+        let (inode, ctime_ns): (Option<i64>, Option<i64>) = (r.get(5), r.get(6));
+        FileRow {
+            size: r.get(0),
+            mtime_ns: r.get(1),
+            status: r.get(2),
+            sha256: r.get(3),
+            error: r.get(4),
+            stamp: inode.zip(ctime_ns).map(|(inode, ctime_ns)| Stamp { inode, ctime_ns }),
+        }
     }))
 }
 
@@ -212,7 +188,7 @@ pub fn mark_pdfs_skipped_by_ocr(c: &mut Client, root_id: i64) -> Result<u64> {
     let exts: Vec<&str> = PDF_EXTS.to_vec();
     Ok(c.execute(
         r#"UPDATE "idx"."files" SET text_status = 'disabled:search_ocr'
-           WHERE root_id = $1::bigint AND text_status = 'no_text' AND ext = ANY($2) AND deleted_at IS NULL"#,
+           WHERE root_id = $1::bigint AND text_status = 'no_text' AND ext = ANY($2)"#,
         &[&root_id, &exts],
     )?)
 }
@@ -228,17 +204,31 @@ pub struct NewFile<'a> {
     pub mime: Option<&'a str>,
 }
 
-/// Insert or reset a row to `pending` and drop its chunks. Returns the row id.
+/// Insert or reset a row to `pending` and drop its chunks. Returns the row id. The row
+/// keeps its stamp only while its digest stays the same (`StampUpdate::Keep`).
 pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
+    upsert_file_stamped(c, file, StampUpdate::Keep)
+}
+
+/// `upsert_file`, saying what the write does to the row's stamp.
+pub fn upsert_file_stamped(c: &mut Client, file: &NewFile<'_>, stamp: StampUpdate) -> Result<i64> {
+    let (keep, set) = match stamp {
+        StampUpdate::Keep => (true, None),
+        StampUpdate::Set(stamp) => (false, stamp),
+    };
+    let (inode, ctime_ns) = (set.map(|s| s.inode), set.map(|s| s.ctime_ns));
     let id: i64 = c
         .query_one(
-            r#"INSERT INTO "idx"."files"
-                 (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, deleted_at, error)
-               VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL, NULL)
+            r#"INSERT INTO "idx"."files" AS f
+                 (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, error, inode, ctime_ns)
+               VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL,
+                       $9::bigint, $10::bigint)
                ON CONFLICT (root_id, path) DO UPDATE SET
                  name = EXCLUDED.name, ext = EXCLUDED.ext, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns,
                  sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, text_status = 'pending',
-                 last_seen = now(), deleted_at = NULL, error = NULL
+                 last_seen = now(), error = NULL,
+                 inode = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.inode ELSE EXCLUDED.inode END,
+                 ctime_ns = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.ctime_ns ELSE EXCLUDED.ctime_ns END
                RETURNING id::bigint"#,
             &[
                 &file.root_id,
@@ -249,11 +239,62 @@ pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
                 &file.mtime_ns,
                 &file.sha256,
                 &file.mime,
+                &inode,
+                &ctime_ns,
+                &keep,
             ],
         )?
         .get(0);
     c.execute(r#"DELETE FROM "idx"."chunks" WHERE file_id = $1::bigint"#, &[&id])?;
     Ok(id)
+}
+
+/// Give an unchanged row a stamp that shows its digest still right: a read's, a hint's, or
+/// one carried across a rename. Nothing happens when the row changed meanwhile (another
+/// digest, size or time, or a delete).
+/// Returns whether the row took it.
+pub fn set_stamp(
+    c: &mut Client,
+    root_id: i64,
+    path: &str,
+    sha256: &str,
+    size: i64,
+    mtime_ns: i64,
+    stamp: Stamp,
+) -> Result<bool> {
+    Ok(c.execute(
+        r#"UPDATE "idx"."files" SET inode = $1::bigint, ctime_ns = $2::bigint
+           WHERE root_id = $3::bigint AND path = $4 AND sha256 = $5 AND size = $6::bigint
+             AND mtime_ns = $7::bigint"#,
+        &[
+            &stamp.inode,
+            &stamp.ctime_ns,
+            &root_id,
+            &path,
+            &sha256,
+            &size,
+            &mtime_ns,
+        ],
+    )? == 1)
+}
+
+/// Store a photo's details on its row.
+pub fn set_photo(c: &mut Client, file_id: i64, photo: &Photo) -> Result<()> {
+    c.execute(
+        r#"UPDATE "idx"."files" SET taken_at = $2, camera = $3, width = $4, height = $5,
+             latitude = $6, longitude = $7
+           WHERE id = $1::bigint"#,
+        &[
+            &file_id,
+            &photo.taken_at,
+            &photo.camera,
+            &photo.width,
+            &photo.height,
+            &photo.latitude,
+            &photo.longitude,
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn insert_chunks(c: &mut Client, file_id: i64, pieces: &[String], vectors: &[Option<Vec<f32>>]) -> Result<()> {
@@ -317,93 +358,91 @@ pub fn mark_file_error(c: &mut Client, root_id: i64, path: &str, error: &str) ->
     Ok(())
 }
 
-/// Soft-delete a path (or a directory's subtree), drop its chunks and its folder rows;
-/// returns the file row ids.
-pub fn mark_deleted(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Vec<i64>> {
+/// What `delete_paths` removed: file row ids and folder rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Deleted {
+    pub files: Vec<i64>,
+    pub folders: u64,
+}
+
+/// Delete the rows of a path (or a directory's subtree): its file rows, their chunks by
+/// cascade, and its folder rows.
+pub fn delete_paths(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Deleted> {
     let mut tx = c.transaction()?;
     let prefix = format!("{path}/");
     let ids: Vec<i64> = tx
         .query(
-            r#"UPDATE "idx"."files" SET deleted_at = now() WHERE root_id = $1::bigint AND deleted_at IS NULL
-               AND (path = $2 OR ($3 AND starts_with(path, $4))) RETURNING id::bigint"#,
+            r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))
+               RETURNING id::bigint"#,
             &[&root_id, &path, &is_dir, &prefix],
         )?
         .into_iter()
         .map(|r| r.get(0))
         .collect();
-    if !ids.is_empty() {
-        tx.execute(
-            r#"DELETE FROM "idx"."chunks" WHERE file_id = ANY($1::bigint[])"#,
-            &[&ids],
-        )?;
-    }
-    tx.execute(
+    let folders = tx.execute(
         r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))"#,
         &[&root_id, &path, &is_dir, &prefix],
     )?;
     tx.commit()?;
-    Ok(ids)
+    Ok(Deleted { files: ids, folders })
+}
+
+/// What `move_paths` moved: file rows and folder rows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Moved {
+    pub files: u64,
+    pub folders: u64,
 }
 
 /// Rename rows in place, replacing a stale row at the destination; a folder's rows in
 /// `idx.folders` follow it. Returns file rows moved.
 pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<u64> {
+    Ok(move_paths(c, root_id, old, new, is_dir)?.files)
+}
+
+/// `rename_paths`, also counting the folder rows that moved.
+pub fn move_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<Moved> {
     let mut tx = c.transaction()?;
     let moved = if is_dir {
         let (old_prefix, new_prefix) = (format!("{old}/"), format!("{new}/"));
         let from = old_prefix.chars().count() as i32 + 1;
         tx.execute(
             r#"DELETE FROM "idx"."files" f USING "idx"."files" s
-               WHERE f.root_id = $1::bigint AND s.root_id = $1::bigint AND starts_with(s.path, $2) AND s.deleted_at IS NULL
+               WHERE f.root_id = $1::bigint AND s.root_id = $1::bigint AND starts_with(s.path, $2)
                AND f.path = $3 || substr(s.path, $4::int)"#,
             &[&root_id, &old_prefix, &new_prefix, &from],
         )?;
-        let moved = tx.execute(
+        let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1 || substr(path, $2::int), last_seen = now()
-               WHERE root_id = $3::bigint AND starts_with(path, $4) AND deleted_at IS NULL"#,
+               WHERE root_id = $3::bigint AND starts_with(path, $4)"#,
             &[&new_prefix, &from, &root_id, &old_prefix],
         )?;
-        rename_folders(&mut tx, root_id, old, new)?;
-        moved
+        let folders = rename_folders(&mut tx, root_id, old, new)?;
+        Moved { files, folders }
     } else {
         tx.execute(
             r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2 AND EXISTS
-               (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $3 AND deleted_at IS NULL)"#,
+               (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $3)"#,
             &[&root_id, &new, &old],
         )?;
         let name = crate::paths::basename(new);
-        tx.execute(
+        let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1, name = $2, last_seen = now()
-               WHERE root_id = $3::bigint AND path = $4 AND deleted_at IS NULL"#,
+               WHERE root_id = $3::bigint AND path = $4"#,
             &[&new, &name, &root_id, &old],
-        )?
+        )?;
+        Moved { files, folders: 0 }
     };
     tx.commit()?;
     Ok(moved)
 }
 
-pub fn insert_move(c: &mut Client, root_id: i64, src: &str, dst: &str, actor: &str) -> Result<()> {
-    c.execute(
-        r#"INSERT INTO "idx"."moves" (root_id, src, dst, actor) VALUES ($1::bigint, $2, $3, $4)"#,
-        &[&root_id, &src, &dst, &actor],
-    )?;
+/// Tell `LISTEN idx_events` that the index took in a change under `root`, naming nothing
+/// else: the API passes it on so browsers refresh what the index backs. Nothing is stored;
+/// the change journal is the record of what changed.
+pub fn notify_indexed(c: &mut Client, root: &str) -> Result<()> {
+    c.execute("SELECT pg_notify('idx_events', $1)", &[&root])?;
     Ok(())
-}
-
-/// Insert the durable row and NOTIFY listeners with the same payload.
-pub fn record_event(c: &mut Client, root_id: i64, event: &Event) -> Result<()> {
-    let payload = to_json(event);
-    c.execute(
-        r#"INSERT INTO "idx"."events" (root_id, kind, path, target_path) VALUES ($1::bigint, $2, $3, $4)"#,
-        &[&root_id, &event.kind.as_str(), &event.path, &event.target_path],
-    )?;
-    c.execute("SELECT pg_notify('idx_events', $1)", &[&payload])?;
-    Ok(())
-}
-
-pub fn prune_events(c: &mut Client, older_than_days: i64) -> Result<u64> {
-    let cutoff = Utc::now() - chrono::Duration::days(older_than_days);
-    Ok(c.execute(r#"DELETE FROM "idx"."events" WHERE at < $1"#, &[&cutoff])?)
 }
 
 pub fn start_scan(c: &mut Client, root_id: i64) -> Result<(i64, DateTime<Utc>)> {
@@ -423,24 +462,34 @@ pub fn finish_scan(c: &mut Client, scan_id: i64, seen: i64, changed: i64, delete
     Ok(())
 }
 
-/// Soft-delete live rows a completed walk no longer found, unless written after `started_at`.
+/// Delete the rows a completed walk no longer found, unless written after `started_at`; their
+/// chunks go by cascade. `vanished` is the walk's own difference with the rows it read at the
+/// start, sent in batches, so the database never compares the whole tree with a list.
+/// Returns how many it deleted.
 pub fn sweep_vanished(c: &mut Client, root_id: i64, vanished: &[String], started_at: DateTime<Utc>) -> Result<i64> {
+    Ok(sweep_vanished_paths(c, root_id, vanished, started_at)?.len() as i64)
+}
+
+/// `sweep_vanished`, returning the paths it deleted.
+pub fn sweep_vanished_paths(
+    c: &mut Client,
+    root_id: i64,
+    vanished: &[String],
+    started_at: DateTime<Utc>,
+) -> Result<Vec<String>> {
     let mut paths = vanished.to_vec();
     paths.sort();
-    let mut deleted = 0;
+    let mut deleted = Vec::new();
     for batch in paths.chunks(SWEEP_BATCH) {
-        let row = c.query_one(
+        let rows = c.query(
             r#"WITH gone AS (
-                 UPDATE "idx"."files" SET deleted_at = now()
-                 WHERE root_id = $1::bigint AND deleted_at IS NULL AND last_seen < $2 AND path = ANY($3)
-                 RETURNING id
-               ), dropped AS (
-                 DELETE FROM "idx"."chunks" WHERE file_id IN (SELECT id FROM gone)
+                 DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND last_seen < $2 AND path = ANY($3)
+                 RETURNING path
                )
-               SELECT count(*) FROM gone"#,
+               SELECT path FROM gone ORDER BY path"#,
             &[&root_id, &started_at, &batch],
         )?;
-        deleted += row.get::<_, i64>(0);
+        deleted.extend(rows.into_iter().map(|r| r.get::<_, String>(0)));
     }
     Ok(deleted)
 }
@@ -477,7 +526,7 @@ pub fn image_embedding_model(c: &mut Client, key: &str) -> Result<Option<String>
 
 pub fn file_content_key(c: &mut Client, root_id: i64, path: &str) -> Result<Option<String>> {
     Ok(c.query_opt(
-        r#"SELECT sha256 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2 AND deleted_at IS NULL"#,
+        r#"SELECT sha256 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2"#,
         &[&root_id, &path],
     )?
     .and_then(|r| r.get(0)))
@@ -493,11 +542,11 @@ pub fn upsert_image_embedding(c: &mut Client, key: &str, model: &str, embedding:
     Ok(())
 }
 
-/// `(path, ext, sha256, size)` of every live, hashed file in a root.
+/// `(path, ext, sha256, size)` of every hashed file in a root.
 pub fn media_files(c: &mut Client, root_id: i64) -> Result<Vec<(String, String, String, i64)>> {
     Ok(c.query(
         r#"SELECT path, ext, sha256, size::bigint FROM "idx"."files"
-           WHERE root_id = $1::bigint AND deleted_at IS NULL AND sha256 IS NOT NULL"#,
+           WHERE root_id = $1::bigint AND sha256 IS NOT NULL"#,
         &[&root_id],
     )?
     .into_iter()
@@ -505,10 +554,11 @@ pub fn media_files(c: &mut Client, root_id: i64) -> Result<Vec<(String, String, 
     .collect())
 }
 
-pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
+/// The root's file counts by `text_status`, its chunk counts and its last scan.
+pub fn root_stats(c: &mut Client, root_id: i64) -> Result<serde_json::Map<String, Value>> {
     let counts: serde_json::Map<String, Value> = c
         .query(
-            r#"SELECT text_status, count(*) FROM "idx"."files" WHERE root_id = $1::bigint AND deleted_at IS NULL GROUP BY text_status"#,
+            r#"SELECT text_status, count(*) FROM "idx"."files" WHERE root_id = $1::bigint GROUP BY text_status"#,
             &[&root_id],
         )?
         .into_iter()
@@ -517,7 +567,7 @@ pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
     let chunks = c.query_one(
         r#"SELECT count(*), count(*) FILTER (WHERE c.embedding IS NOT NULL)
            FROM "idx"."chunks" c JOIN "idx"."files" f ON f.id = c.file_id
-           WHERE f.root_id = $1::bigint AND f.deleted_at IS NULL"#,
+           WHERE f.root_id = $1::bigint"#,
         &[&root_id],
     )?;
     let scan = c.query_opt(
@@ -527,22 +577,24 @@ pub fn root_stats(c: &mut Client, root: &str, root_id: i64) -> Result<Value> {
     )?;
     let last_scan = scan.map(|r| {
         serde_json::json!({
-            "started_at": crate::events::iso(r.get::<_, DateTime<Utc>>(0)),
-            "finished_at": r.get::<_, Option<DateTime<Utc>>>(1).map(crate::events::iso),
+            "started_at": crate::timestamps::iso(r.get::<_, DateTime<Utc>>(0)),
+            "finished_at": r.get::<_, Option<DateTime<Utc>>>(1).map(crate::timestamps::iso),
             "files_seen": r.get::<_, i64>(2), "files_changed": r.get::<_, i64>(3),
             "files_deleted": r.get::<_, i64>(4), "errors": r.get::<_, i64>(5),
         })
     });
-    Ok(serde_json::json!({
-        "root": root, "counts_by_status": counts, "chunks": chunks.get::<_, i64>(0),
-        "chunks_embedded": chunks.get::<_, i64>(1), "last_scan": last_scan,
-    }))
+    Ok(serde_json::Map::from_iter([
+        ("counts_by_status".to_owned(), Value::Object(counts)),
+        ("chunks".to_owned(), Value::from(chunks.get::<_, i64>(0))),
+        ("chunks_embedded".to_owned(), Value::from(chunks.get::<_, i64>(1))),
+        ("last_scan".to_owned(), last_scan.unwrap_or(Value::Null)),
+    ]))
 }
 
 pub fn errors_sample(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<Value>> {
     Ok(c.query(
         r#"SELECT path, error FROM "idx"."files" WHERE root_id = $1::bigint AND text_status = 'error'
-           AND deleted_at IS NULL ORDER BY indexed_at DESC LIMIT $2::bigint"#,
+           ORDER BY indexed_at DESC LIMIT $2::bigint"#,
         &[&root_id, &limit],
     )?
     .into_iter()
@@ -554,67 +606,204 @@ pub fn errors_sample(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<Val
 pub fn mark_pending(c: &mut Client, root_id: i64, scope: Option<(&str, &str)>) -> Result<u64> {
     Ok(match scope {
         None => c.execute(
-            r#"UPDATE "idx"."files" SET text_status = 'pending' WHERE root_id = $1::bigint AND deleted_at IS NULL"#,
+            r#"UPDATE "idx"."files" SET text_status = 'pending' WHERE root_id = $1::bigint"#,
             &[&root_id],
         )?,
         Some((exact, prefix)) => c.execute(
-            r#"UPDATE "idx"."files" SET text_status = 'pending' WHERE root_id = $1::bigint AND deleted_at IS NULL
+            r#"UPDATE "idx"."files" SET text_status = 'pending' WHERE root_id = $1::bigint
                AND (path = $2 OR starts_with(path, $3))"#,
             &[&root_id, &exact, &prefix],
         )?,
     })
 }
 
-/// One change the API queued in `idx.work`, exactly as stored; `work` checks it.
+/// The `NOTIFY` channel a write to the change journal wakes; the payload is the root's name.
+pub const CHANGES_CHANNEL: &str = "idx_changes";
+
+/// Taken before inserting into the journal and held until commit, by every writer in every
+/// language: positions are handed out and committed one transaction at a time, so a reader
+/// that sees a position has seen every one below it.
+const JOURNAL_LOCK: &str = "SELECT pg_advisory_xact_lock(hashtextextended('idx.changes', 0))";
+
+/// Rows per insert statement: well under Postgres's bind parameter limit.
+const APPEND_BATCH: usize = 1_000;
+
+/// One row of the change journal, exactly as stored; `work` checks it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorkRow {
+pub struct ChangeRow {
+    /// The row's position.
     pub id: i64,
     pub path: String,
     pub target_path: Option<String>,
+    pub source: String,
     pub sha256: Option<String>,
     pub size: Option<i64>,
     pub mtime_ns: Option<i64>,
     /// The unsigned inode number's 64 bits, stored signed.
     pub inode: Option<i64>,
     pub ctime_ns: Option<i64>,
+    /// A file move's: the file's change time just before the rename.
+    pub previous_ctime_ns: Option<i64>,
 }
 
-/// A root's oldest queued changes, at most `limit`.
-pub fn work_batch(c: &mut Client, root_id: i64, limit: i64) -> Result<Vec<WorkRow>> {
+/// A row to append: look at `path` again, or `path` moved to `target_path`. The hint columns
+/// are an API upload's or file move's; the indexer's own rows leave them empty.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NewChange {
+    pub path: String,
+    pub target_path: Option<String>,
+    pub sha256: Option<String>,
+    pub size: Option<i64>,
+    pub mtime_ns: Option<i64>,
+    pub inode: Option<i64>,
+    pub ctime_ns: Option<i64>,
+    pub previous_ctime_ns: Option<i64>,
+}
+
+impl NewChange {
+    /// Look at `path` again.
+    pub fn path(path: &str) -> Self {
+        Self {
+            path: path.to_owned(),
+            ..Self::default()
+        }
+    }
+
+    /// `from` moved to `to`.
+    pub fn moved(from: &str, to: &str) -> Self {
+        Self {
+            path: from.to_owned(),
+            target_path: Some(to.to_owned()),
+            ..Self::default()
+        }
+    }
+}
+
+/// Append `changes` under one root in one transaction holding the journal's lock, and wake
+/// `LISTEN idx_changes` with the root's name on commit.
+pub fn append_changes(c: &mut Client, root_id: i64, root: &str, source: &str, changes: &[NewChange]) -> Result<()> {
+    if changes.is_empty() {
+        return Ok(());
+    }
+    let mut tx = c.transaction()?;
+    tx.batch_execute(JOURNAL_LOCK)?;
+    for batch in changes.chunks(APPEND_BATCH) {
+        let column = |f: fn(&NewChange) -> Option<String>| batch.iter().map(f).collect::<Vec<_>>();
+        let number = |f: fn(&NewChange) -> Option<i64>| batch.iter().map(f).collect::<Vec<_>>();
+        let paths: Vec<&str> = batch.iter().map(|c| c.path.as_str()).collect();
+        tx.execute(
+            r#"INSERT INTO "idx"."changes"
+                 (root_id, path, target_path, source, sha256, size, mtime_ns, inode, ctime_ns, previous_ctime_ns)
+               SELECT $1::bigint, p, t, $2, s, z, m, i, ct, pct
+               FROM unnest($3::text[], $4::text[], $5::text[], $6::bigint[], $7::bigint[], $8::bigint[], $9::bigint[],
+                           $10::bigint[])
+                 WITH ORDINALITY AS u(p, t, s, z, m, i, ct, pct, n)
+               ORDER BY n"#,
+            &[
+                &root_id,
+                &source,
+                &paths,
+                &column(|c| c.target_path.clone()),
+                &column(|c| c.sha256.clone()),
+                &number(|c| c.size),
+                &number(|c| c.mtime_ns),
+                &number(|c| c.inode),
+                &number(|c| c.ctime_ns),
+                &number(|c| c.previous_ctime_ns),
+            ],
+        )?;
+    }
+    tx.execute("SELECT pg_notify($1, $2)", &[&CHANGES_CHANNEL, &root])?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// A root's journal rows after `after`, oldest first, at most `limit`.
+pub fn changes_after(c: &mut Client, root_id: i64, after: i64, limit: i64) -> Result<Vec<ChangeRow>> {
     Ok(c.query(
-        r#"SELECT id::bigint, path, target_path, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
-           ctime_ns::bigint FROM "idx"."work"
-           WHERE root_id = $1::bigint ORDER BY id LIMIT $2::bigint"#,
-        &[&root_id, &limit],
+        r#"SELECT id::bigint, path, target_path, source, sha256, size::bigint, mtime_ns::bigint, inode::bigint,
+           ctime_ns::bigint, previous_ctime_ns::bigint FROM "idx"."changes"
+           WHERE root_id = $1::bigint AND id > $2::bigint ORDER BY id LIMIT $3::bigint"#,
+        &[&root_id, &after, &limit],
     )?
     .into_iter()
-    .map(|r| WorkRow {
+    .map(|r| ChangeRow {
         id: r.get(0),
         path: r.get(1),
         target_path: r.get(2),
-        sha256: r.get(3),
-        size: r.get(4),
-        mtime_ns: r.get(5),
-        inode: r.get(6),
-        ctime_ns: r.get(7),
+        source: r.get(3),
+        sha256: r.get(4),
+        size: r.get(5),
+        mtime_ns: r.get(6),
+        inode: r.get(7),
+        ctime_ns: r.get(8),
+        previous_ctime_ns: r.get(9),
     })
     .collect())
 }
 
-/// Remove applied (or discarded) queue rows.
-pub fn delete_work(c: &mut Client, ids: &[i64]) -> Result<u64> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-    Ok(c.execute(r#"DELETE FROM "idx"."work" WHERE id = ANY($1::bigint[])"#, &[&ids])?)
+/// The journal's oldest position (`None` while empty) and its newest (0 while empty), over
+/// every root.
+pub fn journal_bounds(c: &mut Client) -> Result<(Option<i64>, i64)> {
+    let row = c.query_one(
+        r#"SELECT min(id)::bigint, coalesce(max(id), 0)::bigint FROM "idx"."changes""#,
+        &[],
+    )?;
+    Ok((row.get(0), row.get(1)))
 }
 
-/// Live rows at or below `path`, for comparing one folder against the disk.
+/// Where `consumer` last saved its position in the journal for a root.
+pub fn change_cursor(c: &mut Client, consumer: &str, root_id: i64) -> Result<Option<i64>> {
+    Ok(c.query_opt(
+        r#"SELECT position::bigint FROM "idx"."change_cursors" WHERE root_id = $1::bigint AND consumer = $2"#,
+        &[&root_id, &consumer],
+    )?
+    .map(|r| r.get(0)))
+}
+
+pub fn save_change_cursor(c: &mut Client, consumer: &str, root_id: i64, position: i64) -> Result<()> {
+    c.execute(
+        r#"INSERT INTO "idx"."change_cursors" (root_id, consumer, position) VALUES ($1::bigint, $2, $3::bigint)
+           ON CONFLICT (root_id, consumer) DO UPDATE SET position = EXCLUDED.position, updated_at = now()"#,
+        &[&root_id, &consumer, &position],
+    )?;
+    Ok(())
+}
+
+/// How long ago, by the database's clock, the root's last finished scan ended, when the
+/// change journal holds everything since: the root has file rows and the indexer has a
+/// position in the journal (`consumer`). `None` otherwise: a first start, an index that was
+/// cleared or restored (a restore starts a new journal without positions), or a root never
+/// scanned to the end.
+pub fn last_scan_age(c: &mut Client, root_id: i64, consumer: &str) -> Result<Option<Duration>> {
+    let row = c.query_opt(
+        r#"SELECT greatest(extract(epoch FROM now() - s.finished_at), 0)::float8 FROM "idx"."scans" s
+           WHERE s.root_id = $1::bigint AND s.finished_at IS NOT NULL
+             AND EXISTS (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint)
+             AND EXISTS (SELECT 1 FROM "idx"."change_cursors" WHERE root_id = $1::bigint AND consumer = $2)
+           ORDER BY s.started_at DESC LIMIT 1"#,
+        &[&root_id, &consumer],
+    )?;
+    Ok(row.map(|r| Duration::from_secs_f64(r.get(0))))
+}
+
+/// What a scan can compare against before it journals differences: whether an earlier scan
+/// of the root finished, and whether the root has folder rows.
+pub fn scan_baseline(c: &mut Client, root_id: i64) -> Result<(bool, bool)> {
+    let row = c.query_one(
+        r#"SELECT EXISTS (SELECT 1 FROM "idx"."scans" WHERE root_id = $1::bigint AND finished_at IS NOT NULL),
+                  EXISTS (SELECT 1 FROM "idx"."folders" WHERE root_id = $1::bigint)"#,
+        &[&root_id],
+    )?;
+    Ok((row.get(0), row.get(1)))
+}
+
+/// The rows at or below `path`, for comparing one folder against the disk.
 pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<HashMap<String, ManifestRow>> {
     let prefix = format!("{path}/");
     let rows = c.query(
-        r#"SELECT path, size::bigint, mtime_ns::bigint, text_status, sha256 FROM "idx"."files"
-           WHERE root_id = $1::bigint AND deleted_at IS NULL AND (path = $2 OR starts_with(path, $3))"#,
+        r#"SELECT path, size::bigint, mtime_ns::bigint, text_status, sha256, error FROM "idx"."files"
+           WHERE root_id = $1::bigint AND (path = $2 OR starts_with(path, $3))"#,
         &[&root_id, &path, &prefix],
     )?;
     Ok(rows
@@ -625,8 +814,7 @@ pub fn subtree_manifest(c: &mut Client, root_id: i64, path: &str) -> Result<Hash
                 ManifestRow {
                     size: r.get(1),
                     mtime_ns: r.get(2),
-                    status: r.get(3),
-                    deleted: false,
+                    status: retry_status(r.get(3), r.get(5)),
                     sha256: r.get(4),
                     image_embedded: false,
                     thumbnail_failed: false,
@@ -651,8 +839,9 @@ pub fn now(c: &mut Client) -> Result<DateTime<Utc>> {
     Ok(c.query_one("SELECT now()", &[])?.get(0))
 }
 
-/// Move the folder rows at and below `old` to `new`, replacing rows already there.
-fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, new: &str) -> Result<()> {
+/// Move the folder rows at and below `old` to `new`, replacing rows already there. Returns
+/// the rows moved.
+fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, new: &str) -> Result<u64> {
     let old_prefix = format!("{old}/");
     let rest = old.chars().count() as i32 + 1;
     let name = crate::paths::basename(new);
@@ -662,13 +851,12 @@ fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, n
            AND d.path = $4 || substr(s.path, $5::int)"#,
         &[&root_id, &old, &old_prefix, &new, &rest],
     )?;
-    tx.execute(
+    Ok(tx.execute(
         r#"UPDATE "idx"."folders" SET path = $4 || substr(path, $5::int),
            name = CASE WHEN path = $2 THEN $6 ELSE name END, seen_at = now()
            WHERE root_id = $1::bigint AND (path = $2 OR starts_with(path, $3))"#,
         &[&root_id, &old, &old_prefix, &new, &rest, &name],
-    )?;
-    Ok(())
+    )?)
 }
 
 /// One folder as a walk found it: root-relative path and modification time.
@@ -676,6 +864,13 @@ fn rename_folders(tx: &mut postgres::Transaction<'_>, root_id: i64, old: &str, n
 pub struct FolderRow {
     pub path: String,
     pub mtime_ns: i64,
+}
+
+/// What `sync_folders_changes` did: folder rows it added and rows it dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FolderChanges {
+    pub added: Vec<String>,
+    pub dropped: Vec<String>,
 }
 
 /// Write the folders a walk found. With `sweep`, a root-relative folder (`""` for the whole
@@ -687,35 +882,53 @@ pub fn sync_folders(
     found: &[FolderRow],
     sweep: Option<(&str, DateTime<Utc>)>,
 ) -> Result<u64> {
+    Ok(sync_folders_changes(c, root_id, found, sweep)?.dropped.len() as u64)
+}
+
+/// `sync_folders`, returning the paths of the rows it added and dropped.
+pub fn sync_folders_changes(
+    c: &mut Client,
+    root_id: i64,
+    found: &[FolderRow],
+    sweep: Option<(&str, DateTime<Utc>)>,
+) -> Result<FolderChanges> {
     // One statement cannot write a row twice, and two names that are not valid UTF-8 can read
     // the same.
     let mut unique: Vec<&FolderRow> = found.iter().collect();
     unique.sort_by(|a, b| a.path.cmp(&b.path));
     unique.dedup_by(|a, b| a.path == b.path);
+    let mut changes = FolderChanges::default();
     let mut tx = c.transaction()?;
     for batch in unique.chunks(SWEEP_BATCH) {
         let paths: Vec<&str> = batch.iter().map(|f| f.path.as_str()).collect();
         let names: Vec<&str> = batch.iter().map(|f| crate::paths::basename(&f.path)).collect();
         let mtimes: Vec<i64> = batch.iter().map(|f| f.mtime_ns).collect();
-        tx.execute(
+        // New rows first, so the folders that were new are known; then the rest are refreshed.
+        let added = tx.query(
             r#"INSERT INTO "idx"."folders" (root_id, path, name, mtime_ns)
                SELECT $1::bigint, p, n, m FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(p, n, m)
-               ON CONFLICT (root_id, path) DO UPDATE
-               SET name = EXCLUDED.name, mtime_ns = EXCLUDED.mtime_ns, seen_at = now()"#,
+               ON CONFLICT (root_id, path) DO NOTHING RETURNING path"#,
+            &[&root_id, &paths, &names, &mtimes],
+        )?;
+        changes.added.extend(added.into_iter().map(|r| r.get::<_, String>(0)));
+        tx.execute(
+            r#"UPDATE "idx"."folders" f SET name = t.n, mtime_ns = t.m, seen_at = now()
+               FROM unnest($2::text[], $3::text[], $4::bigint[]) AS t(p, n, m)
+               WHERE f.root_id = $1::bigint AND f.path = t.p"#,
             &[&root_id, &paths, &names, &mtimes],
         )?;
     }
-    let dropped = match sweep {
-        Some((under, started_at)) => {
-            let prefix = format!("{under}/");
-            tx.execute(
-                r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND seen_at < $2
-                   AND ($3 = '' OR starts_with(path, $4))"#,
-                &[&root_id, &started_at, &under, &prefix],
-            )?
-        }
-        None => 0,
-    };
+    if let Some((under, started_at)) = sweep {
+        let prefix = format!("{under}/");
+        let dropped = tx.query(
+            r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND seen_at < $2
+               AND ($3 = '' OR starts_with(path, $4)) RETURNING path"#,
+            &[&root_id, &started_at, &under, &prefix],
+        )?;
+        changes.dropped = dropped.into_iter().map(|r| r.get(0)).collect();
+    }
     tx.commit()?;
-    Ok(dropped)
+    changes.added.sort();
+    changes.dropped.sort();
+    Ok(changes)
 }

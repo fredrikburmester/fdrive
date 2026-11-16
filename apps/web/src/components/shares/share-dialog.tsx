@@ -75,11 +75,9 @@ export function ShareDialog({
       const result = share
         ? await management.update(share.id, request)
         : await management.create(CreateShareRequest.parse(request));
-      if (result) {
-        setFields((previous) => ({ ...previous, password: "" }));
-        if (share) onClose();
-        else setCreated(result);
-      }
+      setFields((previous) => ({ ...previous, password: "" }));
+      if (share) onClose();
+      else setCreated(result);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save the link.");
     } finally {
@@ -323,8 +321,8 @@ export function ShareDialog({
                     onChange={(event) => setFields({ ...fields, maxDownloads: event.target.value })}
                   />
                   <FieldDescription>
-                    Blank or zero means unlimited. Full-size previews and downloads count; gallery
-                    thumbnails do not.
+                    Blank or zero means unlimited. Each download, preview or peek counts once;
+                    thumbnails never do.
                   </FieldDescription>
                 </Field>
               </div>
