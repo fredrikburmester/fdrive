@@ -36,8 +36,8 @@ function storage(extra: Record<string, string> = {}) {
     [`/Private/${enc("c")}/${enc("d")}`]: AGE,
     "/Other/note.txt": "plain",
     [`/Second/${ENCRYPTED_FOLDER_MARKER}`]: JSON.stringify(MARKER),
-    [`/.fdrive-desktop/staged`]: AGE,
-    [`/.fdrive-desktop/plain`]: "plain",
+    "/.fdrive-desktop/staged": AGE,
+    "/.fdrive-desktop/plain": "plain",
     ...extra,
   });
   return { inner, guarded: guardEncryptedFolders(inner) };

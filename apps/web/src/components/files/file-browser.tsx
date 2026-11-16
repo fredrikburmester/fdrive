@@ -153,7 +153,7 @@ import { ListingSkeleton } from "./listing-skeleton";
 import { NewFolderDialog } from "./new-folder-dialog";
 import { RenameDialog } from "./rename-dialog";
 import { FilesBreadcrumb, FilesToolbarActions, type FolderViewActions } from "./toolbar";
-import { LOCKED_MESSAGE, useEncryptedActions } from "./use-encrypted-actions";
+import { useEncryptedActions } from "./use-encrypted-actions";
 
 export interface FileBrowserProps {
   path: string;
