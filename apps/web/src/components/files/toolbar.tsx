@@ -9,8 +9,10 @@ import {
   FileCodeIcon,
   FilePlusIcon,
   FileTextIcon,
+  FolderIcon,
   FolderPlusIcon,
   FolderUpIcon,
+  HouseIcon,
   LayoutGridIcon,
   ListIcon,
   ListTreeIcon,
@@ -105,15 +107,22 @@ const CRUMB_CLASS = "max-w-48 truncate rounded-sm px-1";
 
 /** The current folder's breadcrumb trail. Desktop shows every crumb while
  * the trail fits, truncating long names first and hiding the shallowest
- * ancestors behind an ellipsis only once names would get too narrow; below
- * `md` it always truncates from the left instead, keeping only the current
- * folder inline so it is never pushed off narrow screens (see
- * `breadcrumbLayout`). */
+ * ancestors behind an ellipsis only once names would get too narrow (see
+ * `breadcrumbLayout`). Below `md` the bar shows only the current folder's
+ * name, which opens the folders above it (see `FolderTitleMenu`). */
 export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) {
   const isMobile = useIsMobile();
   const crumbs = buildBreadcrumbs(path);
   const { navRef, measureRef, widths } = useTrailWidths(path, !isMobile);
-  const layout = breadcrumbLayout(crumbs, isMobile, widths);
+  const layout = breadcrumbLayout(crumbs, widths);
+
+  if (isMobile) {
+    return (
+      <Breadcrumb className="min-w-0 flex-1">
+        <FolderTitleMenu crumbs={crumbs} />
+      </Breadcrumb>
+    );
+  }
 
   return (
     <Breadcrumb ref={navRef} className="relative min-w-0 flex-1">
@@ -156,38 +165,96 @@ export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) 
           </>
         )}
       </BreadcrumbList>
-      {!isMobile && (
-        // The whole trail, laid out off to the side with the ellipsis after
-        // Home, for `useTrailWidths` to measure. Names come from CSS
-        // `content` rather than text nodes, so text queries and screen
-        // readers only ever find the visible crumbs.
-        <BreadcrumbList
-          ref={measureRef}
-          aria-hidden="true"
-          className="pointer-events-none invisible absolute top-0 left-0 w-max flex-nowrap"
-        >
-          {crumbs.map((crumb, index) => (
-            <Fragment key={crumb.path}>
-              {index > 0 && <BreadcrumbSeparator />}
-              {index === 1 && (
-                <>
-                  <BreadcrumbItem data-measure="ellipsis">
-                    <BreadcrumbEllipsis />
-                  </BreadcrumbItem>
-                  <BreadcrumbSeparator />
-                </>
-              )}
-              <BreadcrumbItem data-measure="crumb">
-                <span
-                  data-name={crumb.name}
-                  className={cn(CRUMB_CLASS, "after:content-[attr(data-name)]")}
-                />
-              </BreadcrumbItem>
-            </Fragment>
-          ))}
-        </BreadcrumbList>
-      )}
+      {/* The whole trail, laid out off to the side with the ellipsis after
+       * Home, for `useTrailWidths` to measure. Names come from CSS `content`
+       * rather than text nodes, so text queries and screen readers only ever
+       * find the visible crumbs. */}
+      <BreadcrumbList
+        ref={measureRef}
+        aria-hidden="true"
+        className="pointer-events-none invisible absolute top-0 left-0 w-max flex-nowrap"
+      >
+        {crumbs.map((crumb, index) => (
+          <Fragment key={crumb.path}>
+            {index > 0 && <BreadcrumbSeparator />}
+            {index === 1 && (
+              <>
+                <BreadcrumbItem data-measure="ellipsis">
+                  <BreadcrumbEllipsis />
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+              </>
+            )}
+            <BreadcrumbItem data-measure="crumb">
+              <span
+                data-name={crumb.name}
+                className={cn(CRUMB_CLASS, "after:content-[attr(data-name)]")}
+              />
+            </BreadcrumbItem>
+          </Fragment>
+        ))}
+      </BreadcrumbList>
     </Breadcrumb>
+  );
+}
+
+/**
+ * The phone header's title: the current folder's name in full weight, with the
+ * bar's width to itself. Tapping it lists the whole name (the bar may cut a long
+ * one short) and every folder above it, nearest first, to jump up to. At Home
+ * there is nothing above, so the name is plain text.
+ */
+function FolderTitleMenu({ crumbs }: { crumbs: readonly BreadcrumbEntry[] }) {
+  const current = crumbs.at(-1);
+  if (current === undefined) {
+    return null;
+  }
+  const above = crumbs.slice(0, -1).reverse();
+  return (
+    <BreadcrumbList className="min-w-0 flex-nowrap">
+      <BreadcrumbItem className="min-w-0">
+        {above.length === 0 ? (
+          <BreadcrumbPage className="truncate px-1.5 font-semibold text-[15px]">
+            {current.name}
+          </BreadcrumbPage>
+        ) : (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  className="h-9 min-w-0 max-w-full gap-1 px-1.5 font-semibold text-[15px] text-foreground"
+                />
+              }
+            >
+              <span aria-current="page" className="truncate">
+                {current.name}
+              </span>
+              <ChevronDownIcon className="text-muted-foreground" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-auto min-w-56 max-w-[calc(100vw-2rem)]">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="flex items-start gap-1.5 py-1.5 font-semibold text-foreground text-sm wrap-break-word">
+                  <FolderIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                  <span className="min-w-0">{current.name}</span>
+                </DropdownMenuLabel>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              {above.map((crumb) => (
+                <DropdownMenuItem
+                  key={crumb.path}
+                  className="h-10"
+                  render={<Link href={toRoute(crumb.href)} />}
+                >
+                  {crumb.path === "/" ? <HouseIcon /> : <FolderIcon />}
+                  <span className="truncate">{crumb.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </BreadcrumbItem>
+    </BreadcrumbList>
   );
 }
 
@@ -613,8 +680,7 @@ interface UploadMenuItemsProps {
 }
 
 /** "Upload files" and "Upload folder": the "Upload" dropdown's content on
- * desktop, and the "Upload" submenu's content inside the mobile "More"
- * overflow menu. */
+ * desktop, and the top of the New menu on mobile. */
 function UploadMenuItems({ onUploadFiles, onUploadFolder }: UploadMenuItemsProps) {
   return (
     <>
@@ -634,12 +700,16 @@ function UploadMenuItems({ onUploadFiles, onUploadFolder }: UploadMenuItemsProps
  * affecting the desktop layout. */
 const MOBILE_TAP_TARGET = "max-md:size-11 max-md:justify-center max-md:px-0";
 
+/** A toolbar trigger's icon: the `sm` button's 14px on desktop, 18px on a phone. */
+const TOOLBAR_ICON = "size-3.5 max-md:size-[18px]";
+
 /**
  * View toggle, sort menu, new folder, upload menu, selection actions, and
  * the inspector toggle. Below `md` (see `toolbarVisibility`), only New
- * stays inline; every other action moves into a "More" overflow menu whose
- * trigger carries the selection count as a badge, so the header never
- * overflows horizontally on narrow screens. Desktop is unchanged.
+ * stays inline, as a bare + whose menu also uploads; every other action
+ * moves into a "More" overflow menu whose trigger carries the selection
+ * count as a badge, so the header never overflows horizontally on narrow
+ * screens. Desktop is unchanged.
  */
 export function FilesToolbarActions({
   viewMode,
@@ -673,7 +743,7 @@ export function FilesToolbarActions({
 }: FilesToolbarActionsProps) {
   const blocked = writeBlock !== null;
   const isMobile = useIsMobile();
-  const { inline, overflow } = toolbarVisibility(isMobile);
+  const { inline, overflow, newMenu } = toolbarVisibility(isMobile);
   const inOverflow = overflow.length > 0;
   const selectedCount = selection.files + selection.folders;
   const ViewIcon = VIEW_MODE_ICONS[viewMode];
@@ -720,11 +790,17 @@ export function FilesToolbarActions({
             />
           }
         >
-          <PlusIcon />
+          <PlusIcon className={TOOLBAR_ICON} />
           <span className="max-[899px]:hidden">New</span>
-          <ChevronDownIcon className="text-muted-foreground" />
+          <ChevronDownIcon className="text-muted-foreground max-md:hidden" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-48">
+          {newMenu.includes("upload") && (
+            <>
+              <UploadMenuItems onUploadFiles={onUploadFiles} onUploadFolder={onUploadFolder} />
+              <DropdownMenuSeparator />
+            </>
+          )}
           <DropdownMenuItem className="whitespace-nowrap" onClick={onNewFolder}>
             <FolderPlusIcon />
             New folder
@@ -753,7 +829,7 @@ export function FilesToolbarActions({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {!inOverflow && (
+      {inline.includes("upload") && (
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
@@ -892,7 +968,7 @@ export function FilesToolbarActions({
               <Button variant="ghost" size="sm" className={cn(MOBILE_TAP_TARGET, "relative")} />
             }
           >
-            <MoreHorizontalIcon />
+            <MoreHorizontalIcon className={TOOLBAR_ICON} />
             <span className="sr-only">More</span>
             {selectedCount > 0 && (
               <Badge aria-hidden="true" variant="secondary" className="ml-0.5">
@@ -930,15 +1006,6 @@ export function FilesToolbarActions({
                   showThumbnails={showThumbnails}
                   onShowThumbnailsChange={onShowThumbnailsChange}
                 />
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger disabled={blocked}>
-                <UploadIcon />
-                Upload
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <UploadMenuItems onUploadFiles={onUploadFiles} onUploadFolder={onUploadFolder} />
               </DropdownMenuSubContent>
             </DropdownMenuSub>
             <DropdownMenuSeparator />

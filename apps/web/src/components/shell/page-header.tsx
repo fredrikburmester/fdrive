@@ -27,7 +27,8 @@ export interface PageHeaderProps {
  * Sticky top bar shared by every page inside the shell: the sidebar
  * trigger, a slot for breadcrumbs, and a slot for right-aligned actions.
  * With the sidebar open on a wide screen, the sidebar's own button closes
- * it, so the trigger here steps aside.
+ * it, so the trigger here steps aside. Phones drop the separator, leaving
+ * the room to the page's title.
  */
 export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
   const { open } = useSidebar();
@@ -36,7 +37,7 @@ export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
       <SidebarTrigger className={cn(open && "md:hidden")} />
       <Separator
         orientation="vertical"
-        className={cn("h-4 data-vertical:self-center", open && "md:hidden")}
+        className={cn("h-4 data-vertical:self-center max-md:hidden", open && "md:hidden")}
       />
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">{breadcrumbs}</div>
       <div className="flex shrink-0 items-center gap-2">

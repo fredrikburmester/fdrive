@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LIST_DENSITY,
   DENSITY_STORAGE_KEY,
+  listRowHeight,
   ROW_HEIGHTS,
   readListDensity,
   writeListDensity,
@@ -34,5 +35,12 @@ describe("list density", () => {
     expect(storage.data.get(DENSITY_STORAGE_KEY)).toBe('"compact"');
     expect(readListDensity(storage)).toBe("compact");
     expect(readListDensity(memoryStorage({ [DENSITY_STORAGE_KEY]: '"cozy"' }))).toBe("comfortable");
+  });
+
+  it("gives phones taller two-line rows that never drop below a 44px tap target", () => {
+    expect(listRowHeight("comfortable", false)).toBe(36);
+    expect(listRowHeight("compact", false)).toBe(28);
+    expect(listRowHeight("comfortable", true)).toBe(56);
+    expect(listRowHeight("compact", true)).toBe(44);
   });
 });

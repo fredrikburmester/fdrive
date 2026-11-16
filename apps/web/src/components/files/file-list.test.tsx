@@ -6,6 +6,9 @@ import { FileList } from "./file-list";
 
 const mockScrollToIndex = vi.fn();
 
+const viewport = vi.hoisted(() => ({ mobile: false }));
+vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => viewport.mobile }));
+
 vi.mock("@tanstack/react-virtual", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
   return {
@@ -72,6 +75,7 @@ describe("FileList", () => {
   afterEach(() => {
     cleanup();
     offsetHeight.mockRestore();
+    viewport.mobile = false;
   });
 
   it("selects nothing when a pointer drags across several rows", () => {
@@ -324,5 +328,108 @@ describe("FileList", () => {
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".size-6")).toBeNull();
     expect(container.querySelector("svg")).not.toBeNull();
+  });
+  describe("on a phone", () => {
+    beforeEach(() => {
+      viewport.mobile = true;
+    });
+
+    it("folds Size and Modified under each name and counts the items in the header", () => {
+      const entries = [
+        makeEntry("Photos", { kind: "dir" }),
+        makeEntry("guests.xlsx", { size: 25_088, ext: ".xlsx" }),
+      ];
+      const { container, getByText, queryByText } = renderList({ entries });
+
+      expect(getByText("2 items")).toBeTruthy();
+      expect(queryByText("Size")).toBeNull();
+      expect(queryByText("Modified")).toBeNull();
+
+      const file = container.querySelector('[data-path="/guests.xlsx"]');
+      expect(file?.textContent).toMatch(/^guests\.xlsx\d[\d.]* KB · \S/);
+      const folder = container.querySelector('[data-path="/Photos"]');
+      expect(folder?.textContent).not.toContain("--");
+      expect(folder?.textContent).not.toContain("KB");
+    });
+
+    it("says 1 item, not 1 items", () => {
+      const { getByText } = renderList({ entries: [makeEntry("only.txt")] });
+      expect(getByText("1 item")).toBeTruthy();
+    });
+
+    it("gives rows two-line height and a 44px floor at compact density", () => {
+      const { container, rerender } = renderList();
+      const heights = () =>
+        new Set(
+          [...container.querySelectorAll<HTMLElement>("[data-path]")].map(
+            (row) => row.style.height,
+          ),
+        );
+      expect(heights()).toEqual(new Set(["56px"]));
+
+      rerender(
+        <FileList
+          entries={ENTRIES}
+          selected={new Set()}
+          focusedPath={null}
+          onEntryClick={noop}
+          onEntryDoubleClick={noop}
+          onContextAction={noop}
+          getDragPaths={() => []}
+          onInternalDrop={noop}
+          onToggleSelectAll={noop}
+          onClearSelection={noop}
+          density="compact"
+        />,
+      );
+      expect(heights()).toEqual(new Set(["44px"]));
+    });
+
+    it("marks folders with a trailing chevron, except in tree view where they already have one", () => {
+      const entries = [makeEntry("Photos", { kind: "dir" }), makeEntry("notes.txt")];
+      const chevrons = (container: HTMLElement, path: string) =>
+        container.querySelectorAll(`[data-path="${path}"] svg.lucide-chevron-right`).length;
+
+      const list = renderList({ entries });
+      expect(chevrons(list.container, "/Photos")).toBe(1);
+      expect(chevrons(list.container, "/notes.txt")).toBe(0);
+      cleanup();
+
+      const tree = renderList({ entries, treeDepths: new Map(), treeExpanded: new Set() });
+      // Only the disclosure toggle on the left.
+      expect(chevrons(tree.container, "/Photos")).toBe(1);
+      expect(tree.getByRole("button", { name: "Expand Photos" })).toBeTruthy();
+    });
+
+    it("puts who shares a folder on its detail line", () => {
+      const entries = [makeEntry("Trip", { path: "/Shared with me/Trip", kind: "dir" })];
+      const received = [
+        {
+          id: "00000000-0000-4000-8000-0000000000b1",
+          owner: "alice",
+          name: "Trip",
+          path: "/Shared with me/Trip",
+          access: "read" as const,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ];
+      const { getByText } = renderList({ entries, received });
+      expect(getByText(/ · alice · Can view$/)).toBeTruthy();
+    });
+
+    it("shows a 32px thumbnail next to the two lines", () => {
+      const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
+      const { container } = renderList({ entries, showThumbnails: true });
+      expect(container.querySelector("img")?.className).toContain("size-8");
+    });
+
+    it("keeps a symbolic link's name and date readable", () => {
+      const entries = [makeEntry("bin", { kind: "symlink" })];
+      const { container } = renderList({ entries });
+      const row = container.querySelector('[data-path="/bin"]');
+      expect(row?.getAttribute("aria-disabled")).toBe("true");
+      expect(row?.textContent).toMatch(/^bin\S/);
+      expect(row?.textContent).not.toContain("--");
+    });
   });
 });

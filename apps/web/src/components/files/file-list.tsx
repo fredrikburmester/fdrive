@@ -3,13 +3,19 @@
 import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRightIcon } from "lucide-react";
-import type { DragEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { DragEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
-import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
+import {
+  DEFAULT_LIST_DENSITY,
+  type ListDensity,
+  listRowHeight,
+  ROW_HEIGHTS,
+} from "@/lib/files/density";
 import {
   apiClient,
   INTERNAL_DND_TYPE,
@@ -42,18 +48,38 @@ const LIST_THUMBNAIL_SIZE = 256;
  * A list row's icon slot: a 24px image thumbnail when `showThumbnail` is true
  * and `wantsThumbnail` accepts the file, falling back to a 24px container holding
  * `FileIcon` if the image fails to load or for non-image entries to preserve layout.
+ * On phones (`mobile`) the slot is always a 32px box with a larger icon, next to the
+ * row's two lines of text.
  */
-function ListRowIcon({ entry, showThumbnail }: { entry: FsEntry; showThumbnail: boolean }) {
+function ListRowIcon({
+  entry,
+  showThumbnail,
+  mobile,
+}: {
+  entry: FsEntry;
+  showThumbnail: boolean;
+  mobile: boolean;
+}) {
   const [errored, setErrored] = useState(false);
+  const icon = (
+    <FileIcon
+      kind={entry.kind}
+      ext={entry.ext}
+      mime={entry.mime}
+      className={cn(mobile && "size-5")}
+    />
+  );
 
-  if (!showThumbnail) {
-    return <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />;
+  if (!showThumbnail && !mobile) {
+    return icon;
   }
 
-  if (errored || !wantsThumbnail(entry)) {
+  if (!showThumbnail || errored || !wantsThumbnail(entry)) {
     return (
-      <div className="flex size-6 shrink-0 items-center justify-center">
-        <FileIcon kind={entry.kind} ext={entry.ext} mime={entry.mime} />
+      <div
+        className={cn("flex shrink-0 items-center justify-center", mobile ? "size-8" : "size-6")}
+      >
+        {icon}
       </div>
     );
   }
@@ -65,7 +91,7 @@ function ListRowIcon({ entry, showThumbnail }: { entry: FsEntry; showThumbnail: 
       alt=""
       loading="lazy"
       decoding="async"
-      className="size-6 shrink-0 rounded-xs object-cover"
+      className={cn("shrink-0 object-cover", mobile ? "size-8 rounded-sm" : "size-6 rounded-xs")}
       onError={() => setErrored(true)}
     />
   );
@@ -136,7 +162,7 @@ export interface FileListProps {
   onScrollConsumed?: (token: number) => void;
   /** Whether to show image thumbnails in place of generic file icons. Defaults to false. */
   showThumbnails?: boolean;
-  /** Row height preset (see `ROW_HEIGHTS`). Defaults to "comfortable". */
+  /** Row height preset (see `listRowHeight`). Defaults to "comfortable". */
   density?: ListDensity;
 }
 
@@ -158,7 +184,12 @@ function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
   return { shift: event.shiftKey, meta: event.metaKey || event.ctrlKey };
 }
 
-/** A virtualized, sortable-columns list view of a folder's entries. */
+function itemCountLabel(count: number): string {
+  return `${count} ${count === 1 ? "item" : "items"}`;
+}
+
+/** A virtualized, sortable-columns list view of a folder's entries. Below `md` the Size and
+ * Modified columns fold into a second line under each name, so names get the row's width. */
 export function FileList({
   entries,
   officeStatus,
@@ -189,7 +220,8 @@ export function FileList({
   showThumbnails = false,
   density = DEFAULT_LIST_DENSITY,
 }: FileListProps) {
-  const rowHeight = ROW_HEIGHTS[density];
+  const mobile = useIsMobile();
+  const rowHeight = listRowHeight(density, mobile);
   const { formatBytes, formatDate } = useFormatters();
   const parentRef = useRef<HTMLDivElement>(null);
   const lastConsumedTokenRef = useRef<number | null>(null);
@@ -324,9 +356,15 @@ export function FileList({
           onCheckedChange={onToggleSelectAll}
           aria-label={allSelected ? "Deselect all" : "Select all"}
         />
-        <span className="flex-1">Name</span>
-        <span className="w-20 text-right">Size</span>
-        <span className="w-28">Modified</span>
+        {mobile ? (
+          <span className="flex-1">{itemCountLabel(entries.length)}</span>
+        ) : (
+          <>
+            <span className="flex-1">Name</span>
+            <span className="w-20 text-right">Size</span>
+            <span className="w-28">Modified</span>
+          </>
+        )}
       </div>
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -359,12 +397,23 @@ export function FileList({
                 {isTreeRow && <span className="size-4 shrink-0" />}
                 <div className="flex min-w-0 flex-1 items-center gap-3 opacity-60">
                   <span className="size-4 shrink-0" />
-                  <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
-                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                  <span className="w-20 shrink-0 text-right text-xs">--</span>
-                  <span className="w-28 shrink-0 text-xs">
-                    {formatDate(new Date(entry.modifiedAt))}
-                  </span>
+                  <ListRowIcon
+                    key={entry.path}
+                    entry={entry}
+                    showThumbnail={showThumbnails}
+                    mobile={mobile}
+                  />
+                  {mobile ? (
+                    <RowText name={entry.name} detail={formatDate(new Date(entry.modifiedAt))} />
+                  ) : (
+                    <>
+                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className="w-20 shrink-0 text-right text-xs">--</span>
+                      <span className="w-28 shrink-0 text-xs">
+                        {formatDate(new Date(entry.modifiedAt))}
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             );
@@ -459,24 +508,78 @@ export function FileList({
                     onCheckedChange={() => onEntryClick(entry, { shift: false, meta: true })}
                     aria-label={`Select ${entry.name}`}
                   />
-                  <ListRowIcon key={entry.path} entry={entry} showThumbnail={showThumbnails} />
-                  <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-                  {sharedBy !== null && (
-                    <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
+                  <ListRowIcon
+                    key={entry.path}
+                    entry={entry}
+                    showThumbnail={showThumbnails}
+                    mobile={mobile}
+                  />
+                  {mobile ? (
+                    <>
+                      <RowText
+                        name={entry.name}
+                        detail={[
+                          entry.kind === "dir" ? null : formatBytes(entry.size),
+                          formatDate(new Date(entry.modifiedAt)),
+                          sharedBy,
+                        ]
+                          .filter((part) => part !== null)
+                          .join(" · ")}
+                      >
+                        <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
+                      </RowText>
+                      {entry.kind === "dir" && !isTreeRow && (
+                        <ChevronRightIcon
+                          aria-hidden="true"
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      {sharedBy !== null && (
+                        <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
+                      )}
+                      <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
+                      <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
+                        {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
+                      </span>
+                      <span className="w-28 shrink-0 text-muted-foreground text-xs">
+                        {formatDate(new Date(entry.modifiedAt))}
+                      </span>
+                    </>
                   )}
-                  <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
-                  <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
-                    {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
-                  </span>
-                  <span className="w-28 shrink-0 text-muted-foreground text-xs">
-                    {formatDate(new Date(entry.modifiedAt))}
-                  </span>
                 </div>
               </div>
             </FileContextMenu>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+/**
+ * A phone row's text: the name on its own line, at full width, with the size, date and
+ * any sharing caption on a smaller line under it, followed by `children` (the tag dots).
+ */
+function RowText({
+  name,
+  detail,
+  children,
+}: {
+  name: string;
+  detail: string;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="truncate text-[15px] leading-5">{name}</span>
+      <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground text-xs leading-4">
+        <span className="truncate">{detail}</span>
+        {children}
+      </span>
     </div>
   );
 }
