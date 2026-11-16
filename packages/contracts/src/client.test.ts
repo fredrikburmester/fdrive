@@ -1334,7 +1334,7 @@ describe("createApiClient: tags", () => {
 describe("createApiClient: encryption", () => {
   const RECIPIENT = `age1${"q".repeat(58)}`;
   const MARKER = {
-    v: 1,
+    v: 1 as const,
     id: "2f1b8f3e-8c55-4d2b-9a57-1d3b6f0c2a11",
     recipient: RECIPIENT,
     members: [{ recipient: RECIPIENT, key: "YWdl" }],
