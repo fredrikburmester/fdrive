@@ -1,36 +1,34 @@
 // @vitest-environment jsdom
 import { cleanup, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { isInstalledApp, SWIPE_DISTANCE, SWIPE_EDGE, useSidebarSwipe } from "./sidebar-swipe";
-
-let installed = true;
-
-beforeEach(() => {
-  installed = true;
-  vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: installed && query === "(display-mode: standalone)",
-  }));
-});
+import { afterEach, expect, it, vi } from "vitest";
+import { SWIPE_DISTANCE, SWIPE_EDGE, useSidebarSwipe } from "./sidebar-swipe";
 
 afterEach(() => {
   cleanup();
-  vi.unstubAllGlobals();
-  Reflect.deleteProperty(navigator, "standalone");
   document.body.replaceChildren();
 });
 
-/** Dispatches a touch event with one touch per point, as `touches`. */
+/** Dispatches a touch event with one touch per point, as `touches`, and returns it. */
 function touch(
   type: string,
   points: { x: number; y: number }[],
   target: EventTarget = document.body,
 ) {
-  const event = new Event(type, { bubbles: true });
+  const event = new Event(type, { bubbles: true, cancelable: true });
   const list = points.map(({ x, y }) => ({ clientX: x, clientY: y }));
   Object.defineProperty(event, "touches", {
     value: { length: list.length, item: (index: number) => list[index] ?? null },
   });
   target.dispatchEvent(event);
+  return event;
+}
+
+/** A tap at `x`, with a wobble shorter than a swipe's slop. */
+function tap(x: number, target: EventTarget) {
+  const start = touch("touchstart", [{ x, y: 300 }], target);
+  touch("touchmove", [{ x: x + 3, y: 303 }], target);
+  touch("touchend", [], target);
+  return start;
 }
 
 function swipe(from: { x: number; y: number }, to: { x: number; y: number }, target?: EventTarget) {
@@ -132,26 +130,65 @@ it("opens from a touch aimed at the document itself", () => {
   expect(setOpen).toHaveBeenCalledExactlyOnceWith(true);
 });
 
-it("does nothing when off, in a browser tab, or once unmounted", () => {
+it("does nothing when off, or once unmounted", () => {
   const off = mount(false, false);
+  expect(touch("touchstart", [{ x: 4, y: 300 }]).defaultPrevented).toBe(false);
   swipe({ x: 4, y: 300 }, { x: 200, y: 300 });
   expect(off.setOpen).not.toHaveBeenCalled();
 
-  installed = false;
-  const tab = mount(false);
-  swipe({ x: 4, y: 300 }, { x: 200, y: 300 });
-  expect(tab.setOpen).not.toHaveBeenCalled();
-
-  installed = true;
   const gone = mount(false);
   gone.hook.unmount();
   swipe({ x: 4, y: 300 }, { x: 200, y: 300 });
   expect(gone.setOpen).not.toHaveBeenCalled();
 });
 
-it("knows the installed app on iOS, where only navigator.standalone says so", () => {
-  installed = false;
-  expect(isInstalledApp()).toBe(false);
-  Object.defineProperty(navigator, "standalone", { value: true, configurable: true });
-  expect(isInstalledApp()).toBe(true);
+it("takes a touch on the shut sidebar's edge from the browser, so its back swipe cannot start", () => {
+  mount(false);
+  expect(touch("touchstart", [{ x: SWIPE_EDGE, y: 300 }]).defaultPrevented).toBe(true);
+  expect(touch("touchstart", [{ x: SWIPE_EDGE + 1, y: 300 }]).defaultPrevented).toBe(false);
+
+  const dialog = document.createElement("div");
+  dialog.setAttribute("role", "dialog");
+  document.body.append(dialog);
+  expect(touch("touchstart", [{ x: 4, y: 300 }], dialog).defaultPrevented).toBe(false);
+});
+
+it("leaves touches alone while the sidebar is open", () => {
+  mount(true);
+  expect(touch("touchstart", [{ x: 4, y: 300 }]).defaultPrevented).toBe(false);
+});
+
+it("still clicks what a tap on the edge lands on, and focuses a field", () => {
+  mount(false);
+  const button = document.createElement("button");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  button.append(icon);
+  const field = document.createElement("input");
+  document.body.append(button, field);
+  const clicked = vi.fn();
+  button.addEventListener("click", clicked);
+
+  expect(tap(4, icon).defaultPrevented).toBe(true);
+  expect(clicked).toHaveBeenCalledOnce();
+  expect(document.activeElement).not.toBe(field);
+
+  tap(4, field);
+  expect(document.activeElement).toBe(field);
+});
+
+it("clicks nothing for a touch on the edge that moves, is cancelled, or lands on no element", () => {
+  const { setOpen } = mount(false);
+  const button = document.createElement("button");
+  document.body.append(button);
+  const clicked = vi.fn();
+  button.addEventListener("click", clicked);
+
+  swipe({ x: 4, y: 300 }, { x: 4, y: 360 }, button);
+  touch("touchstart", [{ x: 4, y: 300 }], button);
+  touch("touchcancel", [], button);
+  swipe({ x: 4, y: 300 }, { x: 200, y: 300 }, button);
+  expect(clicked).not.toHaveBeenCalled();
+  expect(setOpen).toHaveBeenCalledExactlyOnceWith(true);
+
+  expect(tap(4, document).defaultPrevented).toBe(true);
 });
