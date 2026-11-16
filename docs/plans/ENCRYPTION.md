@@ -13,7 +13,8 @@ are the only clients this covers. Every choice is [decided](#decided).
   and creates personal encrypted folders in the web app or in Finder. Names and contents inside
   are encrypted on their device before upload; the server stores ciphertext and never holds a
   key that opens it. In the browser they browse, search by name, upload, open, download, rename,
-  copy, move, trash and restore inside the folder; in Finder they can also save edits. A
+  copy, move, trash and restore inside the folder, and move files and folders into and out of it;
+  in Finder they can also save edits. A
   forgotten encryption password is replaced with their recovery key; without it the folder is
   gone for good. Administrators reset sign-in passwords as today, which never touches encryption.
 
@@ -143,6 +144,9 @@ a query also searches the rest of their files.
   OCR, EXIF, thumbnails, embeddings or name index entries. The indexer still records size,
   mtime and the ciphertext's sha256, so storage usage, limits, folder sizes, name search, the
   change journal and the Mac's version checks keep working.
+- **Thumbnails go with their last file.** The indexer deletes a thumbnail once no indexed file
+  has its sha256; today the cache is only ever cleared whole, so a photo moved into an encrypted
+  folder would leave its thumbnail behind. Its text, embeddings and EXIF already go with its row.
 
 ### Web
 
@@ -158,8 +162,14 @@ a query also searches the rest of their files.
   downloads instead; over 2 GB the browser says to open it in Finder.
 - **Inside the folder** rename, copy, move, Trash and undo work as usual, with names encrypted
   in the worker.
-- **In and out.** A file already in fdrive cannot be moved into or out of an encrypted folder,
-  since the server cannot re-encrypt it. People upload into the folder and download out of it.
+- **In and out.** Moving files or folders into or out of an encrypted folder (Move to, drag, cut
+  and paste) is a job in the dock the browser runs, since the server cannot re-encrypt: per file
+  it streams the original through the worker, encrypting or decrypting, into a new upload in
+  pieces, so size is no limit, then deletes the original for good, not to Trash, so a moved-in
+  file leaves no plaintext copy. The original goes only after its copy is published: an
+  interrupted move never loses a file, though it can leave both. Folders are recreated first.
+  Tags, favorites and share links stay with the original and go with it, and the confirmation
+  says so. Copying in or out is the same job without the delete. There is no Undo for these.
 
 ### Mac
 
@@ -180,7 +190,7 @@ a query also searches the rest of their files.
 ### Later
 
 Proposals, not commitments: sharing encrypted folders with other users (key lookup, fingerprint
-checks, members in the marker); moving files in and out by re-encrypting in the client;
+checks, members in the marker); moving files across an encrypted folder's edge in Finder;
 streaming large files and seeking video through a service worker; content search through an
 encrypted index a client builds; end-to-end links to single files with the file key in the URL
 fragment; client-made thumbnails; long names; folder key rotation; post-quantum keys.
@@ -195,11 +205,12 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
    `pnpm test:coverage` and `macos.yml` both run.
 3. **Keys.** Table, routes and flag; Account > Encryption with the encryption password, recovery
    key and devices.
-4. **Server folders.** Marker routes, the allowlist, indexer and OCR skips, the paged listing.
+4. **Server folders.** Marker routes, the allowlist, indexer and OCR skips, the paged listing,
+   thumbnails that go with their last file.
    Integration tests prove no clear name or byte reaches the database, thumbs or logs, and
    every route outside the allowlist refuses.
-5. **Web folders.** Create, browse, search, upload, open, download, rename, copy, move, Trash;
-   e2e specs.
+5. **Web folders.** Create, browse, search, upload, open, download, rename, copy, move, Trash,
+   moving in and out; e2e specs.
 6. **Mac read path** with the pairing key, then **Mac write path**, each a
    [Mac release](../MACOS-RELEASE.md).
 
@@ -207,13 +218,14 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
 
 - A person turns encryption on, saves a recovery key, creates an encrypted folder in the
   browser, uploads files, finds one by name, opens an image, a PDF and a video, downloads,
-  renames, copies, moves, trashes and restores; then in Finder opens the same files, saves an
+  renames, copies, moves, trashes and restores, and moves a folder of photos in and back out;
+  then in Finder opens the same files, saves an
   edit, creates a file and copies one in.
 - After an administrator resets their sign-in password, their encrypted folders open with the
   unchanged encryption password; a forgotten encryption password is replaced with the recovery
   key.
-- A canary file name and a canary string inside a file appear nowhere in a database dump, the
-  thumbs volume, the API and indexer logs or the files folder, and `age -d` with the exported
+- A canary file name and a canary string inside a file, one uploaded into an encrypted folder
+  and one moved in, appear nowhere in a database dump, the thumbs volume, the API and indexer logs or the files folder, and `age -d` with the exported
   folder identity decrypts a file copied off the disk.
 - The TS and Swift implementations pass the same vectors in CI.
 
@@ -230,6 +242,7 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
   today. Using the sign-in password would have changed every password form and made
   administrator-set passwords temporary. The recovery key is the only way back: family recovery
   was rejected because it would let the owner read the folders.
-- 2026-11-16: the first version leaves out sharing, moving files across an encrypted folder's
-  edge and streaming in the browser, and the API allows a short list of operations inside
-  encrypted folders instead of refusing a long one.
+- 2026-11-16: the first version leaves out sharing and streaming in the browser, and the API
+  allows a short list of operations inside encrypted folders instead of refusing a long one.
+- 2026-11-16: the browser moves files into and out of encrypted folders by re-encrypting them
+  itself and deleting the original for good; Finder copies across the edge instead.
