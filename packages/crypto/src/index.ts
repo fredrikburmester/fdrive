@@ -1,0 +1,40 @@
+export {
+  createAccountKeys,
+  deviceKeyFor,
+  MIN_ENCRYPTION_PASSWORD_LENGTH,
+  type NewAccountKeys,
+  type PasswordOptions,
+  pairingCode,
+  passwordKeyFor,
+  unlockWithDevice,
+  unlockWithPassword,
+  unlockWithRecovery,
+} from "./account.ts";
+export {
+  DEFAULT_SCRYPT_WORK_FACTOR,
+  DecryptError,
+  decryptedSize,
+  decryptStream,
+  encryptedSize,
+  encryptStream,
+  isIdentity,
+  type KeyPair,
+  newKeyPair,
+  openWithIdentity,
+  openWithPassword,
+  recipientOf,
+  sealToRecipient,
+  sealWithPassword,
+  startsWithAgeHeader,
+} from "./age.ts";
+export { createFolder, type FolderKey, openFolder, parseMarker } from "./folders.ts";
+export {
+  checkName,
+  decryptName,
+  encryptName,
+  InvalidNameError,
+  identityScalar,
+  NameTooLongError,
+  nameKey,
+  nameKeyBytes,
+} from "./names.ts";
