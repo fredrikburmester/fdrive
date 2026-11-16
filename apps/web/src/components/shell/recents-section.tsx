@@ -1,26 +1,14 @@
 "use client";
 
 import { baseName } from "@fdrive/core";
-import { ChevronRightIcon, ClockIcon } from "lucide-react";
+import { ClockIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import {
-  SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
-  SidebarMenu,
-  SidebarMenuButton,
-  SidebarMenuItem,
-} from "@/components/ui/sidebar";
+import { SIDEBAR_NOTE, SIDEBAR_ROW, SidebarSection } from "@/components/shell/sidebar-section";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { viewHref } from "@/lib/metadata/deps";
 import { useRecents } from "@/lib/metadata/queries";
-import {
-  readSidebarSectionOpen,
-  sidebarSectionState,
-  writeSidebarSectionOpen,
-} from "@/lib/metadata/sidebar-sections";
+import { sidebarSectionState } from "@/lib/metadata/sidebar-sections";
 import { cn } from "@/lib/utils";
 
 const MAX_VISIBLE = 8;
@@ -36,17 +24,7 @@ function toRoute(href: string): Route {
  * instead of disappearing. */
 export function RecentsSection() {
   const { data: items } = useRecents();
-  const [open, setOpen] = useState(true);
   const state = sidebarSectionState(items);
-
-  useEffect(() => {
-    setOpen(readSidebarSectionOpen(window.localStorage, "recents"));
-  }, []);
-
-  function handleOpenChange(next: boolean) {
-    setOpen(next);
-    writeSidebarSectionOpen(window.localStorage, "recents", next);
-  }
 
   if (state === "loading") {
     return null;
@@ -55,42 +33,32 @@ export function RecentsSection() {
   const visible = (items ?? []).slice(0, MAX_VISIBLE);
 
   return (
-    <SidebarGroup>
-      <Collapsible open={open} onOpenChange={handleOpenChange}>
-        <CollapsibleTrigger
-          nativeButton={false}
-          render={<SidebarGroupLabel className="cursor-pointer select-none" />}
-        >
-          <ChevronRightIcon className={cn("size-3.5 transition-transform", open && "rotate-90")} />
-          Recents
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <SidebarGroupContent>
-            {state === "empty" ? (
-              <p className="px-2 py-1 text-muted-foreground text-xs">Files you open show up here</p>
-            ) : (
-              <SidebarMenu>
-                {visible.map((item) => (
-                  <SidebarMenuItem key={item.path}>
-                    <SidebarMenuButton render={<Link href={toRoute(viewHref(item.path))} />}>
-                      <ClockIcon />
-                      <span className="truncate">{baseName(item.path)}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    render={<Link href={RECENTS_ROUTE} />}
-                    className="text-muted-foreground"
-                  >
-                    <span>Show all</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            )}
-          </SidebarGroupContent>
-        </CollapsibleContent>
-      </Collapsible>
-    </SidebarGroup>
+    <SidebarSection section="recents" label="Recents">
+      {state === "empty" ? (
+        <p className={SIDEBAR_NOTE}>Files you open show up here</p>
+      ) : (
+        <SidebarMenu>
+          {visible.map((item) => (
+            <SidebarMenuItem key={item.path}>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                render={<Link href={toRoute(viewHref(item.path))} />}
+              >
+                <ClockIcon />
+                <span className="truncate">{baseName(item.path)}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<Link href={RECENTS_ROUTE} />}
+              className={cn(SIDEBAR_ROW, "text-sidebar-foreground/60")}
+            >
+              <span>Show all</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      )}
+    </SidebarSection>
   );
 }

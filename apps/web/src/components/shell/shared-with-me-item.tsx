@@ -4,6 +4,7 @@ import { UsersIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { SIDEBAR_ROW } from "@/components/shell/sidebar-section";
 import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { pathToHref } from "@/lib/files/path-url";
 import { SHARED_WITH_ME_PATH } from "@/lib/grants/paths";
@@ -22,6 +23,7 @@ export function SharedWithMeItem() {
   return (
     <SidebarMenuItem>
       <SidebarMenuButton
+        className={SIDEBAR_ROW}
         isActive={pathname === HREF || (pathname?.startsWith(`${HREF}/`) ?? false)}
         render={<Link href={HREF as Route} />}
       >

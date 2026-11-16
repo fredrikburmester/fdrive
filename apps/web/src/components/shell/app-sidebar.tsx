@@ -10,6 +10,7 @@ import {
   LogOut,
   Monitor,
   Moon,
+  PanelLeftIcon,
   Sun,
   Trash2,
   UserRound,
@@ -25,9 +26,11 @@ import { RecentsSection } from "@/components/shell/recents-section";
 import { SidebarResizeHandle } from "@/components/shell/resizable-sidebar";
 import { SavedSearchesSection } from "@/components/shell/saved-searches-section";
 import { SharedWithMeItem } from "@/components/shell/shared-with-me-item";
+import { SIDEBAR_ROW, SidebarSectionLabel } from "@/components/shell/sidebar-section";
 import { SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,14 +50,14 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
-  SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { useLogout } from "@/lib/api/auth-queries";
+import { useSidebarSwipe } from "@/lib/sidebar-swipe";
 import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
@@ -95,96 +98,104 @@ export function AppSidebar() {
   const { theme, setTheme } = useTheme();
   const logout = useLogout();
   const pathname = usePathname();
+  const { isMobile, openMobile, setOpenMobile, toggleSidebar } = useSidebar();
+  useSidebarSwipe(isMobile, openMobile, setOpenMobile);
 
   const username = me?.identity.username;
 
   return (
-    <Sidebar className="border-r border-sidebar-border backdrop-blur-xl">
-      <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          {/* The wordmark returns to the root of Files, like a site logo. */}
-          <Link
-            href={FILES_ROUTE}
-            className="rounded-sm text-base font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-          >
-            fdrive
-          </Link>
-        </div>
+    <Sidebar className="border-sidebar-border">
+      {/* As tall as the page header beside it, so the two line up. */}
+      <SidebarHeader className="h-12 flex-row items-center gap-1.5 px-3 py-0">
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Close sidebar"
+          className="rounded-sm text-sidebar-foreground/70"
+          onClick={toggleSidebar}
+        >
+          <PanelLeftIcon />
+        </Button>
+        {/* The wordmark returns to the root of Files, like a site logo. */}
+        <Link
+          href={FILES_ROUTE}
+          className="rounded-sm text-[24px] leading-none font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+        >
+          fdrive
+        </Link>
       </SidebarHeader>
-      <SidebarContent className="gap-0 [&_[data-sidebar=group]]:py-1 [&_[data-sidebar=group-label]]:h-7 [&_[data-sidebar=menu]]:gap-0">
-        <SidebarGroup>
-          <SidebarGroupLabel>Locations</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <FolderTree />
-              <SharedWithMeItem />
-            </SidebarMenu>
-          </SidebarGroupContent>
+      <SidebarContent className="gap-4 pt-1 pb-3">
+        <SidebarGroup className="py-0">
+          <SidebarSectionLabel>Locations</SidebarSectionLabel>
+          <SidebarMenu className="mt-0.5">
+            <FolderTree />
+            <SharedWithMeItem />
+          </SidebarMenu>
         </SidebarGroup>
         <FavoritesSection />
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={pathname === "/photos"}
-                  render={<Link href={"/photos" as Route} />}
-                >
-                  <Images />
-                  <span>Photos</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={pathname?.startsWith("/activity")}
-                  render={<Link href={"/activity" as Route} />}
-                >
-                  <Clock3 />
-                  <span>My activity</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
+        <SidebarGroup className="py-0">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname === "/photos"}
+                render={<Link href={"/photos" as Route} />}
+              >
+                <Images />
+                <span>Photos</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname?.startsWith("/activity")}
+                render={<Link href={"/activity" as Route} />}
+              >
+                <Clock3 />
+                <span>My activity</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarGroup>
         <TagsSection />
         <SavedSearchesSection />
         <RecentsSection />
         {/* Shares and Trash sit at the bottom of the navigation, above System. */}
-        <SidebarGroup>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={pathname === "/shares"}
-                  render={<Link href={"/shares" as Route} />}
-                >
-                  <Link2 />
-                  <span>Shares</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={isTrashRoute(pathname)}
-                  render={<Link href={TRASH_ROUTE} />}
-                >
-                  <Trash2 />
-                  <span>Trash</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
+        <SidebarGroup className="py-0">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={pathname === "/shares"}
+                render={<Link href={"/shares" as Route} />}
+              >
+                <Link2 />
+                <span>Shares</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                className={SIDEBAR_ROW}
+                isActive={isTrashRoute(pathname)}
+                render={<Link href={TRASH_ROUTE} />}
+              >
+                <Trash2 />
+                <span>Trash</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
         </SidebarGroup>
         {me?.isAdmin ? (
-          <SidebarGroup>
-            <SidebarGroupLabel>
+          <SidebarGroup className="py-0">
+            <SidebarSectionLabel>
               System
               <span className="ml-auto truncate font-normal text-sidebar-foreground/50">
                 {SYSTEM_SCOPE_CAPTION}
               </span>
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
+            </SidebarSectionLabel>
+            <div className="mt-0.5">
               <SystemNav />
-            </SidebarGroupContent>
+            </div>
           </SidebarGroup>
         ) : null}
       </SidebarContent>
