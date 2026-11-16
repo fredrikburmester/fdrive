@@ -225,8 +225,9 @@ One PR each, with the checks [AGENTS.md](../../AGENTS.md) requires.
   unchanged encryption password; a forgotten encryption password is replaced with the recovery
   key.
 - A canary file name and a canary string inside a file, one uploaded into an encrypted folder
-  and one moved in, appear nowhere in a database dump, the thumbs volume, the API and indexer logs or the files folder, and `age -d` with the exported
-  folder identity decrypts a file copied off the disk.
+  and one moved in, appear nowhere in a database dump, the thumbs volume, the API and indexer
+  logs or the files folder, and `age -d` with the exported folder identity decrypts a file
+  copied off the disk.
 - The TS and Swift implementations pass the same vectors in CI.
 
 ## Decided
