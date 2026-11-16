@@ -115,6 +115,7 @@ const VALID_ME = {
   isAdmin: false,
   storageName: "Home",
   index: true,
+  encryptedFolders: true,
 };
 
 const VALID_ENTRY = {
@@ -1327,6 +1328,93 @@ describe("createApiClient: tags", () => {
     expect(calls[0]?.url).toBe("/api/v1/fs/tags");
     expect(calls[0]?.init.method).toBe("PUT");
     expect(calls[0]?.init.body).toBe(JSON.stringify({ path: "/a.txt", tagIds: ["tag-1"] }));
+  });
+});
+
+describe("createApiClient: encryption", () => {
+  const RECIPIENT = `age1${"q".repeat(58)}`;
+  const MARKER = {
+    v: 1,
+    id: "2f1b8f3e-8c55-4d2b-9a57-1d3b6f0c2a11",
+    recipient: RECIPIENT,
+    members: [{ recipient: RECIPIENT, key: "YWdl" }],
+    mac: `${"A".repeat(43)}=`,
+  };
+  const STATUS = {
+    enabled: true,
+    recipient: RECIPIENT,
+    passwordKey: "YWdl",
+    recoveryKey: "YWdl",
+    devices: [],
+    createdAt: AT,
+  };
+
+  it("reads and changes the account's keys", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { enabled: false }),
+      jsonResponse(201, STATUS),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.encryptionStatus()).toEqual({ enabled: false });
+    const setup = {
+      signInPassword: "pw",
+      recipient: RECIPIENT,
+      passwordKey: "YWdl",
+      recoveryKey: "YWdl",
+    };
+    expect(await client.enableEncryption(setup)).toEqual(STATUS);
+    await client.changeEncryptionPassword({ signInPassword: "pw", passwordKey: "YWdl" });
+    await client.resetEncryption({ signInPassword: "pw" });
+    await client.removeEncryptionDevice("d/1");
+    expect(calls.map((call) => [call.init.method, call.url])).toEqual([
+      ["GET", "/api/v1/encryption"],
+      ["POST", "/api/v1/encryption"],
+      ["PUT", "/api/v1/encryption/password"],
+      ["POST", "/api/v1/encryption/reset"],
+      ["DELETE", "/api/v1/encryption/devices/d%2F1"],
+    ]);
+    expect(calls[1]?.init.body).toBe(JSON.stringify(setup));
+  });
+
+  it("makes, finds and lists encrypted folders", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(201, { path: "/Private", marker: MARKER }),
+      jsonResponse(200, { folder: null }),
+      jsonResponse(200, { entries: [{ path: "/Private/x", kind: "file" }], cursor: "c" }),
+      jsonResponse(200, { entries: [], cursor: null }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    expect(await client.createEncryptedFolder({ path: "/Private", marker: MARKER })).toEqual({
+      path: "/Private",
+      marker: MARKER,
+    });
+    expect(await client.encryptedFolder("/a b")).toEqual({ folder: null });
+    expect((await client.encryptedEntries("/Private")).cursor).toBe("c");
+    expect((await client.encryptedEntries("/Private", "c")).cursor).toBeNull();
+    expect(calls.map((call) => call.url)).toEqual([
+      "/api/v1/encryption/folders",
+      "/api/v1/encryption/folder?path=%2Fa+b",
+      "/api/v1/encryption/entries?path=%2FPrivate",
+      "/api/v1/encryption/entries?path=%2FPrivate&cursor=c",
+    ]);
+  });
+
+  it("gives the approving browser's device key to a pairing", async () => {
+    const { fetchStub, calls } = createStubFetch([
+      jsonResponse(200, { ok: true }),
+      jsonResponse(200, { ok: true }),
+    ]);
+    const client = createApiClient({ fetch: fetchStub });
+
+    await client.approveDesktopPairing("p", "full");
+    await client.approveDesktopPairing("p", "full", "YWdl");
+    expect(calls[0]?.init.body).toBe(JSON.stringify({ access: "full" }));
+    expect(calls[1]?.init.body).toBe(JSON.stringify({ access: "full", deviceKey: "YWdl" }));
   });
 });
 

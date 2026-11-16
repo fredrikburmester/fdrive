@@ -74,3 +74,107 @@ export const EncryptedFolderMarker = z.object({
   mac: z.string().regex(/^[A-Za-z0-9+/]{43}=$/, "not a MAC"),
 });
 export type EncryptedFolderMarker = z.infer<typeof EncryptedFolderMarker>;
+
+/** The sign-in password, asked again before encryption keys change. */
+const SignInPassword = z.string().min(1).max(1024);
+
+/** A paired Mac that holds a copy of the account key. */
+export const EncryptionDevice = z.object({
+  /** The Mac's desktop token. */
+  id: z.uuid(),
+  name: z.string(),
+  createdAt: z.iso.datetime(),
+});
+export type EncryptionDevice = z.infer<typeof EncryptionDevice>;
+
+/** `GET /encryption`: whether the signed-in person turned encryption on, and their key copies. */
+export const EncryptionStatus = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(false) }),
+  z.object({
+    enabled: z.literal(true),
+    recipient: AgeRecipient,
+    /** The account identity as an age file to the encryption password. */
+    passwordKey: AgeFileBase64,
+    /** The account identity as an age file to the recovery key. */
+    recoveryKey: AgeFileBase64,
+    devices: z.array(EncryptionDevice),
+    createdAt: z.iso.datetime(),
+  }),
+]);
+export type EncryptionStatus = z.infer<typeof EncryptionStatus>;
+
+/** `POST /encryption`: turn encryption on with keys the browser made. */
+export const EncryptionSetupRequest = z.strictObject({
+  signInPassword: SignInPassword,
+  recipient: AgeRecipient,
+  passwordKey: AgeFileBase64,
+  recoveryKey: AgeFileBase64,
+});
+export type EncryptionSetupRequest = z.infer<typeof EncryptionSetupRequest>;
+
+/** `PUT /encryption/password`: a new encryption password's copy of the same account key. */
+export const EncryptionPasswordRequest = z.strictObject({
+  signInPassword: SignInPassword,
+  passwordKey: AgeFileBase64,
+});
+export type EncryptionPasswordRequest = z.infer<typeof EncryptionPasswordRequest>;
+
+/** `POST /encryption/reset`: delete every key copy. Encrypted folders stay, unreadable. */
+export const EncryptionResetRequest = z.strictObject({ signInPassword: SignInPassword });
+export type EncryptionResetRequest = z.infer<typeof EncryptionResetRequest>;
+
+/** An encrypted folder: its path and its marker. */
+export const EncryptedFolderInfo = z.object({
+  path: z.string(),
+  marker: EncryptedFolderMarker,
+});
+export type EncryptedFolderInfo = z.infer<typeof EncryptedFolderInfo>;
+
+/** `POST /encryption/folders`: make a new encrypted folder with a marker the browser made. */
+export const EncryptedFolderCreateRequest = z.strictObject({
+  path: z.string().min(2),
+  marker: EncryptedFolderMarker,
+});
+export type EncryptedFolderCreateRequest = z.infer<typeof EncryptedFolderCreateRequest>;
+
+/** `GET /encryption/folder?path=`: the encrypted folder a path is or is inside; null when none. */
+export const EncryptedFolderResponse = z.object({ folder: EncryptedFolderInfo.nullable() });
+export type EncryptedFolderResponse = z.infer<typeof EncryptedFolderResponse>;
+
+/** `GET /encryption/entries?path=&cursor=`: every indexed entry inside an encrypted folder. */
+export const EncryptedEntriesQuery = z.object({
+  path: z.string(),
+  cursor: z.string().max(4096).optional(),
+});
+export type EncryptedEntriesQuery = z.infer<typeof EncryptedEntriesQuery>;
+
+export const EncryptedEntry = z.object({
+  path: z.string(),
+  kind: z.enum(["file", "dir"]),
+});
+export type EncryptedEntry = z.infer<typeof EncryptedEntry>;
+
+export const EncryptedEntriesResponse = z.object({
+  entries: z.array(EncryptedEntry),
+  /** Pass back as `cursor` for the next page; null on the last. */
+  cursor: z.string().nullable(),
+});
+export type EncryptedEntriesResponse = z.infer<typeof EncryptedEntriesResponse>;
+
+/**
+ * Sent with value `1` by clients that encrypt and decrypt: FDrive for Mac on every desktop
+ * request. Without it, the desktop API treats encrypted folders as folders it cannot open, as
+ * older apps expect.
+ */
+export const ENCRYPTED_FOLDERS_HEADER = "x-fdrive-encrypted-folders";
+
+/** `GET /api/v2/desktop/encryption`: this Mac's copy of the account key. */
+export const DesktopEncryptionKey = z.object({
+  recipient: AgeRecipient,
+  /** The account identity as an age file to the Mac's device recipient. */
+  deviceKey: AgeFileBase64,
+});
+export type DesktopEncryptionKey = z.infer<typeof DesktopEncryptionKey>;
+
+/** The `details.code` of a refusal because a path is inside an encrypted folder. */
+export const ENCRYPTED_FOLDER_REFUSAL = "encrypted_folder";

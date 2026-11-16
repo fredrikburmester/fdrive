@@ -56,6 +56,7 @@ describe("MeResponse", () => {
     isAdmin: false,
     storageName: "Home",
     index: false,
+    encryptedFolders: true,
   };
 
   it("parses a valid payload", () => {

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { EncryptedFolderMarker } from "@fdrive/contracts";
 import { base64 } from "@scure/base";
 import { describe, expect, it } from "vitest";
@@ -27,8 +27,22 @@ const vectors = JSON.parse(
     accountFingerprint: string;
     deviceKey: string;
   };
-  swift?: { ciphertext: string; length: number; names: { name: string; stored: string }[] };
 };
+
+/**
+ * What FdriveKit made from the same keys: vectors/v1-swift.json, written by the Swift tests with
+ * FDRIVE_WRITE_SWIFT_VECTORS=1. TS must open it, so the two implementations agree both ways.
+ */
+const swiftFile = new URL("../vectors/v1-swift.json", import.meta.url);
+const swift = existsSync(swiftFile)
+  ? (JSON.parse(readFileSync(swiftFile, "utf8")) as {
+      ciphertext: string;
+      length: number;
+      names: { name: string; stored: string }[];
+      marker: unknown;
+      deviceKey: string;
+    })
+  : undefined;
 
 function fromHex(text: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(text.match(/../g) ?? [], (pair) => Number.parseInt(pair, 16));
@@ -86,8 +100,7 @@ describe("format v1 vectors", () => {
     );
   });
 
-  it.runIf(vectors.swift !== undefined)("decrypt what the Swift implementation made", async () => {
-    const swift = vectors.swift;
+  it.runIf(swift !== undefined)("decrypt what the Swift implementation made", async () => {
     if (swift === undefined) return;
     expect(await decrypt(swift.ciphertext, vectors.age.identity)).toEqual(pattern(swift.length));
     const marker = EncryptedFolderMarker.parse(vectors.folder.marker);
@@ -95,5 +108,11 @@ describe("format v1 vectors", () => {
     for (const entry of swift.names) {
       expect(await decryptName(entry.stored, folder.nameKey, folder.id)).toBe(entry.name);
     }
+    // A folder FdriveKit made for the same account opens here, MAC and all.
+    await openFolder(EncryptedFolderMarker.parse(swift.marker), vectors.folder.accountIdentity);
+    const { device } = vectors;
+    expect(await unlockWithDevice(swift.deviceKey, device.identity, device.accountRecipient)).toBe(
+      vectors.folder.accountIdentity,
+    );
   });
 });
