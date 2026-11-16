@@ -234,6 +234,27 @@ describe("moving across an encrypted folder's edge", () => {
     expect(memory.purged).toEqual([]);
   });
 
+  it("keeps a moved folder whose removal fails, its files already moved", async () => {
+    const { folder } = await encryptedFolder();
+    const files = new Map([["/Docs/Trip/a.jpg", new Blob(["a"])]]);
+    const memory = memoryApi(files, new Set(["/Docs", "/Docs/Trip", "/Private"]));
+    const api = {
+      ...memory.api,
+      remove: async (items: { path: string; kind: string }[]) => {
+        if (items.some((item) => item.kind === "dir")) throw new Error("busy");
+        return memory.api.remove(items as Parameters<TransferApi["remove"]>[0]);
+      },
+    } as TransferApi;
+    const trip = (await api.list("/Docs")).entries.find((entry) => entry.name === "Trip");
+    const items = await planTransfer(
+      { sources: [trip as FsEntry], from: null, target: "/Private", to: folder, move: true },
+      deps(api, memory.fetchImpl),
+    );
+    await run(items);
+    expect(files.has("/Docs/Trip/a.jpg")).toBe(false);
+    expect((await api.list("/Docs")).entries.some((entry) => entry.name === "Trip")).toBe(true);
+  });
+
   it("deletes for good even when Trash does not list the item", async () => {
     const memory = memoryApi(new Map(), new Set());
     const api = { ...memory.api, trashList: async () => ({ entries: [], truncated: false }) };
