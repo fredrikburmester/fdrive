@@ -419,7 +419,14 @@ describe("the squashed history", () => {
 
     await migrate(older);
 
-    expect(withoutDesktopOriginalPath(await contents(older))).toEqual(before);
+    // Every row stays; a table a later migration adds starts empty.
+    const after = withoutDesktopOriginalPath(await contents(older));
+    expect(Object.fromEntries(Object.keys(before).map((table) => [table, after[table]]))).toEqual(
+      before,
+    );
+    for (const [table, rows] of Object.entries(after)) {
+      if (!(table in before)) expect(rows, table).toEqual([]);
+    }
     expect(await schemaOf(name)).toBe(await schemaOf("new_install"));
     expect(await history(older)).toEqual(await history(fresh));
     // Then it is a database like any other: the next start migrates nothing.
