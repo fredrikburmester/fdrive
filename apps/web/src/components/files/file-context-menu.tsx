@@ -105,7 +105,8 @@ export interface FileContextMenuProps {
    * by default. */
   hideArchive?: boolean;
   /** The entry is inside an encrypted folder: hides Share, Share with people, Office and
-   * Duplicate, which the server does not do there. An encrypted folder itself never shares. */
+   * Duplicate, which the server does not do there, and Tags and Favorites, whose lists show
+   * stored names. An encrypted folder itself never shares. */
   encrypted?: boolean;
   /** Every tag known to the account, for the "Tags" submenu. Defaults to
    * none, so a caller that has not wired up tags yet still renders. */
@@ -237,46 +238,50 @@ export function FileContextMenu({
             )}
           </>
         )}
-        <ContextMenuSeparator />
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <TagIcon />
-            Tags
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-52">
-            {tags.length === 0 ? (
-              <ContextMenuItem disabled>No tags yet</ContextMenuItem>
-            ) : (
-              tags.map((tag) => {
-                const state = tagCheckState(tag.id);
-                return (
-                  <ContextMenuCheckboxItem
-                    key={tag.id}
-                    checked={state === "checked"}
-                    onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
-                  >
-                    <span
-                      className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
-                    />
-                    <span className="flex-1 truncate">{tag.name}</span>
-                    {state === "indeterminate" && (
-                      <span className="text-[10px] text-muted-foreground">mixed</span>
-                    )}
-                  </ContextMenuCheckboxItem>
-                );
-              })
-            )}
+        {!encrypted && (
+          <>
             <ContextMenuSeparator />
-            <ContextMenuItem onClick={onOpenTagsEditor}>
-              <PencilIcon />
-              Edit tags
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <TagIcon />
+                Tags
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="w-52">
+                {tags.length === 0 ? (
+                  <ContextMenuItem disabled>No tags yet</ContextMenuItem>
+                ) : (
+                  tags.map((tag) => {
+                    const state = tagCheckState(tag.id);
+                    return (
+                      <ContextMenuCheckboxItem
+                        key={tag.id}
+                        checked={state === "checked"}
+                        onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
+                      >
+                        <span
+                          className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
+                        />
+                        <span className="flex-1 truncate">{tag.name}</span>
+                        {state === "indeterminate" && (
+                          <span className="text-[10px] text-muted-foreground">mixed</span>
+                        )}
+                      </ContextMenuCheckboxItem>
+                    );
+                  })
+                )}
+                <ContextMenuSeparator />
+                <ContextMenuItem onClick={onOpenTagsEditor}>
+                  <PencilIcon />
+                  Edit tags
+                </ContextMenuItem>
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuItem onClick={() => onToggleFavorite(!favorite)}>
+              {favorite ? <StarOffIcon /> : <StarIcon />}
+              {favorite ? "Remove from Favorites" : "Add to Favorites"}
             </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuItem onClick={() => onToggleFavorite(!favorite)}>
-          {favorite ? <StarOffIcon /> : <StarIcon />}
-          {favorite ? "Remove from Favorites" : "Add to Favorites"}
-        </ContextMenuItem>
+          </>
+        )}
         {!hideArchive && !encryptedArea && (
           <>
             <ContextMenuSeparator />
