@@ -73,7 +73,9 @@ describe("format v1 vectors", () => {
     for (const file of vectors.age.files) {
       expect(base64.decode(file.ciphertext)).toHaveLength(file.size);
       expect(encryptedSize(file.length)).toBe(file.size);
-      expect(await decrypt(file.ciphertext, vectors.age.identity)).toEqual(pattern(file.length));
+      expect(hex(await decrypt(file.ciphertext, vectors.age.identity))).toBe(
+        hex(pattern(file.length)),
+      );
     }
   });
 
@@ -103,7 +105,9 @@ describe("format v1 vectors", () => {
 
   it.runIf(swift !== undefined)("decrypt what the Swift implementation made", async () => {
     if (swift === undefined) return;
-    expect(await decrypt(swift.ciphertext, vectors.age.identity)).toEqual(pattern(swift.length));
+    expect(hex(await decrypt(swift.ciphertext, vectors.age.identity))).toBe(
+      hex(pattern(swift.length)),
+    );
     const marker = EncryptedFolderMarker.parse(vectors.folder.marker);
     const folder = await openFolder(marker, vectors.folder.accountIdentity);
     for (const entry of swift.names) {
