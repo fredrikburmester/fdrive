@@ -332,6 +332,41 @@ fn follows_the_rows_it_is_told_about() {
 }
 
 #[test]
+fn leaves_encrypted_names_out_and_keeps_the_folders_own_name() {
+    let url = common::database();
+    let root_id = ROOT_ID;
+    let sealed = |seed: char| format!("fe1-{}", seed.to_string().repeat(48));
+    let (folder, inside) = (format!("Secret/{}", sealed('b')), format!("Secret/{}", sealed('a')));
+    folders(&url, root_id, &[("Secret", 1), (folder.as_str(), 1)]);
+    file(&url, root_id, &inside, 1);
+    file(&url, root_id, "Secret/stray plan.pdf", 1);
+    file(&url, root_id, "Secret/notes.txt", 1);
+    let names = start(&url, &[root_id]);
+    assert_eq!(find(&names, root_id, "fe1"), (vec![], vec![]));
+    assert_eq!(find(&names, root_id, "secret").1, ["Secret"]);
+    // A clear name someone put inside is plaintext on disk anyway, so search finds it.
+    assert_eq!(find(&names, root_id, "stray").0, ["Secret/stray plan.pdf"]);
+
+    // Rows read again one by one or by their folder stay out too.
+    let mut c = common::connect(&url);
+    let renamed = format!("Secret/{}", sealed('c'));
+    db::move_paths(&mut c, root_id, "Secret/notes.txt", &renamed, false).unwrap();
+    names.touch(root_id, "Secret/notes.txt", false);
+    names.touch(root_id, &renamed, false);
+    let added = format!("{folder}/{}", sealed('d'));
+    file(&url, root_id, &added, 0);
+    names.touch(root_id, &added, false);
+    settle(&names);
+    assert!(find(&names, root_id, "notes").0.is_empty());
+    assert_eq!(find(&names, root_id, "fe1"), (vec![], vec![]));
+    names.touch(root_id, "Secret", true);
+    settle(&names);
+    assert_eq!(find(&names, root_id, "fe1"), (vec![], vec![]));
+    assert_eq!(find(&names, root_id, "secret").1, ["Secret"]);
+    assert_eq!(find(&names, root_id, "stray").0, ["Secret/stray plan.pdf"]);
+}
+
+#[test]
 fn rebuilds_a_root_when_more_changes_wait_than_it_reads_one_by_one() {
     let url = common::database();
     let root_id = ROOT_ID;

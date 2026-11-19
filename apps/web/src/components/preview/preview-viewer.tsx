@@ -10,6 +10,7 @@ import { MarkdownViewer } from "./markdown-viewer";
 import { OfficePreview } from "./office-preview";
 import { PdfViewer } from "./pdf-viewer";
 import { TextViewer } from "./text-viewer";
+import { Unsupported } from "./unsupported";
 import { VideoViewer } from "./video-viewer";
 
 export interface PreviewViewerProps {
@@ -22,6 +23,11 @@ export interface PreviewViewerProps {
   readonly thumbUrl?: string | undefined;
   /** The entry's folder, where the video viewer finds subtitle files named after the video. */
   readonly folderEntries?: readonly FsEntry[] | undefined;
+  /**
+   * The file is from an encrypted folder and `inlineUrl` is its decrypted bytes in memory: no
+   * transcoding, subtitles, Office or archive listing, which the server cannot do for it.
+   */
+  readonly encrypted?: boolean | undefined;
 }
 
 /** Picks the right viewer for `entry`'s preview kind. */
@@ -31,8 +37,23 @@ export function PreviewViewer({
   downloadUrl,
   thumbUrl,
   folderEntries = [],
+  encrypted = false,
 }: PreviewViewerProps) {
   const kind = previewKindFor(entry);
+  if (encrypted && (kind === "office" || kind === "none" || kind === "archive")) {
+    return (
+      <Unsupported
+        name={entry.name}
+        size={entry.size}
+        kind={kind}
+        reason="Download this file to open it."
+        downloadUrl={downloadUrl}
+      />
+    );
+  }
+  if (encrypted && kind === "video") {
+    return <VideoViewer src={inlineUrl} subtitles={[]} />;
+  }
 
   switch (kind) {
     case "image":

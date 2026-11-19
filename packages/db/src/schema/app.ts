@@ -415,6 +415,42 @@ export const trashItems = appSchema.table(
   ],
 );
 
+/**
+ * A login's end-to-end encryption keys: the account recipient, and the
+ * account identity as age files only the person can open, one to their
+ * encryption password and one to their recovery key. The server can open
+ * neither. Deleting the row is how encryption is reset.
+ */
+export const encryptionKeys = appSchema.table("encryption_keys", {
+  identityId: uuid("identity_id")
+    .primaryKey()
+    .references(() => identities.id, { onDelete: "cascade" }),
+  recipient: text("recipient").notNull(),
+  passwordKey: text("password_key").notNull(),
+  recoveryKey: text("recovery_key").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * A paired Mac's copy of the account identity, an age file to the Mac's own
+ * device recipient, kept with the Mac's desktop token and gone with it.
+ */
+export const encryptionDeviceKeys = appSchema.table(
+  "encryption_device_keys",
+  {
+    tokenId: uuid("token_id")
+      .primaryKey()
+      .references(() => apiTokens.id, { onDelete: "cascade" }),
+    identityId: uuid("identity_id")
+      .notNull()
+      .references(() => encryptionKeys.identityId, { onDelete: "cascade" }),
+    deviceKey: text("device_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("encryption_device_keys_identity").on(table.identityId)],
+);
+
 /** Lazily registered desktop items; paths never act as authorization. */
 export const desktopItems = appSchema.table(
   "desktop_items",

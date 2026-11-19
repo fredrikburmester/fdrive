@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CanonicalUuid } from "./canonical-uuid.ts";
 import { DesktopEntry, DesktopLocation, DesktopPath } from "./desktop.ts";
+import { EncryptedFolderInfo } from "./encryption.ts";
 
 /** Protocol 1 stays read-only for installed clients. */
 export const DESKTOP_WRITE_API = "/api/v2/desktop";
@@ -21,6 +22,8 @@ export const DesktopWriteLocation = DesktopLocation.extend({
   listingChecks: z.literal(true).optional(),
   /** The server answers `GET /changes`, so a refresh asks which folders changed since its last one. */
   changeFeed: z.literal(true).optional(),
+  /** The server keeps end-to-end encrypted folders and answers `GET /encryption`. */
+  encryptedFolders: z.literal(true).optional(),
 });
 export const DesktopWriteCredential = z.object({
   token: z.string(),
@@ -57,6 +60,10 @@ export const DesktopWriteEntry = DesktopEntry.extend({
   version: DesktopBaseVersion,
   capabilities: DesktopWriteCapabilities,
   trashed: z.boolean(),
+  /** A folder that is an encrypted folder. */
+  encrypted: z.literal(true).optional(),
+  /** Where a Trash item was deleted from, so a client can decrypt its name. */
+  originalPath: DesktopPath.optional(),
 });
 /** Names one complete folder listing; a later check compares it with the folder now. */
 export const DesktopListingToken = z.string().min(1).max(128);
@@ -65,6 +72,8 @@ export const DesktopWriteListing = z.object({
   nextCursor: z.string().nullable(),
   /** Only on a complete single-page listing outside Trash. */
   token: DesktopListingToken.optional(),
+  /** The encrypted folder this listing is, or is inside; only with the encrypted-folders header. */
+  encryptedFolder: EncryptedFolderInfo.optional(),
 });
 export const DesktopFolderCheckRequest = z.strictObject({
   folders: z

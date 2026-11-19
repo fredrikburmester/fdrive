@@ -1,8 +1,9 @@
 "use client";
 
 import { isWithin, joinPath } from "@fdrive/core";
+import { encryptName } from "@fdrive/crypto";
 import { FolderPlusIcon, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -21,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useEncryptedView } from "@/lib/encryption/listing";
 import { movablePaths } from "@/lib/files/move-guard";
 import { buildBreadcrumbs } from "@/lib/files/path-url";
 import { useListing, useMkdir } from "@/lib/files/queries";
@@ -89,12 +91,16 @@ function DestinationPickerContent({
   const mkdir = useMkdir();
   const busy = pending || mkdir.isPending;
   const { data, isLoading } = useListing(path);
-  const folders = (data?.entries ?? []).filter(
+  const listed = useMemo(() => data?.entries ?? [], [data]);
+  // Inside an encrypted folder the folders show their decrypted names, once the key is open.
+  const view = useEncryptedView(path, data?.encryptedFolder, listed);
+  const shown = view.kind === "open" ? view.entries : view.kind === "plain" ? listed : [];
+  const folders = shown.filter(
     (entry) => entry.kind === "dir" && !sourcePaths.some((source) => isWithin(source, entry.path)),
   );
   const canConfirm = movablePaths(sourcePaths, path).length === sourcePaths.length;
   const canCreate = !sourcePaths.some((source) => isWithin(source, path));
-  const crumbs = buildBreadcrumbs(path);
+  const crumbs = buildBreadcrumbs(path, view.kind === "open" ? view.crumbs : undefined);
   const labels = LABELS[mode];
 
   function handleOpenChange(next: boolean) {
@@ -102,9 +108,11 @@ function DestinationPickerContent({
     onOpenChange(next);
   }
 
-  function handleCreateFolder(name: string) {
-    if (busy || !canCreate) return;
-    mkdir.mutate(joinPath(path, name), {
+  async function handleCreateFolder(name: string) {
+    if (busy || !canCreate || view.kind === "locked") return;
+    const stored =
+      view.kind === "open" ? await encryptName(name, view.folder.nameKey, view.folder.id) : name;
+    mkdir.mutate(joinPath(path, stored), {
       onSuccess: (entry) => {
         setPath(entry.path);
         setNewFolderOpen(false);
@@ -153,7 +161,12 @@ function DestinationPickerContent({
         <ScrollArea className="h-64 rounded-md border border-border">
           <ul className="flex flex-col gap-0.5 p-1">
             {isLoading && <li className="px-3 py-2 text-muted-foreground text-sm">Loading…</li>}
-            {!isLoading && folders.length === 0 && (
+            {!isLoading && view.kind === "locked" && (
+              <li className="px-3 py-2 text-muted-foreground text-sm">
+                Unlock encryption in Account to choose a folder in here.
+              </li>
+            )}
+            {!isLoading && view.kind !== "locked" && folders.length === 0 && (
               <li className="px-3 py-2 text-muted-foreground text-sm">No subfolders</li>
             )}
             {folders.map((folder) => (
@@ -196,7 +209,7 @@ function DestinationPickerContent({
         <NewFolderDialog
           open={newFolderOpen}
           onOpenChange={setNewFolderOpen}
-          onCreate={handleCreateFolder}
+          onCreate={(name) => void handleCreateFolder(name)}
           pending={mkdir.isPending}
         />
       </DialogContent>

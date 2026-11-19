@@ -10,6 +10,7 @@ import {
 } from "@fdrive/local";
 import { z } from "zod";
 import type { AppConfig } from "../config.js";
+import { guardEncryptedFolders } from "../encryption/guard.js";
 import type { HomeUsage } from "../storage/usage.js";
 import type { ChangeQueue } from "./change-queue.js";
 import { createLocalUsers } from "./users.js";
@@ -55,7 +56,7 @@ export function deploymentFilesFolder(
   options: DeploymentFilesFolderOptions = {},
 ): FilesFolder {
   const { changes, guard, usage } = options;
-  return createFilesFolder({
+  const folder = createFilesFolder({
     root: config.fdriveStorageRoot,
     users: createLocalUsers({
       repo: repos.localUsers,
@@ -65,6 +66,12 @@ export function deploymentFilesFolder(
     ...(guard === undefined ? {} : { guard }),
     ...(changes === undefined ? {} : { onIndexChange: (change) => changes.record(change) }),
   });
+  // Every storage a request or job reaches keeps encrypted folders to the callers allowed in.
+  return {
+    storage: (username) => guardEncryptedFolders(folder.storage(username)),
+    admit: (username) => folder.admit(username),
+    health: () => folder.health(),
+  };
 }
 
 export interface FilesFolderLog {

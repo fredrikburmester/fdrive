@@ -24,6 +24,7 @@ import {
 } from "../activity/service.ts";
 import type { Principal } from "../auth/principal.ts";
 import { gated, ungated, type WriteGate } from "../backups/write-gate.ts";
+import { checkRestore } from "../encryption/guard.ts";
 import { ApiHttpError } from "../errors.ts";
 import type { MetadataService } from "../metadata/service.ts";
 import { followIntoTrash } from "../metadata/trash.ts";
@@ -480,6 +481,7 @@ export function createFileOperations(deps: FileOperationsDeps): FileOperations {
               identityId,
               { vacates: [leaf], creates: [destination] },
               async (follow) => {
+                await checkRestore(storage, item.originalPath, destination);
                 // A restore is a move out of Trash: what followed the item there comes back.
                 await follow.moved(identityId, leaf, destination, directory);
                 await follow.trash.left(item.id);

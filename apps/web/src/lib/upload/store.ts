@@ -149,6 +149,8 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
   const controllers = new Map<string, AbortController>();
   // Kept after a lost connection, so retrying the file resumes where it stopped.
   const parts = new Map<string, Part>();
+  // What an item with a `source` sends, made once and kept for a resume like its part.
+  const bodies = new Map<string, Blob>();
 
   return create<UploadStoreState>((set, get) => {
     function dispatch(action: UploadAction): void {
@@ -165,20 +167,27 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
     /** Sends the piece of `item` from `part.offset` to `end`, again while retries last. */
     async function sendPiece(
       item: UploadItem,
+      body: Blob,
       part: Part,
       end: number,
       signal: AbortSignal,
     ): Promise<UploadWithProgressResult> {
+      // An item with its own body shows progress against the size the person knows, not the
+      // bytes on the wire.
+      const shown = (loaded: number) =>
+        item.source === undefined || body.size === 0
+          ? loaded
+          : Math.round((loaded * item.size) / body.size);
       for (let attempt = 0; ; attempt += 1) {
         const delay = retryDelaysMs[attempt];
         try {
           const result = await uploadWithProgress(
             {
-              url: buildUploadUrl(baseUrl, item.targetPath, part, end === item.size),
-              file: item.file.slice(part.offset, end),
+              url: buildUploadUrl(baseUrl, item.targetPath, part, end === body.size),
+              file: body.slice(part.offset, end),
               headers: buildUploadHeaders(item),
               onProgress: (loaded) =>
-                dispatch({ type: "progress", id: item.id, loaded: part.offset + loaded }),
+                dispatch({ type: "progress", id: item.id, loaded: shown(part.offset + loaded) }),
               signal,
             },
             createXhr,
@@ -198,10 +207,18 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
       part: Part,
       signal: AbortSignal,
     ): Promise<UploadWithProgressResult> {
+      let body: Blob = item.file;
+      if (item.source !== undefined) {
+        body = bodies.get(item.id) ?? (await item.source());
+        bodies.set(item.id, body);
+      }
       for (;;) {
-        const end = Math.min(part.offset + chunkBytes, item.size);
-        const result = await sendPiece(item, part, end, signal);
-        if (end === item.size || result.status < 200 || result.status >= 300) return result;
+        const end = Math.min(part.offset + chunkBytes, body.size);
+        const result = await sendPiece(item, body, part, end, signal);
+        if (end === body.size || result.status < 200 || result.status >= 300) {
+          if (result.status >= 200 && result.status < 300) await item.after?.();
+          return result;
+        }
         part.offset = end;
       }
     }
@@ -219,7 +236,10 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
         .then((result) => {
           controllers.delete(item.id);
           // Done, or refused: a refusal would not pass on a retry, which starts afresh.
-          if (isFinal(result.status)) parts.delete(item.id);
+          if (isFinal(result.status)) {
+            parts.delete(item.id);
+            bodies.delete(item.id);
+          }
           if (result.status >= 200 && result.status < 300) {
             dispatch({ type: "succeed", id: item.id, completedAt: Date.now() });
             onUploaded(parentPath(item.targetPath));
@@ -249,6 +269,7 @@ export function createUploadStore(deps: UploadStoreDeps = {}): UploadStore {
         for (const controller of controllers.values()) controller.abort();
         controllers.clear();
         parts.clear();
+        bodies.clear();
         set({ state: initialUploadQueueState });
       },
 

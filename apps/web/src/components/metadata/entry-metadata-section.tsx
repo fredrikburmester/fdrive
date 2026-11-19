@@ -1,6 +1,6 @@
 "use client";
 
-import type { FsEntry } from "@fdrive/contracts";
+import { type FsEntry, hasEncryptedName } from "@fdrive/contracts";
 import { useState } from "react";
 import { Separator } from "@/components/ui/separator";
 import type { TagColor } from "@/lib/metadata/colors";
@@ -30,6 +30,8 @@ function entryFavorite(entry: FsEntry): boolean {
  * tag" popover (`TagPicker`) that also creates new tags inline, and a
  * favorite star toggle. Every mutation applies to every entry in
  * `entries`, so a multi-selection tags or favorites them all at once.
+ * Nothing inside an encrypted folder is tagged or favorited, since those
+ * lists show stored names.
  */
 export function EntryMetadataSection({ entries }: EntryMetadataSectionProps) {
   const tagsQuery = useTags();
@@ -39,7 +41,7 @@ export function EntryMetadataSection({ entries }: EntryMetadataSectionProps) {
   const { createTag } = useTagMutations();
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  if (entries.length === 0) {
+  if (entries.length === 0 || entries.some((entry) => hasEncryptedName(entry.path))) {
     return null;
   }
 

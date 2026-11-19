@@ -17,6 +17,7 @@ class ResizeObserverStub {
 const mocks = vi.hoisted(() => ({
   client: {
     aiStatus: vi.fn(),
+    encryptedFolder: vi.fn(async () => ({ folder: null })),
     chats: vi.fn(),
     createChat: vi.fn(),
     chat: vi.fn(),

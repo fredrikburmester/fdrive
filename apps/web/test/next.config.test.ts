@@ -30,19 +30,19 @@ describe("originOf", () => {
 describe("buildContentSecurityPolicy", () => {
   it("omits an office origin from frame-src when officePublicUrl is undefined", () => {
     const csp = buildContentSecurityPolicy({ officePublicUrl: undefined });
-    expect(csp).toContain("frame-src 'self';");
+    expect(csp).toContain("frame-src 'self' blob:;");
   });
 
   it("omits an office origin from frame-src when officePublicUrl is invalid", () => {
     const csp = buildContentSecurityPolicy({ officePublicUrl: "not a url" });
-    expect(csp).toContain("frame-src 'self';");
+    expect(csp).toContain("frame-src 'self' blob:;");
   });
 
   it("adds the office origin to frame-src when officePublicUrl is a valid URL", () => {
     const csp = buildContentSecurityPolicy({
       officePublicUrl: "https://office.example.com/wopi",
     });
-    expect(csp).toContain("frame-src 'self' https://office.example.com;");
+    expect(csp).toContain("frame-src 'self' blob: https://office.example.com;");
   });
 
   it("keeps 'unsafe-inline' on script-src, required by Next's own inline RSC-streaming scripts", () => {
@@ -71,11 +71,11 @@ describe("buildContentSecurityPolicy", () => {
       "frame-ancestors 'self'",
       "img-src 'self' data: blob:",
       "media-src 'self' blob:",
-      "connect-src 'self'",
+      "connect-src 'self' blob:",
       "font-src 'self' data:",
       "style-src 'self' 'unsafe-inline'",
       "script-src 'self' 'unsafe-inline'",
-      "frame-src 'self'",
+      "frame-src 'self' blob:",
       "worker-src 'self' blob:",
     ]);
   });

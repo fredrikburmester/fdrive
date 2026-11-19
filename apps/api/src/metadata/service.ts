@@ -1,4 +1,4 @@
-import type { FsEntry } from "@fdrive/contracts";
+import { type FsEntry, hasEncryptedName } from "@fdrive/contracts";
 import { isReservedPath } from "@fdrive/core";
 import type {
   AiChatRepo,
@@ -142,8 +142,17 @@ export interface MetadataService {
  * What a list shows of `paths`: none in fdrive's own folders. Metadata follows
  * an item into Trash, where nothing lists or opens it, and back out.
  */
+/**
+ * Whether a path shows in Favorites, Recents and a tag's files: not one of
+ * fdrive's own folders, and not inside an encrypted folder, whose stored
+ * names only the browser can read.
+ */
+function listed(path: string): boolean {
+  return !isReservedPath(path) && !hasEncryptedName(path);
+}
+
 function visible(paths: readonly string[]): string[] {
-  return paths.filter((path) => !isReservedPath(path));
+  return paths.filter(listed);
 }
 
 export function createMetadataService(deps: MetadataServiceDeps): MetadataService {
@@ -198,7 +207,7 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     async listFavorites(identityId) {
       const favorites = await deps.favorites.list(identityId);
       return favorites
-        .filter((favorite) => !isReservedPath(favorite.path))
+        .filter((favorite) => listed(favorite.path))
         .map((favorite) => ({
           path: favorite.path,
           kind: favorite.kind,
@@ -239,11 +248,13 @@ export function createMetadataService(deps: MetadataServiceDeps): MetadataServic
     async listRecents(identityId, limit = DEFAULT_RECENTS_LIMIT) {
       const recents = await deps.recents.list(identityId, limit);
       return recents
-        .filter((recent) => !isReservedPath(recent.path))
+        .filter((recent) => listed(recent.path))
         .map((recent) => ({ path: recent.path, openedAt: recent.openedAt }));
     },
 
     async touchRecent(identityId, path) {
+      // What is opened inside an encrypted folder is not kept.
+      if (hasEncryptedName(path)) return;
       await deps.recents.touch(identityId, path);
       await deps.recents.prune(identityId, RECENTS_KEEP);
     },

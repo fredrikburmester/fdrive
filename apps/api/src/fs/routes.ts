@@ -42,6 +42,7 @@ import { activityStream } from "../activity/streams.js";
 import type { AppHono, AppVariables, AuthedHono } from "../app.js";
 import type { PrincipalVariables } from "../auth/principal.js";
 import { DEFAULT_JSON_MAX_BYTES } from "../config.js";
+import { encryptedFoldersOf } from "../encryption/guard.js";
 import { ApiHttpError } from "../errors.js";
 import { type FileOperations, fileActor, moveMany } from "../files/operations.js";
 import type { JobRunner } from "../jobs/runner.js";
@@ -252,12 +253,24 @@ export function registerFsRoutes(
     // fdrive's own folders (the Trash, the Mac app's folder) are not the
     // user's, so the tree does not show them.
     const visible = entries.filter((entry) => !isReservedPath(entry.path));
-    const serialized = visible.map(serializeEntry);
+    const folders = encryptedFoldersOf(principal.storage);
+    const serialized = await Promise.all(
+      visible.map(async (entry) =>
+        entry.kind === "dir" && (await folders.isFolder(entry.path))
+          ? { ...serializeEntry(entry), encrypted: true as const }
+          : serializeEntry(entry),
+      ),
+    );
     const decorated =
       deps.metadata !== undefined
         ? await deps.metadata.decorate(principal.identityId, serialized)
         : serialized;
-    const body: ListResponse = ListResponse.parse({ path, entries: decorated });
+    const encryptedFolder = await folders.info(path);
+    const body: ListResponse = ListResponse.parse({
+      path,
+      entries: decorated,
+      ...(encryptedFolder === null ? {} : { encryptedFolder }),
+    });
     return c.json(body);
   });
 

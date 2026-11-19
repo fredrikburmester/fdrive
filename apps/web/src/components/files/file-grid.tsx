@@ -92,6 +92,8 @@ export interface FileGridProps {
   /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
   showChat?: boolean;
   hideArchive?: boolean;
+  /** Rows are inside an encrypted folder; see `FileContextMenu`. */
+  encrypted?: boolean;
   /** The folders others share with the active login: captions in `Shared with me`, and
    * what each context menu offers (see `FileContextMenu`). Defaults to none. */
   received?: readonly ReceivedGrant[];
@@ -186,6 +188,7 @@ export function FileGrid({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
+  encrypted = false,
   showOrganize = false,
   showChat = false,
   received = EMPTY_RECEIVED,
@@ -309,12 +312,14 @@ export function FileGrid({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
-    writeDownloadUrl(
-      event.dataTransfer,
-      paths,
-      entry,
-      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
-    );
+    // A file of an encrypted folder would arrive as ciphertext; the browser decrypts downloads itself.
+    if (!encrypted)
+      writeDownloadUrl(
+        event.dataTransfer,
+        paths,
+        entry,
+        new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+      );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);
@@ -433,6 +438,7 @@ export function FileGrid({
                         hideMoveCopy={hideMoveCopy}
                         showReveal={showReveal}
                         hideArchive={hideArchive}
+                        encrypted={encrypted}
                         showOrganize={showOrganize}
                         showChat={showChat}
                         tags={tags}

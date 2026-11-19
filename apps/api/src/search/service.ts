@@ -19,7 +19,7 @@ import {
   toPrefixTsQuery,
 } from "@fdrive/core";
 import type { ContentHit, FilenameHit, FolderHit, IndexedFile, IndexQueries } from "@fdrive/db";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import { listedVirtualPath } from "../scoping/round-trip.ts";
 import type { EmbedClient } from "./embeddings.js";
 import type { NameIndexClient, NameIndexHit, NameIndexHits } from "./name-index.js";
 import { dateFromMtimeNs, indexPrefixes, reservedExclusion } from "./scopes.js";
@@ -198,7 +198,7 @@ export function createSearchService(deps: SearchServiceDeps): SearchService {
       const exclude = reservedExclusion(input.scopes);
 
       function pathFor(path: string): string | null {
-        return roundTripVirtualPath(input.scopes, path);
+        return listedVirtualPath(input.scopes, path);
       }
 
       function virtualPathFor(file: IndexedFile): string | null {

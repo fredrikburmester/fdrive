@@ -273,6 +273,8 @@ export interface StorageProvider {
       signal?: AbortSignal;
       /** Called once every file is counted, then as each is read into the archive. */
       onProgress?: (progress: ZipProgress) => void;
+      /** A folder holding a file of this name is left out, with everything in it. */
+      skipFoldersWith?: string;
     },
   ): Promise<ReadableStream<Uint8Array>>;
 

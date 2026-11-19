@@ -83,10 +83,13 @@ pub struct ManifestRow {
 
 /// The status an unchanged row's retry is decided on (`indexer::should_retry_unchanged`): its
 /// `text_status`, but `excluded:image_dir` for an image excluded by its folder, which only OCR
-/// lifts. Other exclusions keep their reason in `error` alone.
+/// lifts, and `excluded:encrypted` for a file kept out as inside an encrypted folder, which only
+/// leaving it lifts (a reindex makes that row `pending` again). Other exclusions keep their
+/// reason in `error` alone.
 pub fn retry_status(text_status: String, error: Option<&str>) -> String {
     match error {
         Some(reason @ "excluded:image_dir") => reason.to_owned(),
+        Some(reason @ crate::encrypted::REASON) if text_status == "excluded" => reason.to_owned(),
         _ => text_status,
     }
 }
@@ -212,41 +215,62 @@ pub fn upsert_file(c: &mut Client, file: &NewFile<'_>) -> Result<i64> {
 
 /// `upsert_file`, saying what the write does to the row's stamp.
 pub fn upsert_file_stamped(c: &mut Client, file: &NewFile<'_>, stamp: StampUpdate) -> Result<i64> {
+    Ok(upsert_file_replacing(c, file, stamp)?.0)
+}
+
+/// `upsert_file_stamped`, also returning the digest the row held before when it was another
+/// one: a content key the row let go (`release_content`).
+pub fn upsert_file_replacing(c: &mut Client, file: &NewFile<'_>, stamp: StampUpdate) -> Result<(i64, Option<String>)> {
     let (keep, set) = match stamp {
         StampUpdate::Keep => (true, None),
         StampUpdate::Set(stamp) => (false, stamp),
     };
     let (inode, ctime_ns) = (set.map(|s| s.inode), set.map(|s| s.ctime_ns));
-    let id: i64 = c
-        .query_one(
-            r#"INSERT INTO "idx"."files" AS f
-                 (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, error, inode, ctime_ns)
-               VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL,
-                       $9::bigint, $10::bigint)
-               ON CONFLICT (root_id, path) DO UPDATE SET
-                 name = EXCLUDED.name, ext = EXCLUDED.ext, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns,
-                 sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, text_status = 'pending',
-                 last_seen = now(), error = NULL,
-                 inode = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.inode ELSE EXCLUDED.inode END,
-                 ctime_ns = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.ctime_ns ELSE EXCLUDED.ctime_ns END
-               RETURNING id::bigint"#,
-            &[
-                &file.root_id,
-                &file.path,
-                &file.name,
-                &file.ext,
-                &file.size,
-                &file.mtime_ns,
-                &file.sha256,
-                &file.mime,
-                &inode,
-                &ctime_ns,
-                &keep,
-            ],
-        )?
-        .get(0);
+    let row = c.query_one(
+        r#"WITH previous AS (
+             SELECT sha256 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2
+           )
+           INSERT INTO "idx"."files" AS f
+             (root_id, path, name, ext, size, mtime_ns, sha256, mime, text_status, last_seen, error, inode, ctime_ns)
+           VALUES ($1::bigint, $2, $3, $4, $5::bigint, $6::bigint, $7, $8, 'pending', now(), NULL,
+                   $9::bigint, $10::bigint)
+           ON CONFLICT (root_id, path) DO UPDATE SET
+             name = EXCLUDED.name, ext = EXCLUDED.ext, size = EXCLUDED.size, mtime_ns = EXCLUDED.mtime_ns,
+             sha256 = EXCLUDED.sha256, mime = EXCLUDED.mime, text_status = 'pending',
+             last_seen = now(), error = NULL,
+             inode = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.inode ELSE EXCLUDED.inode END,
+             ctime_ns = CASE WHEN $11 AND f.sha256 = EXCLUDED.sha256 THEN f.ctime_ns ELSE EXCLUDED.ctime_ns END
+           RETURNING id::bigint, (SELECT sha256 FROM previous)"#,
+        &[
+            &file.root_id,
+            &file.path,
+            &file.name,
+            &file.ext,
+            &file.size,
+            &file.mtime_ns,
+            &file.sha256,
+            &file.mime,
+            &inode,
+            &ctime_ns,
+            &keep,
+        ],
+    )?;
+    let id: i64 = row.get(0);
+    let previous: Option<String> = row.get(1);
     c.execute(r#"DELETE FROM "idx"."chunks" WHERE file_id = $1::bigint"#, &[&id])?;
-    Ok(id)
+    Ok((id, previous.filter(|previous| previous != file.sha256)))
+}
+
+/// Keep a file inside an encrypted folder out of everything made from its bytes: its row is
+/// `excluded:encrypted`, without text or photo details. The upsert before it dropped its chunks.
+pub fn mark_encrypted(c: &mut Client, file_id: i64) -> Result<()> {
+    c.execute(
+        r#"UPDATE "idx"."files" SET text_status = 'excluded', error = $2, text_chars = 0, indexed_at = now(),
+             taken_at = NULL, camera = NULL, width = NULL, height = NULL, latitude = NULL, longitude = NULL
+           WHERE id = $1::bigint"#,
+        &[&file_id, &crate::encrypted::REASON],
+    )?;
+    Ok(())
 }
 
 /// Give an unchanged row a stamp that shows its digest still right: a read's, a hint's, or
@@ -358,10 +382,11 @@ pub fn mark_file_error(c: &mut Client, root_id: i64, path: &str, error: &str) ->
     Ok(())
 }
 
-/// What `delete_paths` removed: file row ids and folder rows.
+/// What `delete_paths` removed: file row ids, the content keys those rows held, and folder rows.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Deleted {
     pub files: Vec<i64>,
+    pub content_keys: Vec<String>,
     pub folders: u64,
 }
 
@@ -370,21 +395,21 @@ pub struct Deleted {
 pub fn delete_paths(c: &mut Client, root_id: i64, path: &str, is_dir: bool) -> Result<Deleted> {
     let mut tx = c.transaction()?;
     let prefix = format!("{path}/");
-    let ids: Vec<i64> = tx
-        .query(
-            r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))
-               RETURNING id::bigint"#,
-            &[&root_id, &path, &is_dir, &prefix],
-        )?
-        .into_iter()
-        .map(|r| r.get(0))
-        .collect();
-    let folders = tx.execute(
+    let mut deleted = Deleted::default();
+    for row in tx.query(
+        r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))
+           RETURNING id::bigint, sha256"#,
+        &[&root_id, &path, &is_dir, &prefix],
+    )? {
+        deleted.files.push(row.get(0));
+        deleted.content_keys.extend(row.get::<_, Option<String>>(1));
+    }
+    deleted.folders = tx.execute(
         r#"DELETE FROM "idx"."folders" WHERE root_id = $1::bigint AND (path = $2 OR ($3 AND starts_with(path, $4)))"#,
         &[&root_id, &path, &is_dir, &prefix],
     )?;
     tx.commit()?;
-    Ok(Deleted { files: ids, folders })
+    Ok(deleted)
 }
 
 /// What `move_paths` moved: file rows and folder rows.
@@ -402,39 +427,55 @@ pub fn rename_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: 
 
 /// `rename_paths`, also counting the folder rows that moved.
 pub fn move_paths(c: &mut Client, root_id: i64, old: &str, new: &str, is_dir: bool) -> Result<Moved> {
+    Ok(move_paths_replacing(c, root_id, old, new, is_dir)?.0)
+}
+
+/// `move_paths`, also returning the content keys of the stale destination rows it replaced.
+pub fn move_paths_replacing(
+    c: &mut Client,
+    root_id: i64,
+    old: &str,
+    new: &str,
+    is_dir: bool,
+) -> Result<(Moved, Vec<String>)> {
+    let keys = |rows: Vec<postgres::Row>| -> Vec<String> {
+        rows.into_iter().filter_map(|r| r.get::<_, Option<String>>(0)).collect()
+    };
     let mut tx = c.transaction()?;
-    let moved = if is_dir {
+    let (moved, replaced) = if is_dir {
         let (old_prefix, new_prefix) = (format!("{old}/"), format!("{new}/"));
         let from = old_prefix.chars().count() as i32 + 1;
-        tx.execute(
+        let replaced = keys(tx.query(
             r#"DELETE FROM "idx"."files" f USING "idx"."files" s
                WHERE f.root_id = $1::bigint AND s.root_id = $1::bigint AND starts_with(s.path, $2)
-               AND f.path = $3 || substr(s.path, $4::int)"#,
+               AND f.path = $3 || substr(s.path, $4::int)
+               RETURNING f.sha256"#,
             &[&root_id, &old_prefix, &new_prefix, &from],
-        )?;
+        )?);
         let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1 || substr(path, $2::int), last_seen = now()
                WHERE root_id = $3::bigint AND starts_with(path, $4)"#,
             &[&new_prefix, &from, &root_id, &old_prefix],
         )?;
         let folders = rename_folders(&mut tx, root_id, old, new)?;
-        Moved { files, folders }
+        (Moved { files, folders }, replaced)
     } else {
-        tx.execute(
+        let replaced = keys(tx.query(
             r#"DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND path = $2 AND EXISTS
-               (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $3)"#,
+               (SELECT 1 FROM "idx"."files" WHERE root_id = $1::bigint AND path = $3)
+               RETURNING sha256"#,
             &[&root_id, &new, &old],
-        )?;
+        )?);
         let name = crate::paths::basename(new);
         let files = tx.execute(
             r#"UPDATE "idx"."files" SET path = $1, name = $2, last_seen = now()
                WHERE root_id = $3::bigint AND path = $4"#,
             &[&new, &name, &root_id, &old],
         )?;
-        Moved { files, folders: 0 }
+        (Moved { files, folders: 0 }, replaced)
     };
     tx.commit()?;
-    Ok(moved)
+    Ok((moved, replaced))
 }
 
 /// Tell `LISTEN idx_events` that the index took in a change under `root`, naming nothing
@@ -477,21 +518,41 @@ pub fn sweep_vanished_paths(
     vanished: &[String],
     started_at: DateTime<Utc>,
 ) -> Result<Vec<String>> {
+    Ok(sweep_vanished_rows(c, root_id, vanished, started_at)?.paths)
+}
+
+/// What a sweep deleted: the paths, in order, and the content keys their rows held.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub paths: Vec<String>,
+    pub content_keys: Vec<String>,
+}
+
+/// `sweep_vanished_paths`, also returning the content keys of the rows it deleted.
+pub fn sweep_vanished_rows(
+    c: &mut Client,
+    root_id: i64,
+    vanished: &[String],
+    started_at: DateTime<Utc>,
+) -> Result<Swept> {
     let mut paths = vanished.to_vec();
     paths.sort();
-    let mut deleted = Vec::new();
+    let mut swept = Swept::default();
     for batch in paths.chunks(SWEEP_BATCH) {
         let rows = c.query(
             r#"WITH gone AS (
                  DELETE FROM "idx"."files" WHERE root_id = $1::bigint AND last_seen < $2 AND path = ANY($3)
-                 RETURNING path
+                 RETURNING path, sha256
                )
-               SELECT path FROM gone ORDER BY path"#,
+               SELECT path, sha256 FROM gone ORDER BY path"#,
             &[&root_id, &started_at, &batch],
         )?;
-        deleted.extend(rows.into_iter().map(|r| r.get::<_, String>(0)));
+        for row in rows {
+            swept.paths.push(row.get(0));
+            swept.content_keys.extend(row.get::<_, Option<String>>(1));
+        }
     }
-    Ok(deleted)
+    Ok(swept)
 }
 
 pub fn read_settings(c: &mut Client) -> Result<RawSettings> {
@@ -510,6 +571,51 @@ pub fn upsert_thumbnail(c: &mut Client, key: &str, size: u32, path: &str, width:
         &[&key, &i64::from(size), &path, &i64::from(width), &i64::from(height)],
     )?;
     Ok(())
+}
+
+/// What `release_content` let go: the keys no row holds any more, and the storage paths of the
+/// thumbnail rows it deleted for them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Released {
+    pub keys: Vec<String>,
+    pub thumbnails: Vec<String>,
+}
+
+/// Delete the `app.thumbnails` and `app.image_embeddings` rows of every key in `keys` that no
+/// `idx.files` row holds, checked as each batch is deleted, so a key a row gained meanwhile is
+/// kept. A row inside an encrypted folder holds none. Call it once the change that let a key go
+/// has committed: two transactions that each delete one of two copies would otherwise each still
+/// see the other's.
+pub fn release_content(c: &mut Client, keys: &[String]) -> Result<Released> {
+    let mut keys: Vec<&str> = keys.iter().map(String::as_str).filter(|k| !k.is_empty()).collect();
+    keys.sort_unstable();
+    keys.dedup();
+    let mut released = Released::default();
+    for batch in keys.chunks(SWEEP_BATCH) {
+        let rows = c.query(
+            r#"WITH unheld AS (
+                 SELECT u.k FROM unnest($1::text[]) AS u(k)
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM "idx"."files" f WHERE f.sha256 = u.k AND f.error IS DISTINCT FROM $2
+                 )
+               ), embeddings AS (
+                 DELETE FROM "app"."image_embeddings" e USING unheld WHERE e.content_key = unheld.k
+               ), thumbnails AS (
+                 DELETE FROM "app"."thumbnails" t USING unheld WHERE t.content_key = unheld.k
+                 RETURNING t.storage_path
+               )
+               SELECT k, NULL::text FROM unheld
+               UNION ALL SELECT NULL::text, storage_path FROM thumbnails"#,
+            &[&batch, &crate::encrypted::REASON],
+        )?;
+        for row in rows {
+            released.keys.extend(row.get::<_, Option<String>>(0));
+            released.thumbnails.extend(row.get::<_, Option<String>>(1));
+        }
+    }
+    released.keys.sort();
+    released.thumbnails.sort();
+    Ok(released)
 }
 
 pub fn count(c: &mut Client, table: &str) -> Result<i64> {

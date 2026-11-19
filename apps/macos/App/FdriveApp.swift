@@ -254,6 +254,13 @@ private struct LocationCard: View {
                         Button("Remove", role: .destructive) { Task { await model.disconnect(location) } }.buttonStyle(.glass)
                     }.font(.body).padding(.top, 2).disabled(model.pairing || model.installationNotice != nil)
                 }
+                if let note = model.encryption[location.id] {
+                    Text(note.text).font(.body).foregroundStyle(note.locked ? Color.orange : Color.secondary).textSelection(.enabled)
+                    if note.locked, model.attention[location.id] == nil {
+                        Button("Reconnect", action: reconnect).buttonStyle(.glass).font(.body).padding(.top, 2)
+                            .disabled(model.pairing || model.installationNotice != nil)
+                    }
+                }
                 if status.hasPrefix("Connected"), location.location.readOnly, let reason = location.location.writeUnavailableReason {
                     Text(reason).font(.body).foregroundStyle(.secondary).textSelection(.enabled)
                 }
@@ -365,16 +372,16 @@ private struct TrashRecoveryView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Restore from Trash").font(.title2.weight(.semibold))
-            Text("Items return to the top level of \(location.title). Existing files are preserved.")
+            Text("Items return to the top level of \(location.title), and items from an encrypted folder to the folder they came from. Existing files are preserved.")
                 .foregroundStyle(.secondary)
             if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
             if busy { ProgressView().controlSize(.small) }
             List(items) { item in
                 HStack {
                     Image(systemName: item.entry.kind == "dir" ? "folder" : "doc")
-                    Text(item.entry.name).lineLimit(2)
+                    Text(item.displayName).lineLimit(2)
                     Spacer()
-                    Button("Restore") { Task { await restore(item) } }.buttonStyle(.glass).disabled(busy)
+                    Button("Restore") { Task { await restore(item) } }.buttonStyle(.glass).disabled(busy || item.stray == true)
                 }.padding(.vertical, 4)
             }.overlay {
                 if items.isEmpty && !busy && error == nil { Text("Trash is empty").foregroundStyle(.secondary) }
@@ -394,17 +401,28 @@ private struct TrashRecoveryView: View {
         do {
             let store = try NativeEnvironment.store(), catalog = try store.catalog(location)
             let listing = try await catalog.beginListing(RemoteEntry.trashPath)
-            let entries = try await store.client(location).list(RemoteEntry.trashPath)
-            try await catalog.reconcile(entries, folder: RemoteEntry.trashPath, listing: listing)
-            items = try await catalog.children("trash").sorted { $0.entry.name.localizedStandardCompare($1.entry.name) == .orderedAscending }
+            let snapshot = try await store.client(location).folderSnapshot(RemoteEntry.trashPath)
+            try await catalog.reconcile(snapshot, folder: RemoteEntry.trashPath, listing: listing)
+            items = try await catalog.children("trash").sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
         } catch { self.error = error.localizedDescription }
     }
     private func restore(_ item: CatalogItem) async {
         busy = true; error = nil
         defer { busy = false }
         do {
-            _ = try await NativeEnvironment.store().writer(location).perform(
-                route: "moves", localId: item.id, templateKey: item.id, parentId: "root", name: item.entry.name,
+            let writer = try NativeEnvironment.store().writer(location)
+            // The server can put an item from an encrypted folder back only where it came from.
+            var parentId = "root"
+            if item.encryptedIn != nil {
+                guard let original = item.entry.originalPath,
+                      let parent = try? await writer.catalog.itemAt(parentPath(original)) else {
+                    throw DriveError.encryptedFolder("Open the folder this item came from in Finder, then restore it again.")
+                }
+                parentId = parent.id
+            }
+            // Under the name Finder shows, the server's own Trash name is sent back.
+            _ = try await writer.perform(
+                route: "moves", localId: item.id, templateKey: item.id, parentId: parentId, name: item.displayName,
                 base: WriteVersion(content: item.contentVersion, metadata: item.metadataVersion),
                 contents: nil, progress: Progress(totalUnitCount: -1))
             let domain = NSFileProviderDomain(identifier: .init(location.id), displayName: location.title)
@@ -438,6 +456,10 @@ final class AppModel: ObservableObject {
     /// Locations that need the person, with what their card says: the server refused the
     /// credential, or a removal could not finish. The card offers Reconnect and Remove.
     @Published var attention: [String: String] = [:]
+    /// Per location on a server with encrypted folders: whether they open here, and the account key's fingerprint.
+    @Published var encryption: [String: EncryptionNote] = [:]
+    /// When each location last asked the server for this Mac's copy of the account key.
+    private var encryptionAsked: [String: Date] = [:]
     /// Refused with a plain 401: automatic refreshes stop asking until the person reconnects or
     /// asks for a refresh. Never removed automatically.
     private var signedOut = Set<String>()
@@ -587,33 +609,61 @@ final class AppModel: ObservableObject {
             var pending: (APIClient, Pairing)?
             do {
                 guard let url = URL(string: address) else { throw DriveError.invalidServer }
+                let store = try NativeEnvironment.store()
                 var client = try APIClient(server: url, protocolVersion: 2)
                 let request: Pairing
-                do { request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac") }
-                catch DriveError.missing {
+                var device: AgeIdentity?
+                do {
+                    // A fresh device identity per attempt: the server refuses a second pending
+                    // pairing with the same recipient. The browser that approves encrypts the
+                    // account key to it, so encrypted folders open here.
+                    let identity = AgeIdentity.generate()
+                    let paired = try await client.pair(deviceName: Host.current().localizedName ?? "Mac",
+                                                       deviceRecipient: identity.recipient.string)
+                    request = paired.pairing
+                    if paired.sentRecipient { device = identity }
+                } catch DriveError.missing {
                     client = try APIClient(server: url)
                     request = try await client.pair(deviceName: Host.current().localizedName ?? "Mac")
                 }
                 pending = (client, request)
+                let code = try Self.connectionCode(request, device: device)
+                // The identity waits in the Keychain, never in the pending record, until it is installed.
+                if let device { try store.setPairingIdentity(device, pairing: request.id) }
                 // Persist before the first poll: a crash after redemption can be resumed.
-                try NativeEnvironment.store().savePendingPairing(PendingPairing(server: client.server, pairing: request))
-                pairCode = request.code
+                try store.savePendingPairing(PendingPairing(server: client.server, pairing: request))
+                pairCode = code
                 var approvalURL = URLComponents(url: client.server.appendingPathComponent("desktop/connect"), resolvingAgainstBaseURL: false)!
                 approvalURL.queryItems = [.init(name: "request", value: request.id)]
                 guard NSWorkspace.shared.open(approvalURL.url!) else { throw DriveError.server("Could not open the browser.") }
-                if try await redeem(client: client, request: request) { pending = nil; await refresh(); return }
+                if try await redeem(client: client, request: request, device: device) { pending = nil; await refresh(); return }
                 throw DriveError.server("The connection request expired. Connect again.")
             } catch is CancellationError {} catch { self.report(error) }
             if let (client, request) = pending {
                 try? NativeEnvironment.store().clearPendingPairing()
+                try? NativeEnvironment.store().removePairingIdentity(request.id)
                 await Task.detached { try? await client.cancel(request) }.value
             }
         }
         await pairingTask?.value
     }
     func cancelPairing() { pairingTask?.cancel() }
+    /// The code to compare in the browser. With a device key it is this Mac's own, from its
+    /// recipient and the pairing's nonce, and the server's must be the same: one that differs
+    /// means the browser would encrypt the account key to some other recipient.
+    private static func connectionCode(_ request: Pairing, device: AgeIdentity?) throws -> String {
+        guard let device else { return request.code }
+        guard let nonce = request.nonce else {
+            throw DriveError.server("The server did not send the value this Mac's connection code needs. FDrive did not connect.")
+        }
+        let code = AccountKeys.pairingCode(device.recipient.string, nonce: nonce)
+        guard code == request.code else {
+            throw DriveError.server("The server's connection code does not match this Mac's key, so FDrive did not connect.")
+        }
+        return code
+    }
     /// Poll until approved, install every credential, then confirm. Returns false on expiry.
-    private func redeem(client: APIClient, request: Pairing) async throws -> Bool {
+    private func redeem(client: APIClient, request: Pairing, device: AgeIdentity?) async throws -> Bool {
         for _ in 0..<150 {
             try Task.checkCancellation()
             let result = try await client.poll(request)
@@ -624,7 +674,7 @@ final class AppModel: ObservableObject {
                 // fails. Revoke only the failed credential, never the entire bundle.
                 pairCode = nil
                 for credential in credentials {
-                    do { try await install(credential, server: client.server) }
+                    do { try await install(credential, server: client.server, device: device) }
                     catch {
                         self.report(error)
                         if let issued = try? APIClient(server: client.server, token: credential.token, protocolVersion: credential.location.protocolVersion) {
@@ -634,9 +684,13 @@ final class AppModel: ObservableObject {
                 }
                 // Confirmation after the Keychain write; an unconfirmed bundle is revoked
                 // by the server at expiry, and launch retries this while the record exists.
-                do { try await client.confirm(request); try NativeEnvironment.store().clearPendingPairing() }
-                catch DriveError.missing { try? NativeEnvironment.store().clearPendingPairing() }
-                catch { self.error = "Connected, but the server could not confirm it yet. The app retries at next launch." }
+                do {
+                    try await client.confirm(request); try NativeEnvironment.store().clearPendingPairing()
+                    try? NativeEnvironment.store().removePairingIdentity(request.id)
+                } catch DriveError.missing {
+                    try? NativeEnvironment.store().clearPendingPairing()
+                    try? NativeEnvironment.store().removePairingIdentity(request.id)
+                } catch { self.error = "Connected, but the server could not confirm it yet. The app retries at next launch." }
                 return true
             }
             try await Task.sleep(for: .seconds(2))
@@ -646,21 +700,23 @@ final class AppModel: ObservableObject {
     /// A crash between redemption and Keychain storage leaves a pending record; finish it.
     private func resumePairing() async {
         guard !pairing, let store = try? NativeEnvironment.store(), let pending = try? store.pendingPairing() else { return }
-        if pending.isExpired() { try? store.clearPendingPairing(); return }
+        let id = pending.pairing.id
+        if pending.isExpired() { try? store.clearPendingPairing(); try? store.removePairingIdentity(id); return }
         pairing = true
         defer { pairing = false; pairCode = nil }
         do {
             let client = try APIClient(server: pending.server, protocolVersion: 2)
-            pairCode = pending.pairing.code
-            if try await redeem(client: client, request: pending.pairing) { await refresh() }
-            else { try store.clearPendingPairing() }
-        } catch DriveError.missing { try? store.clearPendingPairing() }
+            let device = try store.pairingIdentity(id)
+            pairCode = try Self.connectionCode(pending.pairing, device: device)
+            if try await redeem(client: client, request: pending.pairing, device: device) { await refresh() }
+            else { try store.clearPendingPairing(); try? store.removePairingIdentity(id) }
+        } catch DriveError.missing { try? store.clearPendingPairing(); try? store.removePairingIdentity(id) }
         catch { self.report(error) }
     }
     func openExtensionSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
     }
-    private func install(_ credential: Credential, server: URL) async throws {
+    private func install(_ credential: Credential, server: URL, device: AgeIdentity?) async throws {
         let store = try NativeEnvironment.store()
         guard (credential.location.protocolVersion == 1 && credential.location.readOnly) || credential.location.protocolVersion == 2 else { throw DriveError.unsupported }
         let existing = locations.first { $0.server == server && $0.location.identityId == credential.location.identityId && $0.location.accountId == credential.location.accountId }
@@ -696,6 +752,66 @@ final class AppModel: ObservableObject {
         status[saved.id] = "Connected"
         attention.removeValue(forKey: saved.id); signedOut.remove(saved.id)
         failures[saved.id] = nil; automaticAfter[saved.id] = nil
+        // The server's copy of the account key for this credential is encrypted to this identity.
+        // Without it the location still works, with encrypted folders locked; the card says so.
+        if let device {
+            try? store.setDeviceIdentity(device, location: saved.id)
+            if let client = try? store.client(saved) { await unlockEncryption(saved, store: store, client: client, ask: true, replacing: true) }
+        }
+    }
+    /// What the card says about encrypted folders: open, with the account key's fingerprint, or locked and why.
+    struct EncryptionNote: Equatable { let text: String; let locked: Bool }
+    static func unlockedNote(_ account: AgeIdentity) -> EncryptionNote {
+        EncryptionNote(text: "Encrypted folders open on this Mac. Account key \(AccountKeys.fingerprint(account.recipient.string)): "
+            + "compare it with Account › Encryption in the browser. Files you open from them are stored decrypted "
+            + "on this Mac, protected by FileVault, and Spotlight may index them.", locked: false)
+    }
+    /// The note after a reconnect brought a different account key than the one this Mac held.
+    static func changedNote(_ account: AgeIdentity) -> EncryptionNote {
+        EncryptionNote(text: "This location's account key changed when it reconnected. Its fingerprint is now "
+            + "\(AccountKeys.fingerprint(account.recipient.string)): make sure Account › Encryption in the browser shows the same.",
+            locked: false)
+    }
+    static let noDeviceKey = "Encrypted folders are locked: this Mac was connected without a key of its own. Choose Reconnect."
+    static let encryptionWasOff = "Encrypted folders are locked: encryption was off in fdrive when this Mac was connected. "
+        + "Turn it on under Account › Encryption in the browser, then choose Reconnect."
+    static let foreignDeviceKey = "Encrypted folders are locked: the key the server sent does not open with this Mac's own. Choose Reconnect."
+    /// Brings this Mac's copy of the account key into the Keychain, where the extension opens
+    /// encrypted folders with it. `ask` lets this ask the server; `replacing` asks even when a
+    /// key is stored, as after a reconnect. A server without the key keeps the one stored.
+    private func unlockEncryption(_ saved: SavedLocation, store: ConnectionStore, client: APIClient,
+                                  ask: Bool, replacing: Bool = false) async {
+        let id = saved.id
+        guard saved.location.encryptedFolders == true else { encryption.removeValue(forKey: id); return }
+        let stored = try? store.accountIdentity(id)
+        if let stored, !replacing { encryption[id] = Self.unlockedNote(stored); return }
+        guard let device = try? store.deviceIdentity(id) else {
+            encryption[id] = stored.map(Self.unlockedNote) ?? EncryptionNote(text: Self.noDeviceKey, locked: true); return
+        }
+        guard ask else {
+            if encryption[id] == nil { encryption[id] = EncryptionNote(text: EncryptionLock.noKey, locked: true) }
+            return
+        }
+        encryptionAsked[id] = Date()
+        do {
+            guard let key = try await client.encryptionKey() else {
+                encryption[id] = stored.map(Self.unlockedNote) ?? EncryptionNote(text: Self.encryptionWasOff, locked: true); return
+            }
+            let account = try AccountKeys.unlock(deviceKey: key.deviceKey, device: device, recipient: key.recipient)
+            // Only a connection the person just approved replaces a stored key, and a different one is called out.
+            let changed = stored.map { $0.recipient.string != account.recipient.string } ?? false
+            try store.setAccountIdentity(account, location: id)
+            encryption[id] = changed ? Self.changedNote(account) : Self.unlockedNote(account)
+            // Finder may have given up on an encrypted folder while it was locked.
+            let domain = NSFileProviderDomain(identifier: .init(id), displayName: saved.title)
+            if let manager = NSFileProviderManager(for: domain) { try? await manager.signalEnumerator(for: .workingSet) }
+        } catch is DecryptError {
+            encryption[id] = stored.map(Self.unlockedNote) ?? EncryptionNote(text: Self.foreignDeviceKey, locked: true)
+        } catch {
+            // Offline or refused: ask again on the next refresh.
+            encryptionAsked[id] = nil
+            if encryption[id] == nil { encryption[id] = stored.map(Self.unlockedNote) ?? EncryptionNote(text: EncryptionLock.noKey, locked: true) }
+        }
     }
     func reveal(_ location: SavedLocation) async {
         do {
@@ -714,7 +830,8 @@ final class AppModel: ObservableObject {
             try FileManager.default.createDirectory(at: catalog.recoveryDirectory, withIntermediateDirectories: true)
             // Human-readable names and errors, never credentials. Payloads remain
             // untouched so opening Recovery cannot discard a pending save.
-            let details = pending.map { "\($0.id): \($0.request.name)\n\($0.error ?? "Waiting to upload")\n" }.joined(separator: "\n")
+            // A write into an encrypted folder is listed by its clear name; its pending copy is encrypted.
+            let details = pending.map { "\($0.id): \($0.clearName ?? $0.request.name)\n\($0.error ?? "Waiting to upload")\n" }.joined(separator: "\n")
             try details.write(to: catalog.recoveryDirectory.appendingPathComponent("Pending saves.txt"), atomically: true, encoding: .utf8)
             NSWorkspace.shared.open(catalog.recoveryDirectory)
         } catch { self.report(error) }
@@ -784,6 +901,9 @@ final class AppModel: ObservableObject {
                         list[index].location = current; list[index].goneSince = nil
                     }
                 }
+                // A missing account key is asked for on Refresh and otherwise every ten minutes.
+                let askDue = visible || encryptionAsked[saved.id].map { Date().timeIntervalSince($0) >= 600 } ?? true
+                await unlockEncryption(updated, store: store, client: client, ask: askDue)
                 // Also upgrade domains registered by older read-only app builds.
                 if let domain = try await NSFileProviderManager.domains().first(where: { $0.identifier.rawValue == saved.id }),
                    domain.supportsSyncingTrash != (current.capabilities?.trash == true) {
@@ -915,6 +1035,7 @@ final class AppModel: ObservableObject {
         status.removeValue(forKey: id); attention.removeValue(forKey: id); health.removeValue(forKey: id)
         warnings.removeValue(forKey: id); automaticAfter.removeValue(forKey: id); failures.removeValue(forKey: id)
         unansweredSignals.removeValue(forKey: id); signedOut.remove(id)
+        encryption.removeValue(forKey: id); encryptionAsked.removeValue(forKey: id)
         var parts = reason.map { [$0] } ?? []
         if let preserved = removed.preserved {
             parts.append("Files changed on this Mac that were not uploaded are in \(preserved.path).")

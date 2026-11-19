@@ -297,6 +297,21 @@ describe("personal activity HTTP boundary", () => {
     ).toBe("success");
   });
 
+  it("leaves what happened inside an encrypted folder out of the feed", async () => {
+    const h = await fixture();
+    const stored = `/Vault/fe1-${"a".repeat(47)}`;
+    const clear = { ...h.event, id: randomUUID(), after: { path: "/Vault", kind: "dir" as const } };
+    const moved = { ...h.event, id: randomUUID(), after: { path: "/b.txt", targetPath: stored } };
+    const viaSubject = { ...h.event, id: randomUUID(), after: null };
+    h.repo.list.mockResolvedValueOnce([h.event, clear, moved, viaSubject]);
+    h.repo.subjects.mockResolvedValueOnce([{ ...h.subject, eventId: viaSubject.id, path: stored }]);
+    h.reads.provisional.mockResolvedValueOnce([h.window, { ...h.window, path: stored }]);
+
+    const body = await (await h.request()).json();
+    expect(body.items.map((item) => item.id)).toEqual([h.event.id, clear.id]);
+    expect(body.provisionalReads).toHaveLength(1);
+  });
+
   it("returns immutable event details and pages full subject membership without foreign IDs", async () => {
     const h = await fixture();
     expect((await h.request("/events/invalid")).status).toBe(400);

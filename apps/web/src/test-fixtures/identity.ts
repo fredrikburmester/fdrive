@@ -15,6 +15,7 @@ export function makeMe(overrides: Partial<MeResponse> = {}): MeResponse {
     isAdmin: false,
     storageName: "Main",
     index: true,
+    encryptedFolders: true,
     ...overrides,
   };
 }

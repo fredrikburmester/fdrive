@@ -888,6 +888,53 @@ def test_run_pass_second_run_finds_nothing_left_to_do(
     assert calls == []
 
 
+SEALED = "fe1-" + "a" * 48
+
+
+def test_pdfs_inside_an_encrypted_folder_are_never_read_or_counted(
+    db_conn: psycopg.Connection, files_root: runner.RootTarget, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(files_root.abs_path)
+    (root / "alice" / "Secret").mkdir(parents=True)
+    (root / "alice" / "Secret" / ".fdrive-encrypted").write_text("{}")
+    # Put there from outside fdrive under clear names, or below a folder with an encrypted name.
+    inside = ("alice/Secret/stray.pdf", "alice/Secret/inner/deeper.pdf", f"alice/{SEALED}/scan.pdf")
+    for rel in inside:
+        _write_pdf(root / rel, "OK")
+    _write_pdf(root / "alice" / "scan.pdf", "OK")
+    calls = _ocrmypdf_calls(monkeypatch)
+    probed: list[str] = []
+    real_probe = runner.has_text_layer
+    monkeypatch.setattr(runner, "has_text_layer", lambda path: probed.append(path) or real_probe(path))
+
+    totals = _pass(db_conn, files_root, tmp_path)
+    assert (totals.seen, totals.ocred, totals.skipped, totals.failed) == (1, 1, 0, 0)
+    assert calls == probed == [str(root / "alice" / "scan.pdf")]
+    for rel in inside:
+        assert (root / rel).read_bytes() == b"OK\n"
+    # Nothing is recorded for them: they are passed over again, never read, and the same
+    # content outside an encrypted folder is still OCR'd.
+    assert db_conn.execute('SELECT path FROM "idx"."ocr_log"').fetchall() == [("alice/scan.pdf",)]
+    again = _pass(db_conn, files_root, tmp_path)
+    assert (again.seen, again.failed) == (0, 0)
+    assert len(calls) == 1
+
+
+def test_in_encrypted_folder_remembers_each_folder_for_the_pass(tmp_path: Path) -> None:
+    root = str(tmp_path)
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    markers: dict[str, bool] = {}
+    assert runner.in_encrypted_folder(root, "a/b/x.pdf", markers) is False
+    assert markers == {"a": False, "a/b": False}
+    (tmp_path / "a" / ".fdrive-encrypted").write_text("{}")
+    assert runner.in_encrypted_folder(root, "a/b/x.pdf", markers) is False
+    assert runner.in_encrypted_folder(root, "a/b/x.pdf", {}) is True
+    assert runner.in_encrypted_folder(root, f"{SEALED}/x.pdf", {}) is True
+    # The root itself is never an encrypted folder.
+    (tmp_path / ".fdrive-encrypted").write_text("{}")
+    assert runner.in_encrypted_folder(root, "x.pdf", {}) is False
+
+
 def test_run_pass_stops_when_pdf_ocr_is_switched_off(
     db_conn: psycopg.Connection, files_root: runner.RootTarget, tmp_path: Path
 ) -> None:

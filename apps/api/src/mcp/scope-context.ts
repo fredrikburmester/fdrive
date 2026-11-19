@@ -1,7 +1,7 @@
 import type { Scope } from "@fdrive/core";
 import { isReservedPath, toFsPath } from "@fdrive/core";
 import type { IndexExclusion, ScopePrefix } from "@fdrive/db";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import { listedVirtualPath } from "../scoping/round-trip.ts";
 import { indexPrefixes, reservedExclusion } from "../search/scopes.ts";
 
 /**
@@ -46,7 +46,7 @@ export function resolveScopeContext(scopes: readonly Scope[]): ScopeContext | nu
  * that maps is the caller's to see, with no storage read.
  */
 export function virtualPathFor(ctx: ScopeContext, fsPath: string): string | null {
-  const virtualPath = roundTripVirtualPath(ctx.scopes, fsPath);
+  const virtualPath = listedVirtualPath(ctx.scopes, fsPath);
   if (virtualPath === null) {
     return null;
   }
