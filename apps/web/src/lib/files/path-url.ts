@@ -67,14 +67,18 @@ export function pathFromFilesPathname(pathname: string | null): string | null {
  * Builds the breadcrumb trail for `path`: "Home" for the root, followed by
  * one entry per segment, each linking to `pathToHref` of its own path.
  */
-export function buildBreadcrumbs(path: string): BreadcrumbEntry[] {
+export function buildBreadcrumbs(
+  path: string,
+  names?: ReadonlyMap<string, string>,
+): BreadcrumbEntry[] {
   const segments = splitSegments(path);
   const crumbs: BreadcrumbEntry[] = [{ name: "Home", path: "/", href: pathToHref("/") }];
 
   let current = "";
   for (const segment of segments) {
     current = `${current}/${segment}`;
-    crumbs.push({ name: segment, path: current, href: pathToHref(current) });
+    // An encrypted folder's folders show their decrypted names; the link keeps the stored one.
+    crumbs.push({ name: names?.get(current) ?? segment, path: current, href: pathToHref(current) });
   }
 
   return crumbs;

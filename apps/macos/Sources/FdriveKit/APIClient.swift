@@ -61,15 +61,22 @@ public struct APIClient: Sendable {
         request.httpBody = body
         request.setValue("fdrive", forHTTPHeaderField: "X-Requested-With")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // This app encrypts and decrypts: without the header the server keeps encrypted folders shut.
+        request.setValue("1", forHTTPHeaderField: Self.encryptedFoldersHeader)
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         // A request that sets this wins over the session's `timeoutIntervalForRequest`.
         if let timeout { request.timeoutInterval = timeout }
         return request
     }
+    public static let encryptedFoldersHeader = "x-fdrive-encrypted-folders"
     private func check(_ response: URLResponse, data: Data? = nil, writing: Bool = false) throws {
         guard let response = response as? HTTPURLResponse else { throw DriveError.unavailable }
         let error = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["error"] as? [String: Any]
         let message = error?["message"] as? String
+        // Never retried: the server refuses this inside an encrypted folder whatever happens next.
+        if response.statusCode >= 400, (error?["details"] as? [String: Any])?["code"] as? String == "encrypted_folder" {
+            throw DriveError.encryptedFolder(message ?? "fdrive refused this change inside an encrypted folder.")
+        }
         if writing, let details = error?["details"] as? [String: Any], let code = details["code"] as? String {
             switch code {
             case "version_conflict": throw DriveError.writeConflict(message ?? "This item changed remotely. Your pending copy is preserved.")
@@ -109,6 +116,21 @@ public struct APIClient: Sendable {
     public func pair(deviceName: String) async throws -> Pairing {
         try await send("pairings", body: JSONEncoder().encode(["deviceName": deviceName]))
     }
+    /// Pairs with this Mac's device recipient, so the code is a digest of it and the approving
+    /// browser can give this Mac the account key. A server older than encrypted folders refuses
+    /// the field (400); then this pairs without it and says so.
+    public func pair(deviceName: String, deviceRecipient: String) async throws -> (pairing: Pairing, sentRecipient: Bool) {
+        let body = try JSONEncoder().encode(["deviceName": deviceName, "deviceRecipient": deviceRecipient])
+        let (data, response) = try await session.data(for: request("pairings", body: body), delegate: TransferDelegate())
+        if (response as? HTTPURLResponse)?.statusCode == 400 { return (try await pair(deviceName: deviceName), false) }
+        try check(response, data: data)
+        return (try JSONDecoder().decode(Pairing.self, from: data), true)
+    }
+    /// This Mac's copy of the account key; nil when the person had no encryption at pairing.
+    public func encryptionKey() async throws -> DesktopEncryptionKey? {
+        guard protocolVersion == 2 else { return nil }
+        do { return try await send("encryption") } catch DriveError.missing { return nil }
+    }
     public func poll(_ pairing: Pairing) async throws -> PairResult {
         try await send("pairings/\(pairing.id)/poll", body: JSONEncoder().encode(["secret": pairing.secret]))
     }
@@ -126,13 +148,19 @@ public struct APIClient: Sendable {
         guard (result.protocolVersion == 1 && result.readOnly) || (result.protocolVersion == 2 && result.capabilities != nil) else { throw DriveError.server("Update fdrive for Mac to connect to this server.") }
         return result
     }
-    public func list(_ rawPath: String) async throws -> [RemoteEntry] { try await snapshot(rawPath).entries }
+    public func list(_ rawPath: String) async throws -> [RemoteEntry] { try await folderSnapshot(rawPath).entries }
     /// A whole folder and, when it came back in one page, the token a later check compares.
     public func snapshot(_ rawPath: String) async throws -> (entries: [RemoteEntry], token: String?) {
+        let snapshot = try await folderSnapshot(rawPath)
+        return (snapshot.entries, snapshot.token)
+    }
+    /// A whole folder, its token, and the encrypted folder it is or is inside.
+    public func folderSnapshot(_ rawPath: String) async throws -> FolderSnapshot {
         let path = try canonicalPath(rawPath)
         var result: [RemoteEntry] = []
         var cursor: String?
         var token: String?
+        var encryptedFolder: EncryptedFolderInfo?
         var seen = Set<String>()
         repeat {
             try Task.checkCancellation()
@@ -140,6 +168,9 @@ public struct APIClient: Sendable {
             if let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
             let page: Listing = try await send("entries", query: query)
             if cursor == nil && page.nextCursor == nil { token = page.token }
+            // Every page of one listing describes the same encrypted folder.
+            if cursor == nil { encryptedFolder = page.encryptedFolder }
+            else if page.encryptedFolder != encryptedFolder { throw DriveError.server("Invalid folder listing.") }
             for entry in page.entries {
                 guard try canonicalPath(entry.path) == entry.path, parentPath(entry.path) == path,
                       entry.hasValidListingName,
@@ -152,7 +183,7 @@ public struct APIClient: Sendable {
             }
             cursor = page.nextCursor
         } while cursor != nil
-        return (result, token)
+        return FolderSnapshot(entries: result, token: token, encryptedFolder: encryptedFolder)
     }
     /// Which of these folders changed since their token was issued. The server may answer
     /// only a leading part of a large batch; the caller sends the rest again.

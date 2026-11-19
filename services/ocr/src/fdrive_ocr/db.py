@@ -45,20 +45,27 @@ class IndexedPdf:
     sha256: str
 
 
+#: The `idx.files.error` the indexer gives a file inside an encrypted folder
+#: (`encrypted::REASON` in services/indexer).
+ENCRYPTED_REASON = "excluded:encrypted"
+
+
 def pdf_candidates(conn: psycopg.Connection, root_id: int, reserved: Sequence[str]) -> list[IndexedPdf]:
     """The PDFs a pass considers for this root, by path: every PDF the index
-    holds outside the folders named in `reserved` (any segment, any case) whose
-    content this service has not decided on yet, wherever it decided on it."""
+    holds outside the folders named in `reserved` (any segment, any case) and
+    outside encrypted folders as the indexer found them, whose content this
+    service has not decided on yet, wherever it decided on it."""
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT f.path, f.size, f.mtime_ns, f.sha256 FROM "idx"."files" f
             WHERE f.root_id = %s AND f.ext = '.pdf' AND f.sha256 IS NOT NULL
               AND NOT (string_to_array(lower(f.path), '/') && %s::text[])
+              AND f.error IS DISTINCT FROM %s
               AND NOT EXISTS (SELECT 1 FROM "idx"."ocr_log" l WHERE l.sha256 = f.sha256)
             ORDER BY f.path
             """,
-            (root_id, list(reserved)),
+            (root_id, list(reserved), ENCRYPTED_REASON),
         )
         return [IndexedPdf(str(r[0]), int(r[1]), int(r[2]), str(r[3])) for r in cur.fetchall()]
 

@@ -72,14 +72,16 @@ export interface ContentSecurityPolicyOptions {
  */
 export function buildContentSecurityPolicy(options: ContentSecurityPolicyOptions): string {
   const officeOrigin = originOf(options.officePublicUrl);
-  const frameSrc = ["'self'", ...(officeOrigin === null ? [] : [officeOrigin])].join(" ");
+  // `blob:` frames and fetches the decrypted copy of an encrypted folder's file: a PDF in the
+  // viewer's frame, text read back by the text viewers. Nothing leaves the page.
+  const frameSrc = ["'self'", "blob:", ...(officeOrigin === null ? [] : [officeOrigin])].join(" ");
 
   const directives: readonly [string, string][] = [
     ["default-src", "'self'"],
     ["frame-ancestors", "'self'"],
     ["img-src", "'self' data: blob:"],
     ["media-src", "'self' blob:"],
-    ["connect-src", "'self'"],
+    ["connect-src", "'self' blob:"],
     ["font-src", "'self' data:"],
     ["style-src", "'self' 'unsafe-inline'"],
     [

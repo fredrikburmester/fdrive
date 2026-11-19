@@ -1,7 +1,7 @@
 import type { ImageSearchHit, ImageSearchResponse } from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, type Scope } from "@fdrive/core";
 import type { IndexQueries } from "@fdrive/db";
-import { roundTripVirtualPath } from "../scoping/round-trip.ts";
+import { listedVirtualPath } from "../scoping/round-trip.ts";
 import type { SidecarResult } from "../system/sidecar-client.js";
 import type { ImageEmbedClient, ImageEmbedHealthInfo } from "./image-embed-client.js";
 import { indexPrefixes, reservedExclusion } from "./scopes.js";
@@ -141,7 +141,7 @@ export function createImageSearchService(deps: ImageSearchServiceDeps): ImageSea
       const fanoutCut = rows.length >= IMAGE_SEARCH_FANOUT_LIMIT;
 
       const visible = rows.flatMap((row) => {
-        const path = roundTripVirtualPath(input.scopes, row.path);
+        const path = listedVirtualPath(input.scopes, row.path);
         return path === null ? [] : [{ ...row, path }];
       });
       const hits = selectImageHits(visible, input.limit).map((row): ImageSearchHit => {

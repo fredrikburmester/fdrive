@@ -33,7 +33,7 @@ export interface AuthService {
 }
 
 /** What `/auth/me` reports about the whole installation, the same for every login. */
-export type Installation = Pick<MeResponse, "storageName" | "index">;
+export type Installation = Pick<MeResponse, "storageName" | "index" | "encryptedFolders">;
 
 export interface CreateAuthServiceDeps {
   readonly repos: Repos;

@@ -2,6 +2,7 @@ import {
   ActivityFileResponse,
   CanonicalUuid,
   ClientActivityRequest,
+  hasEncryptedName,
   PersonalActivityEvent,
   PersonalActivityFilters,
   type PersonalActivityResponse,
@@ -57,6 +58,19 @@ export function serializeActivity(
     subjects: subjects.slice(0, 20),
     subjectsTruncated: subjects.length > 20,
   });
+}
+
+/**
+ * Whether an event names anything inside an encrypted folder. My activity
+ * leaves those out: their stored names are only readable in a browser that
+ * holds the folder's key.
+ */
+export function insideEncryptedFolder(event: PersonalActivityEvent): boolean {
+  const paths: (string | null | undefined)[] = [event.before, event.after, event.detail].flatMap(
+    (facts) => (facts ? [facts.path, facts.targetPath, facts.trashLeaf] : []),
+  );
+  paths.push(...event.subjects.map((subject) => subject.path));
+  return paths.some((path) => typeof path === "string" && hasEncryptedName(path));
 }
 
 /**
@@ -192,12 +206,14 @@ export function registerPersonalActivityRoutes(
     // or a batch view would show them a second time, out of order.
     const reads = cursor || scope.batchId ? [] : await deps.reads.provisional(principal.accountId);
     const body: PersonalActivityResponse = {
-      items: rows.map((row) =>
-        serializeActivity(
-          row,
-          subjects.filter((subject) => subject.eventId === row.id),
-        ),
-      ),
+      items: rows
+        .map((row) =>
+          serializeActivity(
+            row,
+            subjects.filter((subject) => subject.eventId === row.id),
+          ),
+        )
+        .filter((event) => !insideEncryptedFolder(event)),
       provisionalReads: reads
         .filter(
           (row) =>
@@ -209,7 +225,8 @@ export function registerPersonalActivityRoutes(
             (!to || row.lastAt <= new Date(to)) &&
             (!filters.outcome || filters.outcome === serializeReadWindow(row).outcome),
         )
-        .map(serializeReadWindow),
+        .map(serializeReadWindow)
+        .filter((event) => !insideEncryptedFolder(event)),
       nextCursor:
         rows.length === filters.limit && last
           ? cursors.encode(

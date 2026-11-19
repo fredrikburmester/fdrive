@@ -1,3 +1,4 @@
+import { hasEncryptedName } from "@fdrive/contracts";
 import { isWithin, normalizePath, type Scope, toFsPath, toVirtualPath } from "@fdrive/core";
 import { SHARED_WITH_ME } from "@fdrive/local";
 
@@ -31,6 +32,16 @@ function inOwnShelf(scopes: readonly Scope[], virtualPath: string): boolean {
  * me/Photos`, and a file that lives there must never be reachable through
  * that login.
  */
+/**
+ * `roundTripVirtualPath` for a path a person or a tool is shown: never one
+ * inside an encrypted folder, whose names are encrypted and whose contents
+ * nothing here can read. The change journal keeps using the plain round trip.
+ */
+export function listedVirtualPath(scopes: readonly Scope[], fsPath: string): string | null {
+  const virtualPath = roundTripVirtualPath(scopes, fsPath);
+  return virtualPath === null || hasEncryptedName(virtualPath) ? null : virtualPath;
+}
+
 export function roundTripVirtualPath(scopes: readonly Scope[], fsPath: string): string | null {
   const virtualPath = toVirtualPath(scopes, fsPath);
   if (virtualPath === null || inOwnShelf(scopes, virtualPath)) {

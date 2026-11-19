@@ -18,6 +18,16 @@ import {
 import { type IdentitySummary, type LoginRequest, MeResponse } from "./auth.ts";
 import { DESKTOP_API, DesktopPairInfo } from "./desktop.ts";
 import type { DesktopAccessMode } from "./desktop-writes.ts";
+import {
+  EncryptedEntriesResponse,
+  type EncryptedFolderCreateRequest,
+  EncryptedFolderInfo,
+  EncryptedFolderResponse,
+  type EncryptionPasswordRequest,
+  type EncryptionResetRequest,
+  type EncryptionSetupRequest,
+  EncryptionStatus,
+} from "./encryption.ts";
 import { ApiError, type ApiErrorKind } from "./error.ts";
 import { type FeaturesUpdateRequest, SystemFeaturesResponse } from "./features.ts";
 import {
@@ -85,6 +95,7 @@ import {
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  encryptionDeviceRoute,
   grantRoute,
   jobCancelRoute,
   jobRoute,
@@ -220,7 +231,19 @@ export interface ApiClientImageSearchOptions {
 export interface ApiClient {
   desktopPairing(id: string): Promise<z.infer<typeof DesktopPairInfo>>;
   /** Connects the Mac to the signed-in login, read-only or with Finder writes. */
-  approveDesktopPairing(id: string, access: DesktopAccessMode): Promise<OkResponse>;
+  approveDesktopPairing(
+    id: string,
+    access: DesktopAccessMode,
+    deviceKey?: string,
+  ): Promise<OkResponse>;
+  encryptionStatus(): Promise<EncryptionStatus>;
+  enableEncryption(req: EncryptionSetupRequest): Promise<EncryptionStatus>;
+  changeEncryptionPassword(req: EncryptionPasswordRequest): Promise<OkResponse>;
+  resetEncryption(req: EncryptionResetRequest): Promise<OkResponse>;
+  removeEncryptionDevice(id: string): Promise<OkResponse>;
+  createEncryptedFolder(req: EncryptedFolderCreateRequest): Promise<EncryptedFolderInfo>;
+  encryptedFolder(path: string): Promise<EncryptedFolderResponse>;
+  encryptedEntries(path: string): Promise<EncryptedEntriesResponse>;
   health(): Promise<HealthResponse>;
   systemFeatures(): Promise<SystemFeaturesResponse>;
   systemUpdateFeatures(input: FeaturesUpdateRequest): Promise<SystemFeaturesResponse>;
@@ -583,10 +606,34 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     desktopPairing(id) {
       return get(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}`, DesktopPairInfo);
     },
-    approveDesktopPairing(id, access) {
+    approveDesktopPairing(id, access, deviceKey) {
       return post(`${DESKTOP_API}/pairings/${encodeURIComponent(id)}/approve`, OkResponse, {
-        jsonBody: { access },
+        jsonBody: deviceKey === undefined ? { access } : { access, deviceKey },
       });
+    },
+    encryptionStatus() {
+      return get(ROUTES.encryption.base, EncryptionStatus);
+    },
+    enableEncryption(req) {
+      return post(ROUTES.encryption.base, EncryptionStatus, { jsonBody: req });
+    },
+    changeEncryptionPassword(req) {
+      return put(ROUTES.encryption.password, OkResponse, { jsonBody: req });
+    },
+    resetEncryption(req) {
+      return post(ROUTES.encryption.reset, OkResponse, { jsonBody: req });
+    },
+    removeEncryptionDevice(id) {
+      return del(encryptionDeviceRoute(id), OkResponse);
+    },
+    createEncryptedFolder(req) {
+      return post(ROUTES.encryption.folders, EncryptedFolderInfo, { jsonBody: req });
+    },
+    encryptedFolder(path) {
+      return get(ROUTES.encryption.folder, EncryptedFolderResponse, { query: { path } });
+    },
+    encryptedEntries(path) {
+      return get(ROUTES.encryption.entries, EncryptedEntriesResponse, { query: { path } });
     },
     listShares() {
       return get(ROUTES.shares, SharesResponse);

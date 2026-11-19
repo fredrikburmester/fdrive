@@ -179,6 +179,29 @@ apply it.
 For more, see `docker compose logs --tail=100 api`, **System** in fdrive and the
 [advanced reference](REFERENCE.md).
 
+## Encryption at rest
+
+fdrive keeps plain files, so a stolen disk or a copied volume can be read. To prevent that,
+put fdrive's data on an encrypted disk on the host: LUKS on Linux, ZFS native encryption, an
+encrypted Unraid array, or FileVault on a Mac. fdrive does not encrypt the files folder itself.
+
+Everything below can hold your files or something derived from them, so keep all of it on the
+encrypted disk:
+
+| Where | What it holds |
+| --- | --- |
+| `FDRIVE_FILES_DIR` (default `./data/files`) | Every user's files, Trash, and the Mac app's staged saves |
+| `./data/pgdata` | The database: file names, extracted text, OCR text, embeddings and photo details |
+| `fdrive-thumbs` volume | Thumbnails of images, videos and documents |
+| `./data/ocr` | Originals kept when OCR rewrote a PDF |
+| `office_onlyoffice_data` volume | Office's cache of open documents |
+| `fdrive-indexer-logs` volume | Paths and names of indexed files |
+| `fdrive-backups` volume | Encrypted backup archives, safe on their own |
+
+The disk's key or passphrase must not be stored on that disk, or unlocking it is automatic for
+whoever takes it. Keep `.env` and the backup recovery key elsewhere too. For folders even the
+server's administrators cannot open, use encrypted folders ([encryption](../docs/ENCRYPTION.md)).
+
 ## Installation backups
 
 The stack includes a backup worker with encrypted storage. In **System → Backups**, set the

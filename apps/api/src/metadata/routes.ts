@@ -4,6 +4,7 @@ import {
   FavoriteRequest,
   type FavoritesResponse,
   type FolderViewResponse,
+  hasEncryptedName,
   type OkResponse,
   type RecentsResponse,
   RecentTouchRequest,
@@ -300,7 +301,10 @@ export function registerMetadataRoutes(
       ? await deps.reads.recents(principal.accountId, principal.identityId)
       : await metadata.listRecents(principal.identityId);
     const body: RecentsResponse = {
-      items: items.map((item) => ({ path: item.path, openedAt: item.openedAt.toISOString() })),
+      // History keeps opens inside an encrypted folder; Recents shows names it can read.
+      items: items
+        .filter((item) => !hasEncryptedName(item.path))
+        .map((item) => ({ path: item.path, openedAt: item.openedAt.toISOString() })),
     };
     return c.json(body);
   });

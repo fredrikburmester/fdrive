@@ -41,7 +41,10 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. An installation-wide flag on `/auth/me` says whether the
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. End-to-end
+  [encrypted folders](ENCRYPTION.md) hold only ciphertext under encrypted names: every storage is
+  wrapped by a guard that refuses their contents to any route not on its allowed list, so share
+  links, Office, AI, MCP, ZIP and the indexer's features never reach them. An installation-wide flag on `/auth/me` says whether the
   UI offers index-backed features: `index` (the files folder is indexed). Trash is always on.
 
 ## Accounts and storage

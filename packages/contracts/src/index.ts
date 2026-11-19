@@ -71,6 +71,7 @@ export type {
 export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client.ts";
 export * from "./desktop.ts";
 export * from "./desktop-writes.ts";
+export * from "./encryption.ts";
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
 export {
   FsEvent,
@@ -188,6 +189,7 @@ export {
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  encryptionDeviceRoute,
   grantRoute,
   jobCancelRoute,
   jobRoute,

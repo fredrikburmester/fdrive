@@ -48,26 +48,42 @@ final class FileProviderExtension: NSObject, NSFileProviderReplicatedExtension, 
         let expectedContentVersion = requestedVersion?.contentVersion
         let progress = Progress(totalUnitCount: -1)
         let task = Task {
-            var temporary: URL?
+            var temporary: URL?, cleared: URL?
             do {
                 let (repository, client) = try connection()
                 let item = try await repository.item(NativeEnvironment.id(itemIdentifier))
                 guard item.entry.kind == "file", item.entry.readable else { throw DriveError.unsupported }
+                // A Trash item whose encrypted folder is unknown here has nothing to decrypt it with.
+                if item.stray == true, item.encryptedIn == nil { throw DriveError.locked(EncryptionLock.unseen) }
+                var key: FolderKey?
+                if let folderId = item.encryptedIn { key = try await repository.folderKey(folderId) }
                 guard let manager = NSFileProviderManager(for: domain) else { throw DriveError.unavailable }
                 let directory = try manager.temporaryDirectoryURL()
-                try requireFreeSpace(item.entry.size, at: directory)
-                let (url, digest, size) = try await client.download(item.entry.path, to: directory, progress: progress)
+                // An encrypted file is kept once as downloaded and once decrypted.
+                try requireFreeSpace(key == nil ? item.entry.size : 2 * item.entry.size, at: directory)
+                var (url, digest, size) = try await client.download(item.entry.path, to: directory, progress: progress)
                 temporary = url
                 try Task.checkCancellation()
+                // Hash and version checks are on what the server holds: the ciphertext.
                 if let expectedContentVersion, expectedContentVersion != Data(digest.utf8) {
                     throw NSFileProviderError(.versionNoLongerAvailable)
                 }
-                let record = try await repository.downloaded(item.id, hash: digest, size: size, expectedVersion: item.contentVersion)
+                var plainDigest: String?
+                if let key {
+                    let clear = directory.appendingPathComponent(UUID().uuidString)
+                    cleared = clear
+                    plainDigest = try Age.decryptFile(url, to: clear, identity: key.identity).sha256
+                    try? FileManager.default.removeItem(at: url)
+                    url = clear; temporary = clear; cleared = nil
+                }
+                let record = try await repository.downloaded(item.id, hash: digest, size: size, expectedVersion: item.contentVersion,
+                                                             plainDigest: plainDigest)
                 try? await repository.recordCallback()
                 handler.value(url, ProviderItem(record), nil)
                 temporary = nil // Ownership passes to File Provider only after success.
             } catch {
                 if let temporary { try? FileManager.default.removeItem(at: temporary) }
+                if let cleared { try? FileManager.default.removeItem(at: cleared) }
                 if let (repository, _) = try? connection() { try? await repository.recordCallback(error: error.localizedDescription) }
                 handler.value(nil, nil, NativeEnvironment.error(error))
             }

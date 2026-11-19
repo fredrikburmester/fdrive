@@ -79,8 +79,14 @@ enum NativeEnvironment {
         case .missing: return NSFileProviderError(.noSuchItem) as NSError
         case .expiredSnapshot: return NSFileProviderError(.syncAnchorExpired) as NSError
         case .changedContent: return NSFileProviderError(.versionNoLongerAvailable) as NSError
-        case .writeConflict, .nameCollision, .writeUncertain, .permission, .quota:
+        // A change the server refuses inside an encrypted folder, or one Finder cannot make
+        // there, never succeeds on a retry.
+        case .writeConflict, .nameCollision, .writeUncertain, .permission, .quota, .encryptedFolder, .nameTooLong:
             return NSError(domain: NSFileProviderErrorDomain, code: NSFileProviderError.cannotSynchronize.rawValue,
+                           userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
+        // An encrypted folder this Mac cannot open, with the reason.
+        case .locked:
+            return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
                            userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         case .unsupported: return NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError)
         case .forbidden:

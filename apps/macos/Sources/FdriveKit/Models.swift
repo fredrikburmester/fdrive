@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum DriveError: Error, LocalizedError, Sendable, Equatable {
@@ -9,6 +10,13 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
     case writeConflict(String), writeUncertain, permission, quota, forbidden, diskFull
     case nameCollision(String)
     case unlicensed
+    /// Refused because of an encrypted folder: by the server (`encrypted_folder`), or here for a
+    /// change Finder cannot make there.
+    case encryptedFolder(String)
+    /// This Mac cannot open the encrypted folder, with the reason.
+    case locked(String)
+    /// A name over `EncryptedNames.maxBytes` inside an encrypted folder.
+    case nameTooLong
     public var errorDescription: String? {
         switch self {
         case .invalidServer: "Enter an HTTPS fdrive address. HTTP is supported only on loopback for development."
@@ -20,7 +28,8 @@ public enum DriveError: Error, LocalizedError, Sendable, Equatable {
         case .changedContent: "The file changed during download. Open it again to get the current version."
         case .unsupported: "This location supports reading regular files and folders only."
         case .cancelled: "The operation was cancelled."
-        case .writeConflict(let message), .nameCollision(let message): message
+        case .writeConflict(let message), .nameCollision(let message), .encryptedFolder(let message), .locked(let message): message
+        case .nameTooLong: "Names in an encrypted folder are limited to 128 bytes. Choose a shorter name."
         case .writeUncertain: "The server could not confirm this save. Your pending copy is preserved in Recovery."
         case .permission: "Write access is unavailable. Your pending copy is preserved in Recovery."
         case .quota: "Storage is full or this file exceeds the upload limit. Your pending copy is preserved."
@@ -45,6 +54,10 @@ public struct RemoteEntry: Codable, Sendable, Equatable {
     public var version: WriteVersion?
     public var capabilities: WriteCapabilities?
     public var trashed: Bool?
+    /// A folder that is an encrypted folder.
+    public var encrypted: Bool?
+    /// Where a Trash item was deleted from, so its name can be decrypted.
+    public var originalPath: String?
     public init(path: String, name: String, kind: String, size: Int64 = 0,
                 modifiedAt: String = "1970-01-01T00:00:00.000Z", readable: Bool = true) {
         self.path = path; self.name = name; self.kind = kind; self.size = size
@@ -83,6 +96,8 @@ public struct Location: Codable, Sendable, Equatable {
     public var listingChecks: Bool? = nil
     /// The server answers which folders changed since an anchor, so a refresh asks once.
     public var changeFeed: Bool? = nil
+    /// The server keeps end-to-end encrypted folders and answers `GET /encryption`.
+    public var encryptedFolders: Bool? = nil
 }
 public struct Credential: Codable, Sendable {
     public let token: String
@@ -95,8 +110,10 @@ public struct Pairing: Codable, Sendable, Equatable {
     public let secret: String
     public let code: String
     public let expiresAt: String
-    public init(id: String, secret: String, code: String, expiresAt: String) {
-        self.id = id; self.secret = secret; self.code = code; self.expiresAt = expiresAt
+    /// With a device recipient: the random value the code covers along with it.
+    public var nonce: String? = nil
+    public init(id: String, secret: String, code: String, expiresAt: String, nonce: String? = nil) {
+        self.id = id; self.secret = secret; self.code = code; self.expiresAt = expiresAt; self.nonce = nonce
     }
 }
 public struct PairResult: Codable, Sendable {
@@ -166,6 +183,18 @@ public struct Listing: Codable, Sendable {
     public let entries: [RemoteEntry]; public let nextCursor: String?
     /// Present only on a complete single-page listing.
     public var token: String? = nil
+    /// The encrypted folder this listing is, or is inside.
+    public var encryptedFolder: EncryptedFolderInfo? = nil
+}
+/// One folder's complete listing: its entries, the token a later check compares, and the
+/// encrypted folder it is or is inside.
+public struct FolderSnapshot: Sendable {
+    public var entries: [RemoteEntry]
+    public var token: String?
+    public var encryptedFolder: EncryptedFolderInfo?
+    public init(entries: [RemoteEntry], token: String? = nil, encryptedFolder: EncryptedFolderInfo? = nil) {
+        self.entries = entries; self.token = token; self.encryptedFolder = encryptedFolder
+    }
 }
 public struct FolderCheck: Codable, Sendable, Equatable { public let path: String; public let token: String }
 public enum FolderState: String, Codable, Sendable { case unchanged, changed, missing, forbidden }
@@ -228,6 +257,32 @@ public struct CatalogItem: Codable, Sendable, Equatable, Identifiable {
     public var metadataVersion: String
     public var materialized: Bool
     public var localModificationDate: Date? = nil
+    /// The name Finder shows when it is not `entry.name`: inside an encrypted folder, the
+    /// decrypted name (numbered when another entry decrypts to the same one) or a placeholder.
+    public var clearName: String? = nil
+    /// The encrypted folder (its marker's id) whose key encrypts this item's name and contents.
+    /// Trash items from one keep it, so a restore stays inside that folder.
+    public var encryptedIn: String? = nil
+    /// This folder is the encrypted folder with this id.
+    public var encryptedFolderId: String? = nil
+    /// Inside an encrypted folder, a name that does not decrypt: shown with a placeholder, read-only.
+    public var stray: Bool? = nil
+    /// SHA-256 of the decrypted contents downloaded or uploaded here, while `contentVersion`
+    /// holds the ciphertext's.
+    public var plainDigest: String? = nil
+    /// The name Finder shows.
+    public var displayName: String { clearName ?? entry.name }
+    /// Finder's metadata version: the server's, plus a tag of the shown name when it is not the
+    /// server's, so Finder renames the item when only the decrypted name changed.
+    static func finderVersion(_ server: String, name: String?) -> String {
+        guard let name else { return server }
+        let tag = SHA256.hash(data: Data(name.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+        return server + "\u{1F}" + tag
+    }
+    /// The server's metadata version inside one Finder sends back.
+    public static func serverVersion(_ finder: String) -> String {
+        finder.firstIndex(of: "\u{1F}").map { String(finder[..<$0]) } ?? finder
+    }
 }
 public struct WriteCapabilities: Codable, Sendable, Equatable {
     public var create: Bool, update: Bool, move: Bool, trash: Bool, restore: Bool
@@ -287,6 +342,12 @@ public struct PendingWrite: Codable, Sendable, Identifiable {
     public var conflictAttempts: Int? = nil
     /// Server operations replaced by a conflict copy; cancelled after the durable commit.
     public var abandonedOperations: [String]? = nil
+    /// The encrypted folder the item is in once this write lands; its name is encrypted.
+    public var encryptedIn: String? = nil
+    /// The clear name the request's encrypted name stands for.
+    public var clearName: String? = nil
+    /// SHA-256 of the plaintext an encrypted upload carries.
+    public var plainDigest: String? = nil
     public var result: CatalogItem?
     public var error: String?
 }

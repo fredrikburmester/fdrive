@@ -409,6 +409,17 @@ describe("recents", () => {
     expect(body.items.map((item) => item.path)).toEqual(["/hello.txt"]);
   });
 
+  it("leaves opens inside an encrypted folder out of the list", async () => {
+    const { app, activity } = await buildHarness(true);
+    const at = new Date(CLOCK_ISO);
+    await activity.reads.record({ path: `/Vault/fe1-${"a".repeat(47)}`, at } as ActivityReadInput);
+    await activity.reads.record({ path: "/Vault", at } as ActivityReadInput);
+
+    const listed = await app.request("/api/v1/recents");
+    const body = (await listed.json()) as { items: { path: string }[] };
+    expect(body.items.map((item) => item.path)).toEqual(["/Vault"]);
+  });
+
   it("treats a retried report as the same gesture and rejects an expired one", async () => {
     const { app, activity } = await buildHarness(true);
     const requestId = "00000000-0000-4000-8000-0000000000f1";

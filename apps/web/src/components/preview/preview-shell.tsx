@@ -1,5 +1,6 @@
 "use client";
 
+import type { FsEntry } from "@fdrive/contracts";
 import { parentPath } from "@fdrive/core";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -33,11 +34,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useActivityGesture } from "@/lib/activity/gestures";
 import { editHref } from "@/lib/editor/route";
+import { useEncryptedView } from "@/lib/encryption/listing";
+import { useDecryptedFile } from "@/lib/encryption/use-decrypted-file";
 import { isEditableTarget } from "@/lib/keyboard";
 import { apiClient, pathToHref, queryKeys, useTouchRecent, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
 import { skeletonKindFor } from "@/lib/preview/skeleton";
+import { EncryptedPreview } from "./encrypted-preview";
 import { PreviewViewer } from "./preview-viewer";
 
 /** Kinds the in-place editor (chunk P1-EDIT) can open. */
@@ -165,6 +169,9 @@ function TopBarAction({
   );
 }
 
+/** A stable empty listing, so a folder still loading never re-runs its decryption. */
+const NO_ENTRIES: readonly FsEntry[] = [];
+
 function PreviewShellContent({ path }: PreviewShellProps) {
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
@@ -189,12 +196,27 @@ function PreviewShellContent({ path }: PreviewShellProps) {
     queryFn: () => apiClient.list(parent),
   });
 
-  const siblings = siblingNavigation(listQuery.data?.entries ?? [], path);
+  // In an encrypted folder the parent's listing gives this file its decrypted name and type,
+  // and the viewer reads its bytes decrypted in memory.
+  const encryptedView = useEncryptedView(
+    parent,
+    listQuery.data?.encryptedFolder,
+    listQuery.data?.entries ?? NO_ENTRIES,
+  );
+  const encrypted = encryptedView.kind !== "plain";
+  const shownEntries = encryptedView.kind === "open" ? encryptedView.entries : undefined;
+  const shown = shownEntries?.find((candidate) => candidate.path === path);
+  const decrypted = useDecryptedFile(
+    shown,
+    encryptedView.kind === "open" ? encryptedView.folder : null,
+    apiClient.downloadUrl(path),
+  );
+  const siblings = siblingNavigation(shownEntries ?? listQuery.data?.entries ?? [], path);
   const backHref = pathToHref(parent);
   const prevHref = siblings.prev !== null ? viewHref(siblings.prev) : undefined;
   const nextHref = siblings.next !== null ? viewHref(siblings.next) : undefined;
-  const entry = entryQuery.data;
-  const isEditable = entry !== undefined && EDITABLE_KINDS.has(previewKindFor(entry));
+  const entry = encrypted ? shown : entryQuery.data;
+  const isEditable = !encrypted && entry !== undefined && EDITABLE_KINDS.has(previewKindFor(entry));
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -229,8 +251,11 @@ function PreviewShellContent({ path }: PreviewShellProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [router, backHref, siblings.prev, siblings.next, isEditable, path, actionsOpen]);
 
-  const downloadUrl = apiClient.downloadUrl(path);
-  const inlineUrl = apiClient.downloadUrl(path, { inline: true });
+  const decryptedUrl = decrypted.status === "ready" ? decrypted.url : null;
+  const downloadUrl = encrypted ? (decryptedUrl ?? "") : apiClient.downloadUrl(path);
+  const inlineUrl = encrypted
+    ? (decryptedUrl ?? "")
+    : apiClient.downloadUrl(path, { inline: true });
   const thumbUrl = apiClient.thumbUrl(path, 1024);
 
   return (
@@ -290,15 +315,28 @@ function PreviewShellContent({ path }: PreviewShellProps) {
           </div>
 
           <div className="hidden shrink-0 items-center gap-2 sm:flex">
-            <TopBarAction label="Download" href={downloadUrl} download={entry?.name ?? "download"}>
-              <Download />
-              <span className="sr-only">Download</span>
-            </TopBarAction>
+            {(!encrypted || decryptedUrl !== null) && (
+              <TopBarAction
+                label="Download"
+                href={downloadUrl}
+                download={entry?.name ?? "download"}
+              >
+                <Download />
+                <span className="sr-only">Download</span>
+              </TopBarAction>
+            )}
 
-            <TopBarAction label="Open in new tab" href={inlineUrl} target="_blank" rel="noreferrer">
-              <ExternalLink />
-              <span className="sr-only">Open in new tab</span>
-            </TopBarAction>
+            {!encrypted && (
+              <TopBarAction
+                label="Open in new tab"
+                href={inlineUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ExternalLink />
+                <span className="sr-only">Open in new tab</span>
+              </TopBarAction>
+            )}
 
             <TopBarAction
               label="Info"
@@ -362,13 +400,22 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
         <div className="flex min-h-0 flex-1">
           <div className="min-w-0 flex-1">
-            {entryQuery.status === "pending" && (
+            {encrypted && (
+              <EncryptedPreview
+                view={encryptedView}
+                entry={shown}
+                decrypted={decrypted}
+                downloadUrl={apiClient.downloadUrl(path)}
+                folderEntries={shownEntries}
+              />
+            )}
+            {!encrypted && entryQuery.status === "pending" && (
               <div className="flex h-full flex-col items-center justify-center gap-3 p-8">
                 <PreviewLoadingSkeleton path={path} />
                 <Skeleton className="h-4 w-40" />
               </div>
             )}
-            {entryQuery.status === "error" && (
+            {!encrypted && entryQuery.status === "error" && (
               <div className="flex h-full items-center justify-center p-8">
                 <Card className="max-w-sm">
                   <CardContent className="flex flex-col items-center gap-3 py-6 text-center">
@@ -381,7 +428,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
                 </Card>
               </div>
             )}
-            {entryQuery.status === "success" && entry !== undefined && (
+            {!encrypted && entryQuery.status === "success" && entry !== undefined && (
               <PreviewViewer
                 key={path}
                 entry={entry}
