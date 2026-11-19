@@ -6,6 +6,8 @@ export type FileIconKind =
   | "video"
   | "audio"
   | "text"
+  | "pdf"
+  | "document"
   | "archive"
   | "code"
   | "presentation"
@@ -68,6 +70,8 @@ const TABLE_EXTS = new Set([".xls", ".xlsx", ".csv", ".numbers", ".ods", ".tsv"]
 
 const TEXT_EXTS = new Set([".txt", ".md", ".markdown", ".rtf", ".log"]);
 
+const DOCUMENT_EXTS = new Set([".doc", ".docx", ".odt", ".pages"]);
+
 export interface FileIconInput {
   readonly kind: EntryKind;
   readonly ext: string;
@@ -76,7 +80,7 @@ export interface FileIconInput {
 
 /**
  * Chooses which icon a file browser row should show. Extension-based
- * detection (code, archive, presentation, table, text) always takes
+ * detection (PDF, document, code, archive, presentation, table, text) always takes
  * precedence over the server-provided `mime` guess, because a handful of
  * code extensions (notably `.ts`) collide with legacy media mime types
  * (`video/mp2t`); trusting the extension keeps those files showing a code
@@ -94,6 +98,12 @@ export function fileIconKind(entry: FileIconInput): FileIconKind {
   }
 
   const ext = entry.ext.toLowerCase();
+  if (ext === ".pdf" || entry.mime === "application/pdf") {
+    return "pdf";
+  }
+  if (DOCUMENT_EXTS.has(ext)) {
+    return "document";
+  }
   if (ARCHIVE_EXTS.has(ext)) {
     return "archive";
   }

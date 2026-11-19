@@ -58,7 +58,12 @@ export function FavoritesSection() {
                       />
                     }
                   >
-                    <FileIcon kind={item.kind} ext={ext} mime={mimeFromExtension(ext)} />
+                    <FileIcon
+                      kind={item.kind}
+                      ext={ext}
+                      mime={mimeFromExtension(ext)}
+                      className="text-muted-foreground"
+                    />
                     <span className="truncate">{baseName(item.path)}</span>
                   </ContextMenuTrigger>
                   <ContextMenuContent>

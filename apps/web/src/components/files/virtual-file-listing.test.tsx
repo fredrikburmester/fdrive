@@ -3,6 +3,7 @@ import type { FsEntry } from "@fdrive/contracts";
 import { act, cleanup, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { afterEach, expect, it, vi } from "vitest";
+import { TREE_STORAGE_KEY } from "@/lib/files/tree";
 import { VirtualFileListing } from "./virtual-file-listing";
 
 const fixtures = vi.hoisted(() => ({
@@ -114,7 +115,7 @@ it("uses expanded descendants' metadata when changing their tags", () => {
   };
   fixtures.view = "tree";
   fixtures.children.set("/folder", [child]);
-  window.localStorage.setItem("fdrive.tree", JSON.stringify(["/folder"]));
+  window.localStorage.setItem(TREE_STORAGE_KEY, JSON.stringify(["/folder"]));
   const onToggleTag = vi.fn();
   renderListing({ onToggleTag });
 
@@ -136,7 +137,7 @@ it("deduplicates a tagged root entry repeated as an expanded child", () => {
   };
   fixtures.view = "tree";
   fixtures.children.set("/folder", [child]);
-  window.localStorage.setItem("fdrive.tree", JSON.stringify(["/folder"]));
+  window.localStorage.setItem(TREE_STORAGE_KEY, JSON.stringify(["/folder"]));
   renderListing({ entries: [...entries, child] });
 
   const props = fixtures.fileList.mock.calls.at(-1)?.[0] as { entries: readonly FsEntry[] };

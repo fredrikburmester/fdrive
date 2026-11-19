@@ -51,7 +51,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     await expect(page.getByRole("button", { name: "View" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Upload" })).toHaveCount(0);
 
-    const more = page.getByRole("button", { name: "More" });
+    const more = page.getByRole("button", { name: "More", exact: true });
     await expect(more).toBeVisible();
     await expect.poll(async () => (await more.boundingBox())?.width).toBeGreaterThanOrEqual(44);
     await expect.poll(async () => (await more.boundingBox())?.height).toBeGreaterThanOrEqual(44);
@@ -81,7 +81,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     // selection of exactly one without needing a pointer gesture.
     await createFolder(page, folder);
 
-    const more = page.getByRole("button", { name: "More" });
+    const more = page.getByRole("button", { name: "More", exact: true });
     await expect(more.getByText("1", { exact: true })).toBeVisible();
 
     await more.click();

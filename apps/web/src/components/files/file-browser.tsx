@@ -981,7 +981,7 @@ export function FileBrowser({
     if (
       event.defaultPrevented ||
       target.closest(
-        'input, textarea, select, button, a, [contenteditable="true"], [role="checkbox"], [role="switch"], [role="button"], [role="menuitem"]',
+        'input, textarea, select, button, a, [contenteditable="true"], [role="checkbox"], [role="switch"], [role="button"], [role="menu"], [role="menuitem"]',
       )
     ) {
       return;

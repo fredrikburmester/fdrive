@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { setDefaultView, useDefaultView } from "./use-default-view";
+import { setListDesign } from "./use-list-design";
 
 afterEach(() => {
   cleanup();
@@ -43,4 +44,15 @@ it("renders the default on the server, where storage does not exist", async () =
     return createElement("span", null, value);
   }
   expect(renderToString(createElement(Probe))).toBe("<span>list</span>");
+});
+
+it("starts as a tree with the beta list on, until a default is chosen", () => {
+  const { result } = renderHook(useDefaultView);
+  expect(result.current[0]).toBe("list");
+  act(() => setListDesign("beta"));
+  expect(result.current[0]).toBe("tree");
+  act(() => setDefaultView("grid"));
+  expect(result.current[0]).toBe("grid");
+  act(() => setListDesign("classic"));
+  expect(result.current[0]).toBe("grid");
 });

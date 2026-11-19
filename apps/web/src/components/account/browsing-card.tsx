@@ -2,11 +2,19 @@
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { LIST_DESIGNS, type ListDesign } from "@/lib/files/list-design";
 import { ROW_CLICK_ACTIONS, type RowClickAction } from "@/lib/files/row-click";
+import { useListDesign } from "@/lib/files/use-list-design";
 import { useRowClickAction } from "@/lib/files/use-row-click";
 import type { ClockFormat, DateStyle, SizeUnits } from "@/lib/format";
 import { CLOCK_FORMATS, DATE_STYLES, SIZE_UNITS } from "@/lib/format-preferences";
 import { useFormatPreferences } from "@/lib/use-format-preferences";
+
+const DESIGN_LABELS: Record<ListDesign, string> = { classic: "Classic", beta: "New (beta)" };
+const DESIGN_HINTS: Record<ListDesign, string> = {
+  classic: "Every row has a checkbox, and folders open when you go into them.",
+  beta: "Folders open in place, icons are colored, and checkboxes show after Select.",
+};
 
 const ROW_CLICK_LABELS: Record<RowClickAction, string> = {
   select: "Select",
@@ -82,6 +90,7 @@ function ChoiceField<T extends string>({
 
 /** Per-browser preferences for how file listings respond to clicks and render sizes and dates. */
 export function BrowsingCard() {
+  const [design, setDesign] = useListDesign();
   const [rowClick, setRowClick] = useRowClickAction();
   const [format, setFormat] = useFormatPreferences();
   return (
@@ -89,10 +98,18 @@ export function BrowsingCard() {
       <CardHeader>
         <CardTitle>Browsing</CardTitle>
         <CardDescription>
-          How listings respond to clicks and show sizes and dates in this browser.
+          How listings look, respond to clicks and show sizes and dates in this browser.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <ChoiceField
+          label="File list"
+          hint={DESIGN_HINTS[design]}
+          value={design}
+          options={LIST_DESIGNS}
+          labels={DESIGN_LABELS}
+          onChange={setDesign}
+        />
         <ChoiceField
           label="Row click"
           hint={ROW_CLICK_HINTS[rowClick]}

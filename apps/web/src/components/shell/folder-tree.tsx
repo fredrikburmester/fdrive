@@ -42,12 +42,12 @@ import {
   collapse,
   EMPTY_TREE_STATE,
   expand,
-  expandAncestorsOf,
   flattenVisibleTree,
   leftAction,
   moveVisibleFocus,
   readTreeState,
   rightAction,
+  SIDEBAR_TREE_STORAGE_KEY,
   type TreeState,
   writeTreeState,
 } from "@/lib/files/tree";
@@ -250,24 +250,20 @@ export function FolderTree() {
   const router = useRouter();
   const currentPath = useMemo(() => pathFromFilesPathname(pathname), [pathname]);
 
+  // Only the user opens folders here: navigating, the listing's own tree view
+  // and "Shared with me" all leave this tree as it was.
   const [treeState, setTreeStateRaw] = useState<TreeState>(EMPTY_TREE_STATE);
   useEffect(() => {
-    setTreeStateRaw(readTreeState(window.localStorage));
+    setTreeStateRaw(readTreeState(window.localStorage, SIDEBAR_TREE_STORAGE_KEY));
   }, []);
 
   const updateTreeState = useCallback((updater: (prev: TreeState) => TreeState) => {
     setTreeStateRaw((prev) => {
       const next = updater(prev);
-      writeTreeState(window.localStorage, next);
+      writeTreeState(window.localStorage, next, SIDEBAR_TREE_STORAGE_KEY);
       return next;
     });
   }, []);
-
-  useEffect(() => {
-    if (currentPath !== null) {
-      updateTreeState((prev) => expandAncestorsOf(prev, currentPath));
-    }
-  }, [currentPath, updateTreeState]);
 
   const [childrenByPath, setChildrenByPath] = useState<Map<string, readonly string[]>>(
     () => new Map(),

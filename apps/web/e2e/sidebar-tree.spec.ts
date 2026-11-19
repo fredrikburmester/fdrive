@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { listing, sidebar } from "./support/regions.js";
 import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
+import { createViewFolder } from "./support/view-folder.js";
 
 /** The `[data-slot="tree-row-skeleton"]` shown for a sidebar tree row still
  * waiting on its listing after `SKELETON_DELAY_MS` (see `folder-tree.tsx`). */
@@ -38,6 +39,41 @@ test("the sidebar tree shows seeded folders, navigates on click, and highlights 
 
   await expect(page).toHaveURL(/\/files\/docs$/);
   await expect(docsLink).toHaveAttribute("data-active", "");
+});
+
+test("navigating, even into Shared with me, leaves the sidebar tree as the user left it", async ({
+  page,
+}) => {
+  const docsLink = sidebar(page).getByRole("link", { name: "docs", exact: true });
+
+  await page.goto("/files/docs");
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
+  await page.goto("/files/Shared%20with%20me");
+  await expect(page).toHaveURL(/\/files\/Shared%20with%20me$/);
+  await expect(page.getByRole("button", { name: "Expand Files" })).toBeVisible();
+  await expect(docsLink).toBeHidden();
+
+  // Opened by hand, it stays open across navigation and reload.
+  await page.getByRole("button", { name: "Expand Files" }).click();
+  await expect(docsLink).toBeVisible();
+  await page.goto("/files/docs");
+  await page.reload();
+  await expect(docsLink).toBeVisible();
+
+  // Expanding a folder in the listing's tree (the beta list's default) never opens it in the
+  // sidebar. In a folder of its own: the shared root has too many rows to find docs in.
+  await page.getByRole("button", { name: "Collapse Files" }).click();
+  await page.evaluate(() => localStorage.setItem("fdrive.list.design", '"beta"'));
+  const path = await createViewFolder(page, true);
+  const listedDocs = listing(page).locator(`[data-path="${path}/docs"]`);
+  await listedDocs.hover();
+  await listedDocs.getByRole("button", { name: "Expand docs" }).click();
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Expand Files" })).toBeVisible();
+  await expect(docsLink).toBeHidden();
+  await removeSandbox(page, path.slice(1));
 });
 
 test("the fdrive wordmark returns to the root of Files from a nested folder", async ({ page }) => {
@@ -94,11 +130,9 @@ test("a folder with subfolders shows a chevron and expands without a skeleton fl
   await expect(page).toHaveURL(new RegExp(`/files/${parent}$`));
   await createFolder(page, child);
 
-  // Navigating into `parent` above already expanded "Files" in the sidebar
-  // (it auto-expands every ancestor of the current route), so it stays
-  // expanded on the way back and `parent`'s row is already visible.
   await sidebar(page).getByRole("link", { name: "Files" }).click();
   await expect(page).toHaveURL(/\/files$/);
+  await page.getByRole("button", { name: "Expand Files" }).click();
 
   const parentRow = sidebar(page).locator(`[data-path="/${parent}"]`);
   await expect(parentRow).toBeVisible();

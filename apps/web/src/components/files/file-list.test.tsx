@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setListDesign } from "@/lib/files/use-list-design";
 import { FileList } from "./file-list";
 
 const mockScrollToIndex = vi.fn();
@@ -329,6 +330,17 @@ describe("FileList", () => {
     expect(container.querySelector(".size-6")).toBeNull();
     expect(container.querySelector("svg")).not.toBeNull();
   });
+  it("shows the beta design once the File list setting is the beta", () => {
+    const { queryByRole, getByRole } = renderList();
+    expect(queryByRole("button", { name: "Select" })).toBeNull();
+    expect(getByRole("checkbox", { name: "Select all" })).toBeTruthy();
+
+    act(() => setListDesign("beta"));
+    expect(getByRole("button", { name: "Select" })).toBeTruthy();
+    expect(queryByRole("checkbox", { name: "Select all" })).toBeNull();
+    act(() => setListDesign("classic"));
+  });
+
   describe("on a phone", () => {
     beforeEach(() => {
       viewport.mobile = true;
