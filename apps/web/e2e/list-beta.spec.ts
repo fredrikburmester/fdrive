@@ -1,6 +1,20 @@
 import { expect, type Page, test } from "@playwright/test";
 import { listing } from "./support/regions.js";
-import { createViewFolder } from "./support/view-folder.js";
+import { removeSandbox } from "./support/sandbox.js";
+import { createViewFolder as createFolder } from "./support/view-folder.js";
+
+// Each test's folder sits at the shared root, whose rows other specs look for: remove it after.
+let created: string | null = null;
+
+async function createViewFolder(page: Page, seed: boolean): Promise<string> {
+  created = await createFolder(page, seed);
+  return created;
+}
+
+test.afterEach(async ({ page }) => {
+  if (created !== null) await removeSandbox(page, created.slice(1));
+  created = null;
+});
 
 /** Turns on the File list beta in this browser before any page loads. */
 async function useBetaList(page: Page) {

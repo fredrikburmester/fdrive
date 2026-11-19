@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { listing, sidebar } from "./support/regions.js";
 import { removeSandbox } from "./support/sandbox.js";
 import { uniqueName } from "./support/unique.js";
+import { createViewFolder } from "./support/view-folder.js";
 
 /** The `[data-slot="tree-row-skeleton"]` shown for a sidebar tree row still
  * waiting on its listing after `SKELETON_DELAY_MS` (see `folder-tree.tsx`). */
@@ -60,19 +61,19 @@ test("navigating, even into Shared with me, leaves the sidebar tree as the user 
   await expect(docsLink).toBeVisible();
 
   // Expanding a folder in the listing's tree (the beta list's default) never opens it in the
-  // sidebar.
+  // sidebar. In a folder of its own: the shared root has too many rows to find docs in.
   await page.getByRole("button", { name: "Collapse Files" }).click();
   await page.evaluate(() => localStorage.setItem("fdrive.list.design", '"beta"'));
-  await page.goto("/files");
-  const docsRow = listing(page).locator('[data-path="/docs"]');
-  await docsRow.hover();
-  await docsRow.getByRole("button", { name: "Expand docs" }).click();
+  const path = await createViewFolder(page, true);
+  const listedDocs = listing(page).locator(`[data-path="${path}/docs"]`);
+  await listedDocs.hover();
+  await listedDocs.getByRole("button", { name: "Expand docs" }).click();
   await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
   await page.reload();
+  await expect(listing(page).getByText("readme.md", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Expand Files" })).toBeVisible();
   await expect(docsLink).toBeHidden();
-  await docsRow.hover();
-  await docsRow.getByRole("button", { name: "Collapse docs" }).click();
+  await removeSandbox(page, path.slice(1));
 });
 
 test("the fdrive wordmark returns to the root of Files from a nested folder", async ({ page }) => {
