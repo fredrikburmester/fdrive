@@ -59,8 +59,10 @@ test("navigating, even into Shared with me, leaves the sidebar tree as the user 
   await page.reload();
   await expect(docsLink).toBeVisible();
 
-  // Expanding a folder in the listing's tree never opens it in the sidebar.
+  // Expanding a folder in the listing's tree (the beta list's default) never opens it in the
+  // sidebar.
   await page.getByRole("button", { name: "Collapse Files" }).click();
+  await page.evaluate(() => localStorage.setItem("fdrive.list.design", '"beta"'));
   await page.goto("/files");
   const docsRow = listing(page).locator('[data-path="/docs"]');
   await docsRow.hover();
