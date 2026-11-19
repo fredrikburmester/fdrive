@@ -1,12 +1,16 @@
 # The complete suite: everything the old single CI workflow ran, ~30 runner
-# minutes a run (see the note in ci.yml). Opt in per pull request by
-# adding the `ci:full` label (the label event starts it and every later push
-# keeps it running), or dispatch it by hand for any ref:
+# minutes a run (see the note in ci.yml). It runs on every release tag (`v*`,
+# release candidates too) beside the image publish, without holding it back.
+# Opt in per pull request by adding the `ci:full` label (the label event
+# starts it and every later push keeps it running), or dispatch it by hand
+# for any ref:
 #   gh workflow run "CI (full)" --ref main
 # On pull requests without the label every job is skipped at no cost.
 name: CI (full)
 
 on:
+  push:
+    tags: ['v*']
   pull_request:
     types: [labeled, synchronize]
   workflow_dispatch:
@@ -21,7 +25,7 @@ concurrency:
 jobs:
   check:
     name: Lint, typecheck, test
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -39,7 +43,7 @@ jobs:
 
   web:
     name: Web coverage
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -55,7 +59,7 @@ jobs:
   integration:
     name: Integration tests
     needs: check
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -71,7 +75,7 @@ jobs:
   e2e:
     name: End-to-end tests
     needs: check
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -98,7 +102,7 @@ jobs:
   # first seen when main fails to publish.
   images:
     name: Deployment images
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -124,17 +128,17 @@ jobs:
 
   python:
     name: Python services
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     uses: ./.github/workflows/services.yml
 
   indexer:
     name: Indexer
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     uses: ./.github/workflows/indexer.yml
 
   ml:
     name: ML server
-    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full')
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
     uses: ./.github/workflows/ml.yml
     with:
       probes: true

@@ -33,5 +33,6 @@ Run one heavy Docker suite at a time. A skipped, interrupted or failed check is 
 
 Hosted CI stays lean for fast feedback: pull requests run `CI` (lint, typecheck, coverage), plus
 `Python services`, `Indexer`, `ML server` and `Images` when their paths change. The `ci:full` label or
-`gh workflow run "CI (full)" --ref <ref>` runs everything. On `main` only `Images` runs,
-publishing the edge images; a `vX.Y.Z` tag publishes a release ([releases](docs/RELEASES.md)).
+`gh workflow run "CI (full)" --ref <ref>` runs everything; use them on a pull request only when
+asked. On `main` only `Images` runs, publishing the edge images; a `v*` tag publishes a release
+([releases](docs/RELEASES.md)) and runs `CI (full)`, end-to-end tests included, beside it.

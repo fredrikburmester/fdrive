@@ -13,6 +13,9 @@ separately; see [Mac releases](MACOS-RELEASE.md).
 | A `vX.Y.Z` tag on a commit in `main` | `X.Y.Z`, `X.Y` and `latest` images, then a GitHub release |
 | A `vX.Y.Z-rc.N` tag on a commit in `main` | `X.Y.Z-rc.N` images and a pre-release; `latest` stays where it is |
 
+Every tag also runs `CI (full)`, the end-to-end tests included. It runs beside the publish and
+does not hold it back, so look at its result before you announce the release.
+
 Installations follow the newest `vX.Y.Z` release by default; see
 [updates and versions](../deploy/README.md#updates-and-versions). Each platform builds on
 its own native runner. A channel moves only when every image built and the core stack
