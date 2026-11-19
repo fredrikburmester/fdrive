@@ -466,6 +466,22 @@ describe("FileList", () => {
     expect(queryAllByRole("checkbox")).toEqual([]);
   });
 
+  it("rounds a run of selected rows only at its outer corners", () => {
+    const paths = ENTRIES.map((entry) => entry.path);
+    const selected = new Set([0, 1, 2, 4].map((index) => paths[index] ?? ""));
+    const { container } = renderList({ selected });
+    const corners = (index: number) => {
+      const row = container.querySelector(`[data-path="${paths[index]}"]`);
+      return ["rounded-t-none", "rounded-b-none"].filter((name) => row?.classList.contains(name));
+    };
+
+    expect(corners(0)).toEqual(["rounded-b-none"]);
+    expect(corners(1)).toEqual(["rounded-t-none", "rounded-b-none"]);
+    expect(corners(2)).toEqual(["rounded-t-none"]);
+    expect(corners(3)).toEqual([]);
+    expect(corners(4)).toEqual([]);
+  });
+
   describe("on a phone", () => {
     beforeEach(() => {
       viewport.mobile = true;

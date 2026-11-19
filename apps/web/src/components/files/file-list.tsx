@@ -274,6 +274,10 @@ export function FileList({
   const lastConsumedTokenRef = useRef<number | null>(null);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selectedCount = entries.filter((entry) => selected.has(entry.path)).length;
+  const isSelectedAt = (index: number) => {
+    const neighbor = entries[index];
+    return neighbor !== undefined && selected.has(neighbor.path);
+  };
   const allSelected = entries.length > 0 && selectedCount === entries.length;
   const someSelected = selectedCount > 0 && !allSelected;
 
@@ -443,6 +447,9 @@ export function FileList({
             return null;
           }
           const isSelected = selected.has(entry.path);
+          // A run of selected rows reads as one block: only its outer corners are rounded.
+          const joinsAbove = isSelected && isSelectedAt(virtualRow.index - 1);
+          const joinsBelow = isSelected && isSelectedAt(virtualRow.index + 1);
           const isFocused = focusedPath === entry.path;
           const depth = treeDepths?.get(entry.path) ?? 0;
           const rowStyle = {
@@ -558,6 +565,8 @@ export function FileList({
                 className={cn(
                   "group/row absolute flex items-center gap-2.5 pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
                   hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
+                  hoverControls && joinsAbove && "rounded-t-none",
+                  hoverControls && joinsBelow && "rounded-b-none",
                 )}
                 style={rowStyle}
                 data-focused={isFocused}
