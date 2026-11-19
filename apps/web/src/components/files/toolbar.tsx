@@ -67,6 +67,7 @@ import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { BrowserSelection } from "@/lib/files/selection";
 import type { SortSpec } from "@/lib/files/sorting";
 import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
+import { useListDesign } from "@/lib/files/use-list-design";
 import type { ViewMode } from "@/lib/files/view-mode";
 import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
 import { cn } from "@/lib/utils";
@@ -503,6 +504,7 @@ function ViewSortMenuItems({
   showThumbnails,
   onShowThumbnailsChange,
 }: ViewSortMenuItemsProps) {
+  const [listDesign, setListDesign] = useListDesign();
   return (
     <>
       {folderView && (
@@ -566,6 +568,19 @@ function ViewSortMenuItems({
           )}
         </>
       )}
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuCheckboxItem
+          checked={listDesign === "beta"}
+          onCheckedChange={(checked) => setListDesign(checked ? "beta" : "classic")}
+          className="flex flex-col items-start gap-0.5"
+        >
+          <span>New file list (beta)</span>
+          <span className="font-normal text-muted-foreground text-xs">
+            Folders open in place, and checkboxes show after Select
+          </span>
+        </DropdownMenuCheckboxItem>
+      </DropdownMenuGroup>
       {thumbnailsAvailable && (
         <>
           <DropdownMenuSeparator />

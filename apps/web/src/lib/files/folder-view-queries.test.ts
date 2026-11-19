@@ -64,25 +64,25 @@ describe("folder view query", () => {
     expect(mocks.set).toHaveBeenCalledTimes(1);
     rerender({ path: "/other" });
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.mode).toBe("tree");
+    expect(result.current.mode).toBe("list");
     await act(async () => complete());
     await waitFor(() => expect(result.current.disabled).toBe(false));
     expect(mocks.set).toHaveBeenCalledWith({ path: "/photos", mode: "grid" });
   });
   it("uses an exact server pin, makes it the default, and unpins explicitly", async () => {
-    mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "list" } });
+    mocks.get.mockResolvedValue({ view: { path: "/photos", mode: "tree" } });
     const { result } = renderHook(() => useFolderView("/photos"), { wrapper });
     await waitFor(() => expect(result.current.pinned).toBe(true));
-    expect(result.current.mode).toBe("list");
+    expect(result.current.mode).toBe("tree");
     act(() => result.current.makeDefault());
-    expect(localStorage.getItem("fdrive.view")).toBe('"list"');
+    expect(localStorage.getItem("fdrive.view")).toBe('"tree"');
     mocks.get.mockResolvedValue({ view: null });
     act(() => result.current.useDefault());
     await waitFor(() =>
       expect(mocks.remove).toHaveBeenCalledWith({ path: "/photos", part: "mode" }),
     );
     await waitFor(() => expect(result.current.pinned).toBe(false));
-    expect(result.current.mode).toBe("list");
+    expect(result.current.mode).toBe("tree");
   });
   it("rolls back a failed save and supports retrying a failed load", async () => {
     mocks.get.mockRejectedValueOnce(new Error("offline"));
@@ -96,7 +96,7 @@ describe("folder view query", () => {
     act(() => result.current.setMode("grid"));
     await waitFor(() => expect(mocks.error).toHaveBeenCalled());
     await waitFor(() => expect(result.current.disabled).toBe(false));
-    expect(result.current.mode).toBe("tree");
+    expect(result.current.mode).toBe("list");
   });
 });
 
@@ -113,7 +113,7 @@ describe("folder sort", () => {
     await waitFor(() => expect(result.current.sort).toEqual(bySize));
     expect(result.current.sortPinned).toBe(true);
     expect(result.current.pinned).toBe(false);
-    expect(result.current.mode).toBe("tree");
+    expect(result.current.mode).toBe("list");
     await waitFor(() => expect(mocks.set).toHaveBeenCalledWith({ path: "/photos", sort: bySize }));
     expect(JSON.parse(localStorage.getItem("fdrive.sort") ?? "")).toEqual({
       key: "ext",

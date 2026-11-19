@@ -1,3 +1,5 @@
+"use client";
+
 import {
   FileArchiveIcon,
   FileCodeIcon,
@@ -14,12 +16,13 @@ import {
   VideoIcon,
 } from "lucide-react";
 import { type FileIconInput, type FileIconKind, fileIconKind } from "@/lib/files/icon-kind";
+import { useListDesign } from "@/lib/files/use-list-design";
 import { cn } from "@/lib/utils";
 
 /**
- * Each kind's icon and color. Folders take the theme's blue; media and documents take a hue
- * from the tag palette, so the colors are the same Apple-like set the tags use; plain text,
- * code, archives and anything unknown stay muted.
+ * Each kind's icon and its color in the beta file list. Folders take the theme's blue; media
+ * and documents take a hue from the tag palette, so the colors are the same Apple-like set the
+ * tags use; plain text, code, archives and anything unknown stay muted.
  */
 const ICONS: Record<FileIconKind, { icon: LucideIcon; color: string }> = {
   folder: { icon: FolderIcon, color: "text-primary" },
@@ -37,14 +40,27 @@ const ICONS: Record<FileIconKind, { icon: LucideIcon; color: string }> = {
   file: { icon: FileGenericIcon, color: "text-muted-foreground" },
 };
 
+/** The classic list's shapes where they differ, so switching back shows it as it was. */
+const CLASSIC_SHAPES: Partial<Record<FileIconKind, LucideIcon>> = {
+  text: FileTextIcon,
+  pdf: FileGenericIcon,
+  document: FileGenericIcon,
+};
+
 export interface FileIconProps extends FileIconInput {
   className?: string;
 }
 
-/** Renders the lucide icon matching an entry's kind and extension, in that kind's color. */
+/**
+ * Renders the lucide icon matching an entry's kind and extension: muted, or in that kind's
+ * color while the File list setting is the beta.
+ */
 export function FileIcon({ className, ...entry }: FileIconProps) {
+  const [design] = useListDesign();
   const kind = fileIconKind(entry);
-  const { icon: Icon, color } = ICONS[kind];
+  const beta = design === "beta";
+  const Icon = beta ? ICONS[kind].icon : (CLASSIC_SHAPES[kind] ?? ICONS[kind].icon);
+  const color = beta ? ICONS[kind].color : "text-muted-foreground";
   return (
     <Icon
       data-icon-kind={kind}

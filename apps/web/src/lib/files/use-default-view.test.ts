@@ -2,6 +2,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { setDefaultView, useDefaultView } from "./use-default-view";
+import { setListDesign } from "./use-list-design";
 
 afterEach(() => {
   cleanup();
@@ -20,7 +21,7 @@ it("preserves the existing key and updates mounted consumers together", () => {
 
 it("observes other-tab storage changes and handles missing or corrupt values", () => {
   const { result } = renderHook(useDefaultView);
-  expect(result.current[0]).toBe("tree");
+  expect(result.current[0]).toBe("list");
   act(() => {
     localStorage.setItem("fdrive.view", '"grid"');
     window.dispatchEvent(new StorageEvent("storage", { key: "fdrive.view" }));
@@ -30,9 +31,9 @@ it("observes other-tab storage changes and handles missing or corrupt values", (
     localStorage.setItem("fdrive.view", '"invalid"');
     window.dispatchEvent(new StorageEvent("storage"));
   });
-  expect(result.current[0]).toBe("tree");
-  act(() => setDefaultView("list"));
   expect(result.current[0]).toBe("list");
+  act(() => setDefaultView("tree"));
+  expect(result.current[0]).toBe("tree");
 });
 
 it("renders the default on the server, where storage does not exist", async () => {
@@ -42,5 +43,16 @@ it("renders the default on the server, where storage does not exist", async () =
     const [value] = useDefaultView();
     return createElement("span", null, value);
   }
-  expect(renderToString(createElement(Probe))).toBe("<span>tree</span>");
+  expect(renderToString(createElement(Probe))).toBe("<span>list</span>");
+});
+
+it("starts as a tree with the beta list on, until a default is chosen", () => {
+  const { result } = renderHook(useDefaultView);
+  expect(result.current[0]).toBe("list");
+  act(() => setListDesign("beta"));
+  expect(result.current[0]).toBe("tree");
+  act(() => setDefaultView("grid"));
+  expect(result.current[0]).toBe("grid");
+  act(() => setListDesign("classic"));
+  expect(result.current[0]).toBe("grid");
 });

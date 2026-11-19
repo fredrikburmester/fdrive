@@ -57,3 +57,14 @@ it("persists size, date and clock choices under their own keys", () => {
   expect(localStorage.getItem("fdrive.format.clock")).toBe('"12h"');
   expect(localStorage.getItem("fdrive.list.rowClick")).toBeNull();
 });
+
+it("switches the file list between the classic and the beta design", () => {
+  render(<BrowsingCard />);
+  expect(pressed("Classic")).toBe("true");
+  expect(screen.getByText(/Every row has a checkbox/)).toBeDefined();
+
+  fireEvent.click(screen.getByRole("button", { name: "New (beta)" }));
+  expect(pressed("New (beta)")).toBe("true");
+  expect(screen.getByText(/Folders open in place/)).toBeDefined();
+  expect(localStorage.getItem("fdrive.list.design")).toBe('"beta"');
+});
