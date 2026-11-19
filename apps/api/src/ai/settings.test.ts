@@ -19,7 +19,7 @@ interface StoredRow {
   revision: number;
   organize: boolean;
   chat?: boolean;
-  provider: "anthropic" | "openai_compatible";
+  provider: "anthropic" | "mistral" | "openai_compatible";
   model: string;
   baseUrl: string | null;
   apiKey: string | null;
@@ -60,6 +60,18 @@ function anthropicUpdate(
     chat: false,
     provider: "anthropic",
     model: "claude-opus-5",
+    baseUrl: null,
+    ...overrides,
+  };
+}
+
+function mistralUpdate(overrides: Partial<AiSettingsUpdateRequest> = {}): AiSettingsUpdateRequest {
+  return {
+    revision: 0,
+    organize: false,
+    chat: false,
+    provider: "mistral",
+    model: DEFAULT_AI_MODEL.mistral,
     baseUrl: null,
     ...overrides,
   };
@@ -217,6 +229,18 @@ describe("AI settings service", () => {
       expect((await service.resolved())?.apiKey).toBeNull();
     });
 
+    it("never hands an Anthropic key to Mistral", async () => {
+      const { service, row } = setup();
+      await service.update(anthropicUpdate({ apiKey: "sk-ant-1" }));
+      expect((await service.update(mistralUpdate({ revision: 1 }))).hasApiKey).toBe(false);
+      expect(row()?.apiKey).toBeNull();
+
+      await service.update(mistralUpdate({ revision: 2, apiKey: "mistral-key" }));
+      const sealed = row()?.apiKey ?? "";
+      expect(openKey(sealed, "ai-api-key:mistral:")).toBe("mistral-key");
+      expect(() => openKey(sealed, "ai-api-key:anthropic:")).toThrow();
+    });
+
     it("clears the saved key when null is sent", async () => {
       const { service, row } = setup();
       await service.update(ollamaUpdate({ apiKey: "sk-local" }));
@@ -236,6 +260,14 @@ describe("AI settings service", () => {
         service.update(anthropicUpdate({ revision: 1, organize: true, apiKey: null })),
       );
       expect(cleared.kind).toBe("bad_request");
+    });
+
+    it("refuses to turn Mistral on without a key", async () => {
+      const { service, settings } = setup();
+      const error = await rejection(service.update(mistralUpdate({ chat: true })));
+      expect(error.kind).toBe("bad_request");
+      expect(error.message).toBe("Enter a Mistral API key before turning Organize or Chat on.");
+      expect(settings.compareAndSet).not.toHaveBeenCalled();
     });
 
     it("turns Anthropic on with a previously saved key", async () => {
@@ -334,6 +366,27 @@ describe("AI settings service", () => {
         organize: true,
         chat: true,
       });
+    });
+
+    it("resolves Mistral with its key and no base URL", async () => {
+      const { service } = setup();
+      await service.update(mistralUpdate({ organize: true, apiKey: "mistral-key" }));
+      expect(await service.resolved()).toEqual({
+        provider: "mistral",
+        model: "mistral-large-latest",
+        baseUrl: null,
+        apiKey: "mistral-key",
+        organize: true,
+        chat: false,
+      });
+    });
+
+    it("is null for Mistral without a key", async () => {
+      const { service } = setup({
+        initial: storedRow({ provider: "mistral", model: "mistral-large-latest", apiKey: null }),
+      });
+      expect(await service.resolved()).toBeNull();
+      expect(await service.saved()).toBeNull();
     });
 
     it("is null for an OpenAI-compatible server without a base URL", async () => {

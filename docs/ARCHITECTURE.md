@@ -32,8 +32,9 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
   indexer and the API hand it bytes or text over HTTP, so parsing a hostile file cannot reach
   anyone's storage. It loads a model only while a feature that needs it is enabled.
-- Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
-  tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
+- Optional AI organize calls Claude, Mistral or an OpenAI-compatible server from the API with
+  read-only tools and returns suggestions the person applies through `fs/move-many`. See
+  [AI](AI.md).
 - fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
   `<root>/<username>`, plain files) and keeps its own users. That files folder is the only
   storage. Its plain files stay authoritative: fdrive keeps no database of their contents, and

@@ -6,6 +6,7 @@ export {
   SystemActivityResponse,
   WorkerActivity,
 } from "./activity.ts";
+export type { HostedAiProvider } from "./ai.ts";
 export {
   AI_SETTINGS_KEY,
   AiConnectionTestResponse,
@@ -13,6 +14,7 @@ export {
   AiSettings,
   AiSettingsUpdateRequest,
   AiStatusResponse,
+  aiProviderHasBaseUrl,
   CHAT_RETENTION_DAYS,
   Chat,
   ChatActionEdits,

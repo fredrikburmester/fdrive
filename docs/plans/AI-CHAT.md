@@ -151,7 +151,7 @@ built on the existing `streamSSE` route and the web `sse.ts` client: text deltas
 lines, action cards, state changes. `GET /ai/chats/:id` returns the whole transcript, so a
 reload or a dropped stream recovers by refetching then resubscribing. The `AiModel` port gains
 an optional `onText(delta)` on `send`; the Claude adapter already streams and forwards
-deltas, the OpenAI-compatible adapter adds `stream: true` parsing.
+deltas, the OpenAI-compatible and Mistral adapters add `stream: true` parsing.
 
 ### UI
 
@@ -242,8 +242,8 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
    later moved from a docked right column into the activity dock as a bubble, which also
    ended the selection bar overflowing beside the docked column. Open from the browser check:
    deleting a chat has no confirm step.
-4. **Streaming.** SSE route and client, deltas in the transcript, OpenAI-compatible streaming,
-   reconnect and cancel behavior in browser checks.
+4. **Streaming.** SSE route and client, deltas in the transcript, OpenAI-compatible and Mistral
+   streaming, reconnect and cancel behavior in browser checks.
 5. **Docs.** Chat section in `docs/AI.md`, the data notice on System > AI describing what a
    chat sends and stores, `docs/ARCHITECTURE.md` boundary and UI lines (panel placement,
    preference keys, AI Elements under `components/ai-elements/`), `docs/MCP.md` note on the
