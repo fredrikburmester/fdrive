@@ -6,6 +6,7 @@ import {
   AiProviderError,
   type AiSendOptions,
   type AiStartOptions,
+  type AiToolSpec,
   type AiTurn,
 } from "./model.ts";
 
@@ -59,12 +60,21 @@ type ChatMessage =
     }
   | { role: "tool"; tool_call_id: string; content: string };
 
-function parseArguments(raw: string): unknown {
+/** A tool call's arguments, or `undefined` when they are not valid JSON. */
+export function parseArguments(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
     return undefined;
   }
+}
+
+/** The `tools` a chat completions request offers. */
+export function toolDefinitions(tools: readonly AiToolSpec[]) {
+  return tools.map((tool) => ({
+    type: "function" as const,
+    function: { name: tool.name, description: tool.description, parameters: tool.inputSchema },
+  }));
 }
 
 /**
@@ -142,19 +152,7 @@ export function createOpenAiCompatibleModel(options: OpenAiCompatibleModelOption
               body: JSON.stringify({
                 model: options.model,
                 messages,
-                ...(tools.length > 0
-                  ? {
-                      tools: tools.map((tool) => ({
-                        type: "function",
-                        function: {
-                          name: tool.name,
-                          description: tool.description,
-                          parameters: tool.inputSchema,
-                        },
-                      })),
-                      tool_choice: "auto",
-                    }
-                  : {}),
+                ...(tools.length > 0 ? { tools: toolDefinitions(tools), tool_choice: "auto" } : {}),
               }),
             },
             signal,

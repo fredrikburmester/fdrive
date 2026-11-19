@@ -149,6 +149,45 @@ it("removes a saved key only when asked, and then blocks turning Anthropic on", 
   expect(screen.queryByText("Enter an Anthropic API key to turn Organize or Chat on.")).toBeNull();
 });
 
+it("summarizes a saved Mistral configuration and blocks the check without its key", () => {
+  withSettings({ ...claude, provider: "mistral", model: "mistral-large-latest", hasApiKey: false });
+  render(<AiSystemPage />);
+  expect(screen.getByText("Mistral")).toBeTruthy();
+  expect(screen.getByText(/fdrive sends Mistral only what it needs/)).toBeTruthy();
+  expect(screen.getByText("Needs an API key")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Check connection" })).toHaveProperty("disabled", true);
+});
+
+it("switches to Mistral with its default model, no base URL and a required key", async () => {
+  render(<AiSystemPage />);
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  fireEvent.click(screen.getByRole("combobox", { name: "Provider" }));
+  fireEvent.keyDown(await screen.findByRole("option", { name: "Mistral" }), { key: "Enter" });
+
+  expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("mistral-large-latest");
+  expect(screen.getByText("A Mistral model ID that supports tool calling.")).toBeTruthy();
+  expect(screen.queryByLabelText("Base URL")).toBeNull();
+  expect(screen.getByLabelText("API key").getAttribute("placeholder")).toBe("Required");
+  expect(screen.getByText("Changing the provider or base URL removes the saved key.")).toBeTruthy();
+  expect(screen.getByText("Enter a Mistral API key to turn Organize or Chat on.")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+
+  fireEvent.change(screen.getByLabelText("API key"), { target: { value: "mistral-key" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(mocks.mutate).toHaveBeenCalledWith(
+    {
+      revision: 2,
+      organize: true,
+      chat: true,
+      provider: "mistral",
+      model: "mistral-large-latest",
+      baseUrl: null,
+      apiKey: "mistral-key",
+    },
+    expect.anything(),
+  );
+});
+
 it("warns that editing a server address drops its saved key", () => {
   withSettings({
     ...claude,
