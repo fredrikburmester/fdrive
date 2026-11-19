@@ -2,9 +2,9 @@ import { isRoot, parentPath } from "@fdrive/core";
 import { readJson, type StorageLike, writeJson } from "./storage";
 
 /**
- * Which folder paths are expanded in a folder tree (the sidebar tree or the
- * main browser's tree view). Both share this shape and the same storage
- * key, so expanding a folder in one place is remembered in the other.
+ * Which folder paths are expanded in a folder tree: the listing's tree view
+ * or the sidebar's tree. Each keeps its own set under its own storage key, so
+ * expanding a folder in the listing never opens it in the sidebar.
  */
 export interface TreeState {
   readonly expanded: ReadonlySet<string>;
@@ -12,21 +12,29 @@ export interface TreeState {
 
 export const EMPTY_TREE_STATE: TreeState = { expanded: new Set() };
 
-export const TREE_STORAGE_KEY = "fdrive.tree";
+/** The listing's tree view, shared by folders and virtual listings. */
+export const TREE_STORAGE_KEY = "fdrive.list.tree";
+
+/** The sidebar's folder tree, which only opens what the user opens there. */
+export const SIDEBAR_TREE_STORAGE_KEY = "fdrive.sidebar.tree";
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
-/** Reads the persisted set of expanded tree paths from `storage`. */
-export function readTreeState(storage: StorageLike): TreeState {
-  const paths = readJson(storage, TREE_STORAGE_KEY, isStringArray, []);
+/** Reads the persisted set of expanded tree paths from `storage` under `key`. */
+export function readTreeState(storage: StorageLike, key = TREE_STORAGE_KEY): TreeState {
+  const paths = readJson(storage, key, isStringArray, []);
   return { expanded: new Set(paths) };
 }
 
-/** Persists `state`'s expanded paths to `storage` under `fdrive.tree`. */
-export function writeTreeState(storage: StorageLike, state: TreeState): void {
-  writeJson(storage, TREE_STORAGE_KEY, Array.from(state.expanded));
+/** Persists `state`'s expanded paths to `storage` under `key`. */
+export function writeTreeState(
+  storage: StorageLike,
+  state: TreeState,
+  key = TREE_STORAGE_KEY,
+): void {
+  writeJson(storage, key, Array.from(state.expanded));
 }
 
 /** Expands `path`; a no-op (returning the same reference) if already expanded. */
@@ -50,37 +58,6 @@ export function collapse(state: TreeState, path: string): TreeState {
 /** Flips `path` between expanded and collapsed. */
 export function toggle(state: TreeState, path: string): TreeState {
   return state.expanded.has(path) ? collapse(state, path) : expand(state, path);
-}
-
-/**
- * Every proper ancestor of `path`, root-most first, excluding `path`
- * itself. `[]` when `path` is already the root.
- */
-export function ancestorsOf(path: string): string[] {
-  const ancestors: string[] = [];
-  let current = path;
-  while (!isRoot(current)) {
-    current = parentPath(current);
-    ancestors.unshift(current);
-  }
-  return ancestors;
-}
-
-/**
- * Expands every ancestor of `path` (but not `path` itself), so the tree can
- * reveal the node matching the current route without the user having
- * manually expanded its parents.
- */
-export function expandAncestorsOf(state: TreeState, path: string): TreeState {
-  const ancestors = ancestorsOf(path);
-  if (ancestors.every((ancestor) => state.expanded.has(ancestor))) {
-    return state;
-  }
-  const next = new Set(state.expanded);
-  for (const ancestor of ancestors) {
-    next.add(ancestor);
-  }
-  return { expanded: next };
 }
 
 /**

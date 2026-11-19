@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { StorageLike } from "./storage";
 import {
-  ancestorsOf,
   chevronStateFor,
   collapse,
   EMPTY_TREE_STATE,
   expand,
-  expandAncestorsOf,
   flattenVisibleTree,
   knownTreePaths,
   leftAction,
@@ -14,6 +12,7 @@ import {
   readTreeState,
   reconcile,
   rightAction,
+  SIDEBAR_TREE_STORAGE_KEY,
   shouldShowSkeleton,
   TREE_STORAGE_KEY,
   type TreeState,
@@ -67,40 +66,6 @@ describe("toggle", () => {
 
   it("collapses an expanded path", () => {
     expect(toggle(stateWith("/a"), "/a").expanded.has("/a")).toBe(false);
-  });
-});
-
-describe("ancestorsOf", () => {
-  it("is empty for the root", () => {
-    expect(ancestorsOf("/")).toEqual([]);
-  });
-
-  it("is just the root for a top-level path", () => {
-    expect(ancestorsOf("/a")).toEqual(["/"]);
-  });
-
-  it("lists ancestors root-most first, including the root", () => {
-    expect(ancestorsOf("/a/b/c")).toEqual(["/", "/a", "/a/b"]);
-  });
-});
-
-describe("expandAncestorsOf", () => {
-  it("expands every ancestor of a nested path, including the root", () => {
-    const next = expandAncestorsOf(EMPTY_TREE_STATE, "/a/b/c");
-    expect([...next.expanded].sort()).toEqual(["/", "/a", "/a/b"]);
-  });
-
-  it("returns the same reference when all ancestors are already expanded", () => {
-    const state = stateWith("/", "/a", "/a/b");
-    expect(expandAncestorsOf(state, "/a/b/c")).toBe(state);
-  });
-
-  it("expands just the root for a top-level path", () => {
-    expect(expandAncestorsOf(EMPTY_TREE_STATE, "/a").expanded).toEqual(new Set(["/"]));
-  });
-
-  it("is a no-op for the root itself", () => {
-    expect(expandAncestorsOf(EMPTY_TREE_STATE, "/")).toBe(EMPTY_TREE_STATE);
   });
 });
 
@@ -256,6 +221,11 @@ describe("readTreeState", () => {
     const storage = memoryStorage({ [TREE_STORAGE_KEY]: JSON.stringify({ nope: true }) });
     expect(readTreeState(storage).expanded.size).toBe(0);
   });
+
+  it("keeps the sidebar's tree apart from the listing's", () => {
+    const storage = memoryStorage({ [TREE_STORAGE_KEY]: JSON.stringify(["/", "/a"]) });
+    expect(readTreeState(storage, SIDEBAR_TREE_STORAGE_KEY).expanded.size).toBe(0);
+  });
 });
 
 describe("chevronStateFor", () => {
@@ -297,5 +267,12 @@ describe("writeTreeState", () => {
     expect(new Set(JSON.parse(storage.getItem(TREE_STORAGE_KEY) ?? "[]"))).toEqual(
       new Set(["/a", "/b"]),
     );
+  });
+
+  it("writes the sidebar's tree under its own key only", () => {
+    const storage = memoryStorage();
+    writeTreeState(storage, stateWith("/"), SIDEBAR_TREE_STORAGE_KEY);
+    expect(storage.getItem(SIDEBAR_TREE_STORAGE_KEY)).toBe('["/"]');
+    expect(storage.getItem(TREE_STORAGE_KEY)).toBeNull();
   });
 });
