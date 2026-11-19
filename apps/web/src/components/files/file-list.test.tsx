@@ -434,7 +434,7 @@ describe("FileList", () => {
     expect(onEntryClick).not.toHaveBeenCalled();
   });
 
-  it("shows checkboxes only while Select is on, when a click adds or removes the row", () => {
+  it("shows the checkbox column only while Select is on, and leaves row clicks alone", () => {
     const onEntryClick = vi.fn();
     const onEntryDoubleClick = vi.fn();
     const [first, second] = ENTRIES;
@@ -445,24 +445,21 @@ describe("FileList", () => {
     });
     expect(queryAllByRole("checkbox")).toEqual([]);
 
-    // Off: a plain click keeps its usual meaning.
-    fireEvent.click(getByText(first.name));
-    expect(onEntryClick).toHaveBeenLastCalledWith(first, { shift: false, meta: false });
-
     const toggle = getByRole("button", { name: "Select" });
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
     fireEvent.click(toggle);
     expect(getByRole("button", { name: "Done" }).getAttribute("aria-pressed")).toBe("true");
     expect(getByRole("checkbox", { name: "Select all" })).toBeTruthy();
-    expect(getByRole("checkbox", { name: `Select ${second.name}` })).toBeTruthy();
 
-    // On: a click toggles the row, Shift still extends, and a double-click opens nothing.
-    fireEvent.click(getByText(second.name));
+    // A checkbox adds its row to the selection.
+    fireEvent.click(getByRole("checkbox", { name: `Select ${second.name}` }));
     expect(onEntryClick).toHaveBeenLastCalledWith(second, { shift: false, meta: true });
-    fireEvent.click(getByText(second.name), { shiftKey: true });
-    expect(onEntryClick).toHaveBeenLastCalledWith(second, { shift: true, meta: false });
-    fireEvent.doubleClick(getByText(second.name));
-    expect(onEntryDoubleClick).not.toHaveBeenCalled();
+
+    // The row itself still clicks and opens as it does without Select.
+    fireEvent.click(getByText(first.name));
+    expect(onEntryClick).toHaveBeenLastCalledWith(first, { shift: false, meta: false });
+    fireEvent.doubleClick(getByText(first.name));
+    expect(onEntryDoubleClick).toHaveBeenCalledWith(first);
 
     fireEvent.click(getByRole("button", { name: "Done" }));
     expect(queryByRole("checkbox", { name: "Select all" })).toBeNull();

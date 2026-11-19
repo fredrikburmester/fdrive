@@ -229,9 +229,8 @@ function itemCountLabel(count: number): string {
  * Rows are quiet until used: hover tints a row, and selection, keyboard focus and a drop target
  * tint it more, never with an outline. On a mouse, each row's "More" button shows on hover, and
  * in tree view a folder's icon turns into its disclosure chevron; on a touch screen they stay
- * visible, with the chevron in a column of its own. Checkboxes show only while the header's
- * Select toggle is on, and a click on a row then adds or removes it instead of replacing the
- * selection.
+ * visible, with the chevron in a column of its own. The checkbox column shows only while the
+ * header's Select toggle is on. Rows keep their usual click behavior either way.
  */
 export function FileList({
   entries,
@@ -551,17 +550,10 @@ export function FileList({
                 onDragLeave={() => handleDragLeave(entry)}
                 onDrop={(event) => handleDrop(event, entry)}
                 onClick={(event) => {
-                  if (!inRow(event)) return;
-                  // While selecting, a click adds or removes the row; Shift still extends.
-                  onEntryClick(
-                    entry,
-                    selecting
-                      ? { shift: event.shiftKey, meta: !event.shiftKey }
-                      : modifiersFrom(event),
-                  );
+                  if (inRow(event)) onEntryClick(entry, modifiersFrom(event));
                 }}
                 onDoubleClick={(event) => {
-                  if (inRow(event) && !selecting) onEntryDoubleClick(entry);
+                  if (inRow(event)) onEntryDoubleClick(entry);
                 }}
                 className={cn(
                   "group/row absolute flex items-center gap-2.5 pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
