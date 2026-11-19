@@ -42,6 +42,16 @@ describe("fileIconKind", () => {
     expect(fileIconKind({ kind: "file", ext: ".ts", mime: null })).toBe("code");
   });
 
+  it("recognizes a PDF by its extension or its mime", () => {
+    expect(fileIconKind({ kind: "file", ext: ".PDF", mime: null })).toBe("pdf");
+    expect(fileIconKind({ kind: "file", ext: "", mime: "application/pdf" })).toBe("pdf");
+  });
+
+  it("recognizes word processor documents", () => {
+    expect(fileIconKind({ kind: "file", ext: ".docx", mime: null })).toBe("document");
+    expect(fileIconKind({ kind: "file", ext: ".pages", mime: null })).toBe("document");
+  });
+
   it("recognizes text extensions", () => {
     expect(fileIconKind({ kind: "file", ext: ".md", mime: null })).toBe("text");
   });

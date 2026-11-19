@@ -6,7 +6,9 @@ import { ChevronRightIcon } from "lucide-react";
 import type { DragEvent, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { TagDots } from "@/components/metadata/tag-dots";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useCoarsePointer } from "@/hooks/use-coarse-pointer";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
@@ -32,24 +34,37 @@ import { tagCheckState as computeTagCheckState } from "@/lib/metadata/tag-set";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { cn } from "@/lib/utils";
 import { createDragImageElement } from "./drag-image";
-import { FileContextMenu, type RowContextAction } from "./file-context-menu";
+import {
+  FileActionsMenu,
+  FileContextMenu,
+  type FileMenuProps,
+  type RowContextAction,
+} from "./file-context-menu";
 import { FileIcon } from "./file-icon";
 
 /** The row height at the default ("comfortable") density. */
 export const FILE_ROW_HEIGHT = ROW_HEIGHTS.comfortable;
 const FILE_LIST_HEADER_HEIGHT = 36;
 
-/** Indent, in pixels, added per tree depth level in tree view. */
-export const TREE_INDENT_PX = 20;
+/** The icon column on a desktop row: as wide as a thumbnail, so names line up either way. */
+const ICON_SLOT_PX = 24;
+/** The space between a desktop row's icon and its name (`gap-2.5`). */
+const ICON_GAP_PX = 10;
+
+/** Indent per tree level on a desktop row: a child's icon sits under its parent's name. */
+export const TREE_INDENT_PX = ICON_SLOT_PX + ICON_GAP_PX;
+/** Indent per tree level on a phone or touch screen, where a chevron column leads each row. */
+const TOUCH_TREE_INDENT_PX = 20;
+
+/** Shown while the row is hovered or the control has keyboard focus. */
+const REVEAL_ON_HOVER = "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100";
 
 const LIST_THUMBNAIL_SIZE = 256;
 
 /**
- * A list row's icon slot: a 24px image thumbnail when `showThumbnail` is true
- * and `wantsThumbnail` accepts the file, falling back to a 24px container holding
- * `FileIcon` if the image fails to load or for non-image entries to preserve layout.
- * On phones (`mobile`) the slot is always a 32px box with a larger icon, next to the
- * row's two lines of text.
+ * A list row's icon: a thumbnail when `showThumbnail` is true and `wantsThumbnail` accepts the
+ * file, else (or once that image fails to load) the entry's colored `FileIcon`. It fills the
+ * row's icon column: 24px on desktop, 32px on phones (`mobile`), next to two lines of text.
  */
 function ListRowIcon({
   entry,
@@ -61,26 +76,15 @@ function ListRowIcon({
   mobile: boolean;
 }) {
   const [errored, setErrored] = useState(false);
-  const icon = (
-    <FileIcon
-      kind={entry.kind}
-      ext={entry.ext}
-      mime={entry.mime}
-      className={cn(mobile && "size-5")}
-    />
-  );
-
-  if (!showThumbnail && !mobile) {
-    return icon;
-  }
 
   if (!showThumbnail || errored || !wantsThumbnail(entry)) {
     return (
-      <div
-        className={cn("flex shrink-0 items-center justify-center", mobile ? "size-8" : "size-6")}
-      >
-        {icon}
-      </div>
+      <FileIcon
+        kind={entry.kind}
+        ext={entry.ext}
+        mime={entry.mime}
+        className={mobile ? "size-5" : "size-[18px]"}
+      />
     );
   }
 
@@ -95,6 +99,27 @@ function ListRowIcon({
       onError={() => setErrored(true)}
     />
   );
+}
+
+/**
+ * The vertical lines that join a tree row to its ancestors, one per level above `depth`, each
+ * under that ancestor's icon. Every row draws its own full-height pieces, so consecutive rows
+ * of one folder join into one line.
+ */
+function TreeGuides({ depth }: { depth: number }) {
+  if (depth === 0) {
+    return null;
+  }
+  return Array.from({ length: depth }, (_, level) => (
+    <span
+      // biome-ignore lint/suspicious/noArrayIndexKey: a level is the line's only identity
+      key={level}
+      aria-hidden="true"
+      data-slot="tree-guide"
+      className="pointer-events-none absolute inset-y-0 w-px bg-border"
+      style={{ left: level * TREE_INDENT_PX + ICON_SLOT_PX / 2 }}
+    />
+  ));
 }
 
 export interface ClickModifierKeys {
@@ -184,12 +209,30 @@ function modifiersFrom(event: ReactMouseEvent): ClickModifierKeys {
   return { shift: event.shiftKey, meta: event.metaKey || event.ctrlKey };
 }
 
+/**
+ * Whether a click on a row really landed in it. React bubbles a portaled overlay's events
+ * through the tree it was rendered from, so a pick in the row's own "More" menu would
+ * otherwise reach the row and select or open it too.
+ */
+function inRow(event: ReactMouseEvent<HTMLElement>): boolean {
+  return event.currentTarget.contains(event.target as Node);
+}
+
 function itemCountLabel(count: number): string {
   return `${count} ${count === 1 ? "item" : "items"}`;
 }
 
-/** A virtualized, sortable-columns list view of a folder's entries. Below `md` the Size and
- * Modified columns fold into a second line under each name, so names get the row's width. */
+/**
+ * A virtualized, sortable-columns list view of a folder's entries. Below `md` the Size and
+ * Modified columns fold into a second line under each name, so names get the row's width.
+ *
+ * Rows are quiet until used: hover tints a row, and selection, keyboard focus and a drop target
+ * tint it more, never with an outline. On a mouse, each row's "More" button shows on hover, and
+ * in tree view a folder's icon turns into its disclosure chevron; on a touch screen they stay
+ * visible, with the chevron in a column of its own. Checkboxes show only while the header's
+ * Select toggle is on, and a click on a row then adds or removes it instead of replacing the
+ * selection.
+ */
 export function FileList({
   entries,
   officeStatus,
@@ -221,6 +264,11 @@ export function FileList({
   density = DEFAULT_LIST_DENSITY,
 }: FileListProps) {
   const mobile = useIsMobile();
+  const touch = useCoarsePointer();
+  const [selecting, setSelecting] = useState(false);
+  const hoverControls = !mobile && !touch;
+  const isTreeRow = treeDepths !== undefined;
+  const treeIndent = hoverControls ? TREE_INDENT_PX : TOUCH_TREE_INDENT_PX;
   const rowHeight = listRowHeight(density, mobile);
   const { formatBytes, formatDate } = useFormatters();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -348,23 +396,46 @@ export function FileList({
        */}
       <div
         data-selection-exclude
-        className="sticky top-0 z-10 flex h-9 items-center gap-3 border-border border-b bg-background/95 px-3 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75"
+        className={cn(
+          "group/row sticky top-0 z-10 flex h-9 items-center gap-2.5 bg-background/95 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75",
+          hoverControls ? "pr-3 pl-5" : "border-border border-b px-3",
+        )}
       >
-        <Checkbox
-          checked={allSelected}
-          indeterminate={someSelected}
-          onCheckedChange={onToggleSelectAll}
-          aria-label={allSelected ? "Deselect all" : "Select all"}
-        />
+        {isTreeRow && !hoverControls && <span className="size-4 shrink-0" />}
+        {selecting && (
+          <Checkbox
+            checked={allSelected}
+            indeterminate={someSelected}
+            onCheckedChange={onToggleSelectAll}
+            aria-label={allSelected ? "Deselect all" : "Select all"}
+          />
+        )}
         {mobile ? (
           <span className="flex-1">{itemCountLabel(entries.length)}</span>
         ) : (
           <>
-            <span className="flex-1">Name</span>
+            <span className="flex-1" style={{ paddingLeft: ICON_SLOT_PX + ICON_GAP_PX }}>
+              Name
+            </span>
             <span className="w-20 text-right">Size</span>
             <span className="w-28">Modified</span>
           </>
         )}
+        {/* Above the rows' More buttons, reaching left into the Modified column's empty end. */}
+        <span className="relative flex size-7 shrink-0 items-center justify-end">
+          <Button
+            variant="ghost"
+            size="xs"
+            aria-pressed={selecting}
+            onClick={() => setSelecting((on) => !on)}
+            className={cn(
+              "absolute right-0 text-muted-foreground",
+              selecting && "font-medium text-primary hover:text-primary",
+            )}
+          >
+            {selecting ? "Done" : "Select"}
+          </Button>
+        </span>
       </div>
       <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -374,14 +445,19 @@ export function FileList({
           }
           const isSelected = selected.has(entry.path);
           const isFocused = focusedPath === entry.path;
-          const isTreeRow = treeDepths !== undefined;
           const depth = treeDepths?.get(entry.path) ?? 0;
           const rowStyle = {
             height: virtualRow.size,
             transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
-            paddingLeft: 12 + depth * TREE_INDENT_PX,
-            paddingRight: 12,
+            // On a mouse the indent goes inside the row, after the checkbox column, so
+            // checkboxes stay in one column and the tree guides line up with the icons.
+            paddingLeft: hoverControls ? 12 : 12 + depth * treeIndent,
           };
+          const indentStyle = hoverControls ? { paddingLeft: depth * treeIndent } : undefined;
+          const iconSlot = cn(
+            "relative flex shrink-0 items-center justify-center",
+            mobile ? "size-8" : "size-6",
+          );
           if (isLink(entry)) {
             // Shown so its name stays visible, and nothing more: no menu, no
             // selection, no drag, nothing to open.
@@ -391,18 +467,27 @@ export function FileList({
                 data-path={entry.path}
                 aria-disabled="true"
                 title={LINK_TITLE}
-                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-muted-foreground text-sm"
+                className={cn(
+                  "absolute flex items-center gap-2.5 pr-1 text-muted-foreground text-sm",
+                  hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
+                )}
                 style={rowStyle}
               >
-                {isTreeRow && <span className="size-4 shrink-0" />}
-                <div className="flex min-w-0 flex-1 items-center gap-3 opacity-60">
-                  <span className="size-4 shrink-0" />
-                  <ListRowIcon
-                    key={entry.path}
-                    entry={entry}
-                    showThumbnail={showThumbnails}
-                    mobile={mobile}
-                  />
+                {isTreeRow && !hoverControls && <span className="size-4 shrink-0" />}
+                {selecting && <span className="size-4 shrink-0" />}
+                <div
+                  className="relative flex min-w-0 flex-1 items-center gap-2.5 self-stretch opacity-60"
+                  style={indentStyle}
+                >
+                  {hoverControls && <TreeGuides depth={depth} />}
+                  <span className={iconSlot}>
+                    <ListRowIcon
+                      key={entry.path}
+                      entry={entry}
+                      showThumbnail={showThumbnails}
+                      mobile={mobile}
+                    />
+                  </span>
                   {mobile ? (
                     <RowText name={entry.name} detail={formatDate(new Date(entry.modifiedAt))} />
                   ) : (
@@ -415,39 +500,47 @@ export function FileList({
                     </>
                   )}
                 </div>
+                <span className="size-7 shrink-0" />
               </div>
             );
           }
-          const isExpandedFolder = entry.kind === "dir" && (treeExpanded?.has(entry.path) ?? false);
+          const isFolder = entry.kind === "dir";
+          const isExpandedFolder = isFolder && (treeExpanded?.has(entry.path) ?? false);
           const group = contextEntries(entry, entries, selected);
           const groupPaths = group.map((candidate) => candidate.path);
           const sharedBy = sharedFolderCaption(entry.path, received);
+          const menu: FileMenuProps = {
+            officeStatus,
+            entry,
+            onAction: onContextAction,
+            selection: selectionOf(group),
+            hideMoveCopy,
+            showReveal,
+            hideArchive,
+            showOrganize,
+            showChat,
+            tags,
+            tagCheckState: (tagId) =>
+              computeTagCheckState(
+                group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
+                tagId,
+              ),
+            onToggleTag: (tagId, checked) => onToggleTag(groupPaths, tagId, checked),
+            onOpenTagsEditor: () => onOpenTagsEditor(group),
+            favorite: groupFavorite(group),
+            onToggleFavorite: (next) => onToggleFavorite(groupPaths, next),
+            received,
+          };
+          const expandLabel = isExpandedFolder ? `Collapse ${entry.name}` : `Expand ${entry.name}`;
+          const toggleExpanded = (event: ReactMouseEvent) => {
+            event.stopPropagation();
+            onToggleTreeExpand?.(entry);
+          };
+          // On a mouse, a folder's chevron takes its icon's place while the row is hovered.
+          const chevronOverIcon = isTreeRow && isFolder && hoverControls;
 
           return (
-            <FileContextMenu
-              officeStatus={officeStatus}
-              key={entry.path}
-              entry={entry}
-              onAction={onContextAction}
-              selection={selectionOf(group)}
-              hideMoveCopy={hideMoveCopy}
-              showReveal={showReveal}
-              hideArchive={hideArchive}
-              showOrganize={showOrganize}
-              showChat={showChat}
-              tags={tags}
-              tagCheckState={(tagId) =>
-                computeTagCheckState(
-                  group.map((candidate) => ({ tagIds: candidate.meta?.tagIds ?? [] })),
-                  tagId,
-                )
-              }
-              onToggleTag={(tagId, checked) => onToggleTag(groupPaths, tagId, checked)}
-              onOpenTagsEditor={() => onOpenTagsEditor(group)}
-              favorite={groupFavorite(group)}
-              onToggleFavorite={(next) => onToggleFavorite(groupPaths, next)}
-              received={received}
-            >
+            <FileContextMenu key={entry.path} {...menu}>
               {/** biome-ignore lint/a11y/noStaticElementInteractions: this row supports drag-and-drop and click selection; keyboard activation is handled by the listing container's roving onKeyDown */}
               {/** biome-ignore lint/a11y/useKeyWithClickEvents: same as above */}
               <div
@@ -457,24 +550,35 @@ export function FileList({
                 onDragOver={(event) => handleDragOver(event, entry)}
                 onDragLeave={() => handleDragLeave(entry)}
                 onDrop={(event) => handleDrop(event, entry)}
-                onClick={(event) => onEntryClick(entry, modifiersFrom(event))}
-                onDoubleClick={() => onEntryDoubleClick(entry)}
-                className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-sm hover:bg-muted/60 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-inset data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring data-[selected=true]:bg-primary/10"
+                onClick={(event) => {
+                  if (!inRow(event)) return;
+                  // While selecting, a click adds or removes the row; Shift still extends.
+                  onEntryClick(
+                    entry,
+                    selecting
+                      ? { shift: event.shiftKey, meta: !event.shiftKey }
+                      : modifiersFrom(event),
+                  );
+                }}
+                onDoubleClick={(event) => {
+                  if (inRow(event) && !selecting) onEntryDoubleClick(entry);
+                }}
+                className={cn(
+                  "group/row absolute flex items-center gap-2.5 pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
+                  hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
+                )}
                 style={rowStyle}
                 data-focused={isFocused}
               >
                 {isTreeRow &&
-                  (entry.kind === "dir" ? (
+                  !hoverControls &&
+                  (isFolder ? (
                     <button
                       type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onToggleTreeExpand?.(entry);
-                      }}
+                      onClick={toggleExpanded}
                       onDoubleClick={(event) => event.stopPropagation()}
-                      aria-label={
-                        isExpandedFolder ? `Collapse ${entry.name}` : `Expand ${entry.name}`
-                      }
+                      aria-label={expandLabel}
+                      aria-expanded={isExpandedFolder}
                       className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
                     >
                       <ChevronRightIcon
@@ -487,20 +591,7 @@ export function FileList({
                   ) : (
                     <span className="size-4 shrink-0" />
                   ))}
-                {/**
-                 * Only this inner wrapper (the checkbox through the date
-                 * column) is `draggable`, not the row itself: the row's own
-                 * padding and this wrapper's leading gap stay plain, un-
-                 * draggable background, so the browser never mistakes a
-                 * plain click there for the start of a native HTML5 drag.
-                 */}
-                {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the row's drag handle; click/selection semantics live on the row above it */}
-                <div
-                  draggable
-                  onDragStart={(event) => handleDragStart(event, entry)}
-                  onDragEnd={handleDragEnd}
-                  className="flex min-w-0 flex-1 items-center gap-3"
-                >
+                {selecting && (
                   <Checkbox
                     checked={isSelected}
                     onClick={(event) => event.stopPropagation()}
@@ -508,18 +599,62 @@ export function FileList({
                     onCheckedChange={() => onEntryClick(entry, { shift: false, meta: true })}
                     aria-label={`Select ${entry.name}`}
                   />
-                  <ListRowIcon
-                    key={entry.path}
-                    entry={entry}
-                    showThumbnail={showThumbnails}
-                    mobile={mobile}
-                  />
+                )}
+                {/**
+                 * Only this inner wrapper (the icon through the date column) is
+                 * `draggable`, not the row itself: the row's own padding and
+                 * the gaps around its checkbox and "More" button stay plain,
+                 * un-draggable background, so the browser never mistakes a
+                 * plain click there for the start of a native HTML5 drag.
+                 */}
+                {/** biome-ignore lint/a11y/noStaticElementInteractions: this is the row's drag handle; click/selection semantics live on the row above it */}
+                <div
+                  draggable
+                  onDragStart={(event) => handleDragStart(event, entry)}
+                  onDragEnd={handleDragEnd}
+                  className="relative flex min-w-0 flex-1 items-center gap-2.5 self-stretch"
+                  style={indentStyle}
+                >
+                  {hoverControls && <TreeGuides depth={depth} />}
+                  <span className={iconSlot}>
+                    <span
+                      className={cn(
+                        "flex items-center justify-center",
+                        chevronOverIcon && "group-hover/row:opacity-0",
+                      )}
+                    >
+                      <ListRowIcon
+                        key={entry.path}
+                        entry={entry}
+                        showThumbnail={showThumbnails}
+                        mobile={mobile}
+                      />
+                    </span>
+                    {chevronOverIcon && (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        onClick={toggleExpanded}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                        aria-label={expandLabel}
+                        aria-expanded={isExpandedFolder}
+                        className="absolute inset-0 flex items-center justify-center rounded-sm text-muted-foreground opacity-0 hover:bg-foreground/10 hover:text-foreground group-hover/row:opacity-100"
+                      >
+                        <ChevronRightIcon
+                          className={cn(
+                            "size-4 transition-transform",
+                            isExpandedFolder && "rotate-90",
+                          )}
+                        />
+                      </button>
+                    )}
+                  </span>
                   {mobile ? (
                     <>
                       <RowText
                         name={entry.name}
                         detail={[
-                          entry.kind === "dir" ? null : formatBytes(entry.size),
+                          isFolder ? null : formatBytes(entry.size),
                           formatDate(new Date(entry.modifiedAt)),
                           sharedBy,
                         ]
@@ -528,7 +663,7 @@ export function FileList({
                       >
                         <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
                       </RowText>
-                      {entry.kind === "dir" && !isTreeRow && (
+                      {isFolder && !isTreeRow && (
                         <ChevronRightIcon
                           aria-hidden="true"
                           className="size-4 shrink-0 text-muted-foreground"
@@ -542,15 +677,22 @@ export function FileList({
                         <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
                       )}
                       <TagDots tags={tags} tagIds={entry.meta?.tagIds ?? []} />
-                      <span className="w-20 shrink-0 text-right text-muted-foreground text-xs">
-                        {entry.kind === "dir" ? "--" : formatBytes(entry.size)}
+                      <span className="w-20 shrink-0 text-right text-muted-foreground text-xs group-data-[selected=true]/row:text-accent-foreground/75">
+                        {isFolder ? "--" : formatBytes(entry.size)}
                       </span>
-                      <span className="w-28 shrink-0 text-muted-foreground text-xs">
+                      <span className="w-28 shrink-0 text-muted-foreground text-xs group-data-[selected=true]/row:text-accent-foreground/75">
                         {formatDate(new Date(entry.modifiedAt))}
                       </span>
                     </>
                   )}
                 </div>
+                <FileActionsMenu
+                  {...menu}
+                  className={cn(
+                    "shrink-0 text-muted-foreground hover:text-foreground group-data-[selected=true]/row:text-accent-foreground",
+                    hoverControls && `${REVEAL_ON_HOVER} data-popup-open:opacity-100`,
+                  )}
+                />
               </div>
             </FileContextMenu>
           );

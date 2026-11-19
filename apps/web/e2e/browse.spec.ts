@@ -195,6 +195,7 @@ test("a symbolic link left by a writer outside fdrive shows as a quiet row nothi
     await link.click({ button: "right" });
     await expect(page.getByRole("menuitem")).toHaveCount(0);
     // Select all takes every entry but the link.
+    await listing(page).getByRole("button", { name: "Select", exact: true }).click();
     await page.getByRole("checkbox", { name: "Select all", exact: true }).click();
     await expect(listing(page).locator('[data-selected="true"]')).toHaveCount(1);
     await expect(listing(page).locator(`[data-path="/${folder}/kept.txt"]`)).toHaveAttribute(

@@ -5,6 +5,7 @@ import { detectArchiveKind } from "@fdrive/core";
 import {
   CopyIcon,
   DownloadIcon,
+  EllipsisIcon,
   ExternalLinkIcon,
   FileArchiveIcon,
   FilesIcon,
@@ -22,7 +23,8 @@ import {
   Trash2Icon,
   UsersIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ComponentType, MouseEvent, ReactNode } from "react";
+import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -34,6 +36,17 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { type BrowserSelection, selectionOf } from "@/lib/files/selection";
 import { entryRestrictions } from "@/lib/grants/paths";
 import { tagDotClassName } from "@/lib/metadata/colors";
@@ -62,10 +75,10 @@ export type RowContextAction =
   | "extractHere"
   | "extractTo";
 
-export interface FileContextMenuProps {
+/** What a file's menu shows, wherever it opens: on right-click or from its "More" button. */
+export interface FileMenuProps {
   officeStatus?: OfficeStatusResponse | undefined;
   entry: FsEntry;
-  children: ReactNode;
   onAction: (action: RowContextAction, entry: FsEntry) => void;
   /**
    * How many files and folders this menu's actions would apply to: the
@@ -122,16 +135,106 @@ export interface FileContextMenuProps {
   onToggleFavorite?: (next: boolean) => void;
 }
 
+export interface FileContextMenuProps extends FileMenuProps {
+  children: ReactNode;
+}
+
+/**
+ * The menu parts a file's items are built from, so the right-click menu and the "More"
+ * dropdown list the same items in the same order.
+ */
+interface MenuKit {
+  Item: ComponentType<{ onClick?: () => void; disabled?: boolean; children: ReactNode }>;
+  CheckboxItem: ComponentType<{
+    checked: boolean;
+    onCheckedChange: (checked: boolean) => void;
+    children: ReactNode;
+  }>;
+  Separator: ComponentType;
+  Sub: ComponentType<{ children: ReactNode }>;
+  SubTrigger: ComponentType<{ children: ReactNode }>;
+  SubContent: ComponentType<{ className?: string; children: ReactNode }>;
+}
+
+const CONTEXT_MENU_KIT: MenuKit = {
+  Item: ContextMenuItem,
+  CheckboxItem: ContextMenuCheckboxItem,
+  Separator: ContextMenuSeparator,
+  Sub: ContextMenuSub,
+  SubTrigger: ContextMenuSubTrigger,
+  SubContent: ContextMenuSubContent,
+};
+
+const DROPDOWN_MENU_KIT: MenuKit = {
+  Item: DropdownMenuItem,
+  CheckboxItem: DropdownMenuCheckboxItem,
+  Separator: DropdownMenuSeparator,
+  Sub: DropdownMenuSub,
+  SubTrigger: DropdownMenuSubTrigger,
+  SubContent: DropdownMenuSubContent,
+};
+
 const DEFAULT_TAGS: readonly Tag[] = [];
 const DEFAULT_RECEIVED: readonly ReceivedGrant[] = [];
 const DEFAULT_TAG_CHECK_STATE = (): TagCheckState => "unchecked";
 const DEFAULT_NO_OP = () => {};
 
 /** The right-click menu shared by list rows and grid tiles. */
-export function FileContextMenu({
+export function FileContextMenu({ children, ...menu }: FileContextMenuProps) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        <FileMenuItems kit={CONTEXT_MENU_KIT} {...menu} />
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+function stopPropagation(event: MouseEvent) {
+  event.stopPropagation();
+}
+
+/**
+ * A row's "More" button: the same menu as a right-click, for a pointer without a right
+ * button and for anyone who looks for it. Clicking it never selects or opens the row.
+ */
+export function FileActionsMenu({ className, ...menu }: FileMenuProps & { className?: string }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`More actions for ${menu.entry.name}`}
+            className={className}
+            onClick={stopPropagation}
+            onDoubleClick={stopPropagation}
+          />
+        }
+      >
+        <EllipsisIcon />
+      </DropdownMenuTrigger>
+      {/* A right-click in this menu must not reach the row's own context menu around it. */}
+      <DropdownMenuContent
+        align="end"
+        className="min-w-44"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
+      >
+        <FileMenuItems kit={DROPDOWN_MENU_KIT} {...menu} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function FileMenuItems({
+  kit,
   entry,
   officeStatus,
-  children,
   onAction,
   selection,
   received = DEFAULT_RECEIVED,
@@ -146,7 +249,7 @@ export function FileContextMenu({
   onOpenTagsEditor = DEFAULT_NO_OP,
   favorite = false,
   onToggleFavorite = DEFAULT_NO_OP,
-}: FileContextMenuProps) {
+}: FileMenuProps & { kit: MenuKit }) {
   const group = selection ?? selectionOf([entry]);
   const selectionCount = group.files + group.folders;
   const includesFolder = group.folders > 0;
@@ -156,167 +259,163 @@ export function FileContextMenu({
   const restrictions = entryRestrictions(entry, received);
   const locked = restrictions.locked !== null;
 
+  const { Item, CheckboxItem, Separator, Sub, SubTrigger, SubContent } = kit;
+
   return (
-    <ContextMenu>
-      <ContextMenuTrigger>{children}</ContextMenuTrigger>
-      <ContextMenuContent>
-        {restrictions.publicLink && (
-          <ContextMenuItem onClick={() => onAction("share", entry)}>
-            <Link2Icon />
-            Share
-          </ContextMenuItem>
-        )}
-        {restrictions.shareWithPeople && !isMultiSelection && (
-          <ContextMenuItem onClick={() => onAction("shareWithPeople", entry)}>
-            <UsersIcon />
-            Share with people
-          </ContextMenuItem>
-        )}
-        <ContextMenuItem onClick={() => onAction("open", entry)}>
+    <>
+      {restrictions.publicLink && (
+        <Item onClick={() => onAction("share", entry)}>
+          <Link2Icon />
+          Share
+        </Item>
+      )}
+      {restrictions.shareWithPeople && !isMultiSelection && (
+        <Item onClick={() => onAction("shareWithPeople", entry)}>
+          <UsersIcon />
+          Share with people
+        </Item>
+      )}
+      <Item onClick={() => onAction("open", entry)}>
+        <ExternalLinkIcon />
+        Open
+      </Item>
+      {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+        <Item key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
           <ExternalLinkIcon />
-          Open
-        </ContextMenuItem>
-        {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
-          <ContextMenuItem key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
-            <ExternalLinkIcon />
-            {OFFICE_MODE_LABELS[mode]}
-          </ContextMenuItem>
-        ))}
-        {showReveal && (
-          <ContextMenuItem onClick={() => onAction("revealInFolder", entry)}>
-            <FolderSearchIcon />
-            Reveal in folder
-          </ContextMenuItem>
-        )}
-        <ContextMenuSeparator />
-        {!locked && (
-          <>
-            <ContextMenuItem
-              disabled={isMultiSelection}
-              onClick={() => onAction("duplicate", entry)}
-            >
-              <CopyIcon />
-              Duplicate
-            </ContextMenuItem>
-            <ContextMenuItem onClick={() => onAction("rename", entry)}>
-              <PencilIcon />
-              Rename
-            </ContextMenuItem>
-          </>
-        )}
-        {!hideMoveCopy && (
-          <>
-            {!locked && (
-              <ContextMenuItem onClick={() => onAction("moveTo", entry)}>
-                <FolderInputIcon />
-                Move to
-              </ContextMenuItem>
-            )}
-            <ContextMenuItem onClick={() => onAction("copyTo", entry)}>
-              <FilesIcon />
-              Copy to
-            </ContextMenuItem>
-            {showOrganize && (
-              <ContextMenuItem onClick={() => onAction("organize", entry)}>
-                <SparklesIcon />
-                Organize
-              </ContextMenuItem>
-            )}
-            {showChat && (
-              <ContextMenuItem onClick={() => onAction("addToChat", entry)}>
-                <MessageSquarePlusIcon />
-                Add to chat
-              </ContextMenuItem>
-            )}
-          </>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <TagIcon />
-            Tags
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent className="w-52">
-            {tags.length === 0 ? (
-              <ContextMenuItem disabled>No tags yet</ContextMenuItem>
-            ) : (
-              tags.map((tag) => {
-                const state = tagCheckState(tag.id);
-                return (
-                  <ContextMenuCheckboxItem
-                    key={tag.id}
-                    checked={state === "checked"}
-                    onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
-                  >
-                    <span
-                      className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
-                    />
-                    <span className="flex-1 truncate">{tag.name}</span>
-                    {state === "indeterminate" && (
-                      <span className="text-[10px] text-muted-foreground">mixed</span>
-                    )}
-                  </ContextMenuCheckboxItem>
-                );
-              })
-            )}
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={onOpenTagsEditor}>
-              <PencilIcon />
-              Edit tags
-            </ContextMenuItem>
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-        <ContextMenuItem onClick={() => onToggleFavorite(!favorite)}>
-          {favorite ? <StarOffIcon /> : <StarIcon />}
-          {favorite ? "Remove from Favorites" : "Add to Favorites"}
-        </ContextMenuItem>
-        {!hideArchive && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onAction("compress", entry)}>
-              <FileArchiveIcon />
-              Compress
-            </ContextMenuItem>
-            {canExtract && (
-              <>
-                {!locked && (
-                  <ContextMenuItem onClick={() => onAction("extractHere", entry)}>
-                    <PackageOpenIcon />
-                    Extract here
-                  </ContextMenuItem>
-                )}
-                <ContextMenuItem onClick={() => onAction("extractTo", entry)}>
+          {OFFICE_MODE_LABELS[mode]}
+        </Item>
+      ))}
+      {showReveal && (
+        <Item onClick={() => onAction("revealInFolder", entry)}>
+          <FolderSearchIcon />
+          Reveal in folder
+        </Item>
+      )}
+      <Separator />
+      {!locked && (
+        <>
+          <Item disabled={isMultiSelection} onClick={() => onAction("duplicate", entry)}>
+            <CopyIcon />
+            Duplicate
+          </Item>
+          <Item onClick={() => onAction("rename", entry)}>
+            <PencilIcon />
+            Rename
+          </Item>
+        </>
+      )}
+      {!hideMoveCopy && (
+        <>
+          {!locked && (
+            <Item onClick={() => onAction("moveTo", entry)}>
+              <FolderInputIcon />
+              Move to
+            </Item>
+          )}
+          <Item onClick={() => onAction("copyTo", entry)}>
+            <FilesIcon />
+            Copy to
+          </Item>
+          {showOrganize && (
+            <Item onClick={() => onAction("organize", entry)}>
+              <SparklesIcon />
+              Organize
+            </Item>
+          )}
+          {showChat && (
+            <Item onClick={() => onAction("addToChat", entry)}>
+              <MessageSquarePlusIcon />
+              Add to chat
+            </Item>
+          )}
+        </>
+      )}
+      <Separator />
+      <Sub>
+        <SubTrigger>
+          <TagIcon />
+          Tags
+        </SubTrigger>
+        <SubContent className="w-52">
+          {tags.length === 0 ? (
+            <Item disabled>No tags yet</Item>
+          ) : (
+            tags.map((tag) => {
+              const state = tagCheckState(tag.id);
+              return (
+                <CheckboxItem
+                  key={tag.id}
+                  checked={state === "checked"}
+                  onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
+                >
+                  <span
+                    className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
+                  />
+                  <span className="flex-1 truncate">{tag.name}</span>
+                  {state === "indeterminate" && (
+                    <span className="text-[10px] text-muted-foreground">mixed</span>
+                  )}
+                </CheckboxItem>
+              );
+            })
+          )}
+          <Separator />
+          <Item onClick={onOpenTagsEditor}>
+            <PencilIcon />
+            Edit tags
+          </Item>
+        </SubContent>
+      </Sub>
+      <Item onClick={() => onToggleFavorite(!favorite)}>
+        {favorite ? <StarOffIcon /> : <StarIcon />}
+        {favorite ? "Remove from Favorites" : "Add to Favorites"}
+      </Item>
+      {!hideArchive && (
+        <>
+          <Separator />
+          <Item onClick={() => onAction("compress", entry)}>
+            <FileArchiveIcon />
+            Compress
+          </Item>
+          {canExtract && (
+            <>
+              {!locked && (
+                <Item onClick={() => onAction("extractHere", entry)}>
                   <PackageOpenIcon />
-                  Extract to
-                </ContextMenuItem>
-              </>
-            )}
-          </>
-        )}
-        <ContextMenuSeparator />
-        <ContextMenuItem onClick={() => onAction("download", entry)}>
-          <DownloadIcon />
-          {includesFolder ? "Download as zip" : "Download"}
-        </ContextMenuItem>
-        {restrictions.leave !== null && !isMultiSelection && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onAction("leave", entry)}>
-              <LogOutIcon />
-              Leave
-            </ContextMenuItem>
-          </>
-        )}
-        {!locked && (
-          <>
-            <ContextMenuSeparator />
-            <ContextMenuItem onClick={() => onAction("delete", entry)}>
-              <Trash2Icon />
-              Move to Trash
-            </ContextMenuItem>
-          </>
-        )}
-      </ContextMenuContent>
-    </ContextMenu>
+                  Extract here
+                </Item>
+              )}
+              <Item onClick={() => onAction("extractTo", entry)}>
+                <PackageOpenIcon />
+                Extract to
+              </Item>
+            </>
+          )}
+        </>
+      )}
+      <Separator />
+      <Item onClick={() => onAction("download", entry)}>
+        <DownloadIcon />
+        {includesFolder ? "Download as zip" : "Download"}
+      </Item>
+      {restrictions.leave !== null && !isMultiSelection && (
+        <>
+          <Separator />
+          <Item onClick={() => onAction("leave", entry)}>
+            <LogOutIcon />
+            Leave
+          </Item>
+        </>
+      )}
+      {!locked && (
+        <>
+          <Separator />
+          <Item onClick={() => onAction("delete", entry)}>
+            <Trash2Icon />
+            Move to Trash
+          </Item>
+        </>
+      )}
+    </>
   );
 }

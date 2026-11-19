@@ -27,9 +27,11 @@ test("the header checkbox selects and deselects every row, and shows indetermina
   await createFolder(page, folderB);
   await expect(listing(page).getByText(folderB, { exact: true })).toBeVisible();
 
-  // The header checkbox is the first one in DOM order (the sticky header
-  // row is rendered before any entry row), so this stays stable across its
-  // "Select all"/"Deselect all" aria-label changes.
+  // Checkboxes show once Select is on. The header checkbox is the first one in
+  // DOM order (the sticky header row is rendered before any entry row), so
+  // this stays stable across its "Select all"/"Deselect all" aria-label changes.
+  await expect(listing(page).locator('[data-slot="checkbox"]')).toHaveCount(0);
+  await listing(page).getByRole("button", { name: "Select", exact: true }).click();
   const headerCheckbox = listing(page).locator('[data-slot="checkbox"]').first();
 
   await page.getByRole("button", { name: "Clear selection" }).click();

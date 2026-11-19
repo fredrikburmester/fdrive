@@ -230,18 +230,20 @@ worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
   Image similarity by perceptual hash is not the shipped text-to-image search feature.
 - Folder view mode and sort are pinned per identity/path in `app.folder_views`, with no
   inheritance and independently of each other (`mode` is null for a sort-only pin; a pin with
-  neither part is deleted). `fdrive.view` and `fdrive.sort` remain the browser defaults.
-  Virtual listings use those defaults; moves/deletes update pins.
+  neither part is deleted). `fdrive.view` and `fdrive.sort` remain the browser defaults; an
+  unset view default is the tree. Virtual listings use those defaults; moves/deletes update pins.
 - Browser preferences live under `fdrive.*` localStorage keys, are read through
   `useSyncExternalStore` hooks so every mounted consumer and other tabs update together, and
   are set on the Account page or in the View menu: row click (`fdrive.list.rowClick`: select,
-  toggle selection, highlight or open; highlight moves the focus ring and range anchor without
-  changing the selection; modified clicks, Enter and double-click keep their meaning), list
+  toggle selection, highlight or open; highlight moves the focused row's tint and range anchor
+  without changing the selection; modified clicks, Enter and double-click keep their meaning), list
   density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
   The desktop sidebar's width (`fdrive.sidebar.width`) is one of them, set by dragging the
-  sidebar's edge.
+  sidebar's edge. The listing's tree view and the sidebar's folder tree remember their open
+  folders apart (`fdrive.list.tree` and `fdrive.sidebar.tree`), and only the user opens a
+  sidebar folder: navigating never expands it.
 - The AI chat is a bubble in the live activity dock's corner that opens a floating panel above
   it, below the activity panel; on narrow screens the panel is a sheet. It is mounted in the
   shell layout, not inside the file browser, so it stays open between folders, and it renders

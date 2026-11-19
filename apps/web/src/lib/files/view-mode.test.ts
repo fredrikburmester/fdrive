@@ -13,8 +13,14 @@ function memoryStorage(initial: Record<string, string> = {}): StorageLike {
 }
 
 describe("readViewMode", () => {
-  it("defaults to list", () => {
-    expect(readViewMode(memoryStorage())).toBe(DEFAULT_VIEW_MODE);
+  it("defaults to the tree", () => {
+    expect(DEFAULT_VIEW_MODE).toBe("tree");
+    expect(readViewMode(memoryStorage())).toBe("tree");
+  });
+
+  it("returns a previously stored list mode", () => {
+    const storage = memoryStorage({ "fdrive.view": JSON.stringify("list") });
+    expect(readViewMode(storage)).toBe("list");
   });
 
   it("returns a previously stored grid mode", () => {

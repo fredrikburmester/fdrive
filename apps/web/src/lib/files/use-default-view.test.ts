@@ -20,7 +20,7 @@ it("preserves the existing key and updates mounted consumers together", () => {
 
 it("observes other-tab storage changes and handles missing or corrupt values", () => {
   const { result } = renderHook(useDefaultView);
-  expect(result.current[0]).toBe("list");
+  expect(result.current[0]).toBe("tree");
   act(() => {
     localStorage.setItem("fdrive.view", '"grid"');
     window.dispatchEvent(new StorageEvent("storage", { key: "fdrive.view" }));
@@ -30,9 +30,9 @@ it("observes other-tab storage changes and handles missing or corrupt values", (
     localStorage.setItem("fdrive.view", '"invalid"');
     window.dispatchEvent(new StorageEvent("storage"));
   });
-  expect(result.current[0]).toBe("list");
-  act(() => setDefaultView("tree"));
   expect(result.current[0]).toBe("tree");
+  act(() => setDefaultView("list"));
+  expect(result.current[0]).toBe("list");
 });
 
 it("renders the default on the server, where storage does not exist", async () => {
@@ -42,5 +42,5 @@ it("renders the default on the server, where storage does not exist", async () =
     const [value] = useDefaultView();
     return createElement("span", null, value);
   }
-  expect(renderToString(createElement(Probe))).toBe("<span>list</span>");
+  expect(renderToString(createElement(Probe))).toBe("<span>tree</span>");
 });

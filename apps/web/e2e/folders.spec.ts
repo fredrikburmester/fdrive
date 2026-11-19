@@ -104,9 +104,7 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
   await listing(page).getByText(folderA, { exact: true }).click();
   await page.keyboard.press(`${PRIMARY_MODIFIER}+a`);
 
-  // Both rows plus the header "select all" checkbox (which reflects every
-  // row being selected) read as checked.
-  await expect(listing(page).getByRole("checkbox", { checked: true })).toHaveCount(3);
+  await expect(listing(page).locator('[data-selected="true"]')).toHaveCount(2);
 
   // Both folders are still multi-selected here, so a single Delete (right-
   // clicking either row acts on the whole selection, not just that row)
@@ -119,6 +117,7 @@ test("keyboard navigation: arrow down moves focus, Enter opens a folder, and sel
 
 test("select-all checkbox keeps its native Space key behavior", async ({ page }) => {
   await page.goto("/files/docs");
+  await listing(page).getByRole("button", { name: "Select", exact: true }).click();
   const checkbox = listing(page).getByRole("checkbox", { name: "Select all", exact: true });
   await checkbox.focus();
   await page.keyboard.press("Space");

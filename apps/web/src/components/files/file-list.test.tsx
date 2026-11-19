@@ -6,8 +6,9 @@ import { FileList } from "./file-list";
 
 const mockScrollToIndex = vi.fn();
 
-const viewport = vi.hoisted(() => ({ mobile: false }));
+const viewport = vi.hoisted(() => ({ mobile: false, touch: false }));
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => viewport.mobile }));
+vi.mock("@/hooks/use-coarse-pointer", () => ({ useCoarsePointer: () => viewport.touch }));
 
 vi.mock("@tanstack/react-virtual", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tanstack/react-virtual")>();
@@ -76,6 +77,7 @@ describe("FileList", () => {
     cleanup();
     offsetHeight.mockRestore();
     viewport.mobile = false;
+    viewport.touch = false;
   });
 
   it("selects nothing when a pointer drags across several rows", () => {
@@ -160,8 +162,9 @@ describe("FileList", () => {
   it("does not clear the selection for a click on the header's own select-all checkbox", () => {
     const onClearSelection = vi.fn();
     const onToggleSelectAll = vi.fn();
-    const { getByLabelText } = renderList({ onClearSelection, onToggleSelectAll });
+    const { getByLabelText, getByRole } = renderList({ onClearSelection, onToggleSelectAll });
 
+    fireEvent.click(getByRole("button", { name: "Select" }));
     fireEvent.click(getByLabelText("Select all"));
 
     expect(onClearSelection).not.toHaveBeenCalled();
@@ -321,14 +324,151 @@ describe("FileList", () => {
     expect((await findAllByRole("menuitem")).length).toBeGreaterThan(0);
   });
 
-  it("renders standard FileIcon directly when showThumbnails is false", () => {
+  it("keeps the colored kind icon in the 24px column when showThumbnails is false", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: false });
 
     expect(container.querySelector("img")).toBeNull();
-    expect(container.querySelector(".size-6")).toBeNull();
-    expect(container.querySelector("svg")).not.toBeNull();
+    const icon = container.querySelector('.size-6 svg[data-icon-kind="image"]');
+    expect(icon?.getAttribute("class")).toContain("text-tag-purple");
   });
+
+  describe("in tree view", () => {
+    const folder = makeEntry("Photos", { kind: "dir" });
+    const file = makeEntry("notes.txt", { ext: ".txt" });
+
+    it("turns a folder's icon into a chevron that toggles it without selecting the row", () => {
+      const onToggleTreeExpand = vi.fn();
+      const onEntryClick = vi.fn();
+      const { getByRole, queryByRole, rerender } = renderList({
+        entries: [folder, file],
+        treeDepths: new Map(),
+        treeExpanded: new Set(),
+        onToggleTreeExpand,
+        onEntryClick,
+      });
+
+      const chevron = getByRole("button", { name: "Expand Photos" });
+      expect(chevron.getAttribute("aria-expanded")).toBe("false");
+      // It shares the icon's 24px column instead of adding a column of its own.
+      expect(chevron.parentElement?.querySelector('svg[data-icon-kind="folder"]')).not.toBeNull();
+      expect(queryByRole("button", { name: "Expand notes.txt" })).toBeNull();
+
+      fireEvent.click(chevron);
+      expect(onToggleTreeExpand).toHaveBeenCalledWith(folder);
+      expect(onEntryClick).not.toHaveBeenCalled();
+
+      rerender(
+        <FileList
+          entries={[folder, file]}
+          selected={new Set()}
+          focusedPath={null}
+          onEntryClick={onEntryClick}
+          onEntryDoubleClick={noop}
+          onContextAction={noop}
+          getDragPaths={() => []}
+          onInternalDrop={noop}
+          onToggleSelectAll={noop}
+          onClearSelection={noop}
+          treeDepths={new Map()}
+          treeExpanded={new Set([folder.path])}
+          onToggleTreeExpand={onToggleTreeExpand}
+        />,
+      );
+      expect(getByRole("button", { name: "Collapse Photos" }).getAttribute("aria-expanded")).toBe(
+        "true",
+      );
+    });
+
+    it("joins each child to its folders with one guide line per level", () => {
+      const entries = [
+        makeEntry("a", { kind: "dir" }),
+        makeEntry("b", { path: "/a/b", kind: "dir" }),
+        makeEntry("c.txt", { path: "/a/b/c.txt" }),
+      ];
+      const { container } = renderList({
+        entries,
+        treeDepths: new Map([
+          ["/a", 0],
+          ["/a/b", 1],
+          ["/a/b/c.txt", 2],
+        ]),
+        treeExpanded: new Set(["/a", "/a/b"]),
+      });
+      const guides = (path: string) =>
+        container.querySelectorAll(`[data-path="${path}"] [data-slot="tree-guide"]`).length;
+
+      expect([guides("/a"), guides("/a/b"), guides("/a/b/c.txt")]).toEqual([0, 1, 2]);
+    });
+
+    it("on a touch screen, gives the chevron a column of its own and keeps More visible", () => {
+      viewport.touch = true;
+      const { getByRole, container } = renderList({
+        entries: [folder, file],
+        treeDepths: new Map(),
+        treeExpanded: new Set(),
+      });
+
+      const chevron = getByRole("button", { name: "Expand Photos" });
+      expect(chevron.parentElement?.getAttribute("data-path")).toBe("/Photos");
+      expect(getByRole("button", { name: "More actions for Photos" }).className).not.toContain(
+        "opacity-0",
+      );
+      expect(container.querySelector('[data-slot="tree-guide"]')).toBeNull();
+    });
+  });
+
+  it("opens a row's menu from its More button, without selecting the row", async () => {
+    const onEntryClick = vi.fn();
+    const onContextAction = vi.fn();
+    const entry = ENTRIES[1];
+    if (entry === undefined) throw new Error("missing entry fixture");
+    const { getByRole, findByRole } = renderList({ onEntryClick, onContextAction });
+
+    const more = getByRole("button", { name: `More actions for ${entry.name}` });
+    expect(more.className).toContain("opacity-0");
+    fireEvent.click(more);
+    fireEvent.click(await findByRole("menuitem", { name: "Rename" }));
+
+    expect(onContextAction).toHaveBeenCalledWith("rename", entry);
+    expect(onEntryClick).not.toHaveBeenCalled();
+  });
+
+  it("shows checkboxes only while Select is on, when a click adds or removes the row", () => {
+    const onEntryClick = vi.fn();
+    const onEntryDoubleClick = vi.fn();
+    const [first, second] = ENTRIES;
+    if (first === undefined || second === undefined) throw new Error("missing entry fixtures");
+    const { getByRole, getByText, queryByRole, queryAllByRole } = renderList({
+      onEntryClick,
+      onEntryDoubleClick,
+    });
+    expect(queryAllByRole("checkbox")).toEqual([]);
+
+    // Off: a plain click keeps its usual meaning.
+    fireEvent.click(getByText(first.name));
+    expect(onEntryClick).toHaveBeenLastCalledWith(first, { shift: false, meta: false });
+
+    const toggle = getByRole("button", { name: "Select" });
+    expect(toggle.getAttribute("aria-pressed")).toBe("false");
+    fireEvent.click(toggle);
+    expect(getByRole("button", { name: "Done" }).getAttribute("aria-pressed")).toBe("true");
+    expect(getByRole("checkbox", { name: "Select all" })).toBeTruthy();
+    expect(getByRole("checkbox", { name: `Select ${second.name}` })).toBeTruthy();
+
+    // On: a click toggles the row, Shift still extends, and a double-click opens nothing.
+    fireEvent.click(getByText(second.name));
+    expect(onEntryClick).toHaveBeenLastCalledWith(second, { shift: false, meta: true });
+    fireEvent.click(getByText(second.name), { shiftKey: true });
+    expect(onEntryClick).toHaveBeenLastCalledWith(second, { shift: true, meta: false });
+    fireEvent.doubleClick(getByText(second.name));
+    expect(onEntryDoubleClick).not.toHaveBeenCalled();
+
+    fireEvent.click(getByRole("button", { name: "Done" }));
+    expect(queryByRole("checkbox", { name: "Select all" })).toBeNull();
+    expect(queryAllByRole("checkbox")).toEqual([]);
+  });
+
   describe("on a phone", () => {
     beforeEach(() => {
       viewport.mobile = true;
