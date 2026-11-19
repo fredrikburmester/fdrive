@@ -9,6 +9,7 @@ import {
   createChangeJournal,
   createChangeWriter,
   createDesktopRepo,
+  createEncryptionKeyRepo,
   createFilesFolderFacts,
   createIndexQueries,
   createOfficeFileRepo,
@@ -60,6 +61,7 @@ import { withDesktopMetadata } from "./desktop/metadata.js";
 import { createDesktopRetention } from "./desktop/retention.js";
 import { registerDesktopRoutes } from "./desktop/routes.js";
 import { createDesktopWrites } from "./desktop/writes.js";
+import { registerEncryptedAccess, registerEncryptionRoutes } from "./encryption/routes.js";
 import { createEventBus } from "./events/bus.js";
 import { createIndexedSignal, INDEXED_CHANNEL } from "./events/indexed.ts";
 import { createJournalFanout } from "./events/journal.ts";
@@ -264,10 +266,11 @@ export async function composeApp(
    */
   const indexed = async () =>
     config.fdriveIndexerUrl !== undefined && indexerEnabled(await featureValues());
-  /** The same for every login: the storage's name and whether it is indexed. */
+  /** The same for every login: the storage's name, whether it is indexed, and encrypted folders. */
   const installation = async () => ({
     storageName: await storage.name(),
     index: await indexed(),
+    encryptedFolders: true,
   });
   const localUserStore = createLocalUserStore({
     repo: repos.localUsers,
@@ -404,6 +407,7 @@ export async function composeApp(
     return buildUserStorage(folder, identity.username);
   };
   const trashItemRepo = createTrashItemRepo(db);
+  const encryptionKeys = createEncryptionKeyRepo(db);
   // What each Trash holds, by its rows.
   const trash = createTrashItems({
     repo: trashItemRepo,
@@ -765,6 +769,18 @@ export async function composeApp(
       return !setupDone;
     },
     registerRoutes: (groups) => {
+      // Before every route it allows inside encrypted folders.
+      registerEncryptedAccess(groups);
+      registerEncryptionRoutes(groups, {
+        keys: encryptionKeys,
+        tokens: repos.apiTokens,
+        files,
+        reauthenticate: createLoginReauthentication({
+          identities: repos.identities,
+          checkPassword,
+        }),
+        trustedProxyHops: config.fdriveTrustedProxyHops,
+      });
       registerBackupRoutes(
         groups,
         backups,
@@ -783,6 +799,7 @@ export async function composeApp(
         index: indexQueries,
       });
       registerDesktopRoutes(groups, {
+        encryption: encryptionKeys,
         activity: personalActivity,
         changes: createDesktopChanges({
           journal: createChangeJournal(db),

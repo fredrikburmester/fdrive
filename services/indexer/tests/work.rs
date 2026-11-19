@@ -1392,3 +1392,51 @@ fn a_full_text_stage_embeds_on_the_worker() {
     assert!(!result.deferred.contains_key("semanticSearch"));
     assert_eq!(env.status(&ctx, "a.txt"), "indexed");
 }
+
+#[test]
+fn journaled_changes_inside_an_encrypted_folder_keep_only_rows() {
+    use fdrive_indexer::encrypted::{MARKER, REASON};
+    let env = Env::new();
+    let ctx = ctx(&env, fv(true, true, false, false, false));
+    env.write(&format!("Vault/{MARKER}"), b"{}");
+    // An upload: an encrypted name and an age file.
+    let sealed = format!("Vault/fe1-{}", "a".repeat(48));
+    env.write(&sealed, b"age-encryption.org/v1\n-> X25519 c2VhbGVk\n");
+    queue(&env, &ctx, &sealed, None, None);
+    // A folder of plain files, and another with a picture.
+    let (picture, other) = (common::root_env::png(16, 16), common::root_env::png(17, 17));
+    let (sha, other_sha) = (hex_sha(&picture), hex_sha(&other));
+    env.write("Plain/notes.txt", b"plain words");
+    env.write("Plain/photo.png", &picture);
+    env.write("Pics/copy.png", &other);
+    queue(&env, &ctx, "Plain", None, None);
+    queue(&env, &ctx, "Pics", None, None);
+    drain(&ctx);
+    let statuses = env.statuses(&ctx);
+    assert_eq!(
+        (statuses[&sealed].as_str(), statuses["Plain/notes.txt"].as_str()),
+        (REASON, "partial")
+    );
+    assert!(env.has_thumbnails(&sha) && env.has_thumbnails(&other_sha));
+
+    // Moved in from outside fdrive and journaled as a move: the rows follow, and the files
+    // inside are indexed again and kept out.
+    std::fs::rename(env.path("Plain"), env.path("Vault/Plain")).unwrap();
+    queue(&env, &ctx, "Plain", Some("Vault/Plain"), None);
+    drain(&ctx);
+    let statuses = env.statuses(&ctx);
+    for rel in ["Vault/Plain/notes.txt", "Vault/Plain/photo.png"] {
+        assert_eq!(statuses[rel], REASON, "{rel}");
+    }
+    assert_eq!(env.count("idx.chunks"), 0);
+    assert!(!env.thumb_path(&sha, 256).exists());
+
+    // A file gone from a folder the journal looks at again: its row is swept, and what was
+    // made from it goes too.
+    std::fs::remove_file(env.path("Pics/copy.png")).unwrap();
+    queue(&env, &ctx, "Pics", None, None);
+    drain(&ctx);
+    assert!(!env.has_row(&ctx, "Pics/copy.png"));
+    assert!(!env.thumb_path(&other_sha, 256).exists());
+    assert_eq!(env.count("app.thumbnails"), 0);
+}

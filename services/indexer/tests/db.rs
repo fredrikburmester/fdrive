@@ -1039,4 +1039,158 @@ fn every_query_reports_a_missing_schema_as_an_error() {
     assert!(db::errors_sample(c, 1, 20).is_err());
     assert!(db::mark_pending(c, 1, None).is_err());
     assert!(db::mark_pending(c, 1, Some(("a", "a/"))).is_err());
+    assert!(db::mark_encrypted(c, 1).is_err());
+    assert!(db::release_content(c, &["k".into()]).is_err());
+    assert!(db::move_paths_replacing(c, 1, "a", "b", false).is_err());
+    assert!(db::sweep_vanished_rows(c, 1, &["a".into()], Utc::now()).is_err());
+}
+
+/// A thumbnail of both sizes and an image embedding under `key`.
+fn derived(c: &mut Client, key: &str) {
+    for size in [256, 1024] {
+        db::upsert_thumbnail(c, key, size, &format!("{key}/{key}.{size}.webp"), 1, 1).unwrap();
+    }
+    db::upsert_image_embedding(c, key, "model-a", &[0.1; 1024]).unwrap();
+}
+
+fn keys(c: &mut Client, table: &str) -> Vec<String> {
+    c.query(&format!("SELECT DISTINCT content_key FROM {table} ORDER BY 1"), &[])
+        .unwrap()
+        .into_iter()
+        .map(|r| r.get(0))
+        .collect()
+}
+
+#[test]
+fn content_is_released_only_once_no_row_holds_it() {
+    let (_, mut c) = setup();
+    let root = ROOT_ID;
+    for key in ["held", "free", "sealed"] {
+        derived(&mut c, key);
+    }
+    add(&mut c, root, "a.png", ".png", 1, 1, "held");
+    let stray = add(&mut c, root, "Vault/b.png", ".png", 1, 1, "sealed");
+    db::mark_encrypted(&mut c, stray).unwrap();
+    let keys_in = |names: &[&str]| -> Vec<String> { names.iter().map(|k| (*k).to_owned()).collect() };
+    // A row inside an encrypted folder holds nothing; empty and repeated keys count once.
+    let released = db::release_content(&mut c, &keys_in(&["held", "free", "free", "", "sealed", "never"])).unwrap();
+    assert_eq!(released.keys, ["free", "never", "sealed"]);
+    assert_eq!(
+        released.thumbnails,
+        [
+            "free/free.1024.webp",
+            "free/free.256.webp",
+            "sealed/sealed.1024.webp",
+            "sealed/sealed.256.webp"
+        ]
+    );
+    assert_eq!(keys(&mut c, "app.thumbnails"), ["held"]);
+    assert_eq!(keys(&mut c, "app.image_embeddings"), ["held"]);
+    assert_eq!(db::release_content(&mut c, &[]).unwrap(), db::Released::default());
+    // Past one batch, every key is still checked.
+    let many: Vec<String> = (0..db::SWEEP_BATCH + 1).map(|i| format!("k{i}")).collect();
+    assert_eq!(db::release_content(&mut c, &many).unwrap().keys.len(), many.len());
+}
+
+#[test]
+fn row_changes_say_which_content_keys_they_let_go() {
+    let (_, mut c) = setup();
+    let root = ROOT_ID;
+    let file = |path: &'static str, sha: &'static str| NewFile {
+        root_id: root,
+        path,
+        name: path.rsplit('/').next().unwrap(),
+        ext: ".png",
+        size: 1,
+        mtime_ns: 1,
+        sha256: sha,
+        mime: None,
+    };
+    let (id, previous) = db::upsert_file_replacing(&mut c, &file("a.png", "one"), StampUpdate::Keep).unwrap();
+    assert_eq!(previous, None);
+    assert_eq!(
+        db::upsert_file_replacing(&mut c, &file("a.png", "one"), StampUpdate::Keep).unwrap(),
+        (id, None),
+        "the same digest lets nothing go"
+    );
+    assert_eq!(
+        db::upsert_file_replacing(&mut c, &file("a.png", "two"), StampUpdate::Keep).unwrap(),
+        (id, Some("one".to_owned()))
+    );
+    // Deletes and sweeps name the keys of the rows they deleted; a row without one names none.
+    add(&mut c, root, "dir/b.png", ".png", 1, 1, "three");
+    add(&mut c, root, "dir/c.png", ".png", 1, 1, "four");
+    c.batch_execute("UPDATE idx.files SET sha256 = NULL WHERE path = 'dir/c.png'")
+        .unwrap();
+    let deleted = db::delete_paths(&mut c, root, "dir", true).unwrap();
+    assert_eq!(
+        (deleted.files.len(), deleted.content_keys),
+        (2, vec!["three".to_owned()])
+    );
+    add(&mut c, root, "gone.png", ".png", 1, 1, "five");
+    // Postgres' now() is the transaction start; make sure the sweep starts later.
+    std::thread::sleep(Duration::from_millis(5));
+    let later = db::now(&mut c).unwrap();
+    let swept = db::sweep_vanished_rows(&mut c, root, &["gone.png".into(), "a.png".into()], later).unwrap();
+    assert_eq!(swept.paths, ["a.png", "gone.png"]);
+    let mut swept_keys = swept.content_keys;
+    swept_keys.sort();
+    assert_eq!(swept_keys, ["five", "two"]);
+    // A move over a stale row names that row's key, file or folder.
+    add(&mut c, root, "x.png", ".png", 1, 1, "six");
+    add(&mut c, root, "y.png", ".png", 1, 1, "seven");
+    let (moved, replaced) = db::move_paths_replacing(&mut c, root, "x.png", "y.png", false).unwrap();
+    assert_eq!((moved.files, replaced), (1, vec!["seven".to_owned()]));
+    add(&mut c, root, "from/p.png", ".png", 1, 1, "eight");
+    add(&mut c, root, "to/p.png", ".png", 1, 1, "nine");
+    let (moved, replaced) = db::move_paths_replacing(&mut c, root, "from", "to", true).unwrap();
+    assert_eq!((moved.files, replaced), (1, vec!["nine".to_owned()]));
+    assert_eq!(
+        db::move_paths_replacing(&mut c, root, "missing", "elsewhere", true).unwrap(),
+        (db::Moved::default(), vec![])
+    );
+}
+
+#[test]
+fn a_row_kept_out_as_encrypted_loses_its_text_and_photo_details() {
+    let (_, mut c) = setup();
+    let root = ROOT_ID;
+    let id = add(&mut c, root, "Vault/photo.jpg", ".jpg", 1, 1, "sha");
+    c.execute(
+        "UPDATE idx.files SET text_status = 'indexed', text_chars = 9, camera = 'Apple', width = 4, height = 3, \
+         latitude = 1, longitude = 2, taken_at = now() WHERE id = $1",
+        &[&id],
+    )
+    .unwrap();
+    db::mark_encrypted(&mut c, id).unwrap();
+    let row = c
+        .query_one(
+            "SELECT text_status, error, text_chars, camera IS NULL AND width IS NULL AND height IS NULL \
+             AND latitude IS NULL AND longitude IS NULL AND taken_at IS NULL, indexed_at IS NOT NULL \
+             FROM idx.files WHERE id = $1",
+            &[&id],
+        )
+        .unwrap();
+    assert_eq!(
+        (
+            row.get::<_, String>(0),
+            row.get::<_, Option<String>>(1),
+            row.get::<_, i32>(2),
+            row.get::<_, bool>(3),
+            row.get::<_, bool>(4)
+        ),
+        (
+            "excluded".to_owned(),
+            Some("excluded:encrypted".to_owned()),
+            0,
+            true,
+            true
+        )
+    );
+    // Scans decide on it by its reason, as for an image excluded by its folder.
+    assert_eq!(status(&mut c, root, "Vault/photo.jpg"), "excluded:encrypted");
+    assert_eq!(db::retry_status("excluded".into(), Some("excluded:prefix")), "excluded");
+    // A reindex leaves the reason but asks for the file again.
+    db::mark_pending(&mut c, root, None).unwrap();
+    assert_eq!(status(&mut c, root, "Vault/photo.jpg"), "pending");
 }

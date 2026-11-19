@@ -851,6 +851,8 @@ export interface ZipItem {
 export interface ZipOptions {
   readonly signal?: AbortSignal;
   readonly onProgress?: (progress: ZipProgress) => void;
+  /** A folder holding a file of this name is left out, with everything in it. */
+  readonly skipFoldersWith?: string | undefined;
 }
 
 /** One entry of a zip, in archive order: a file to read, or an empty folder. */
@@ -869,7 +871,7 @@ export async function zipItems(
   items: readonly ZipItem[],
   opts: ZipOptions = {},
 ): Promise<ReadableStream<Uint8Array>> {
-  const { signal, onProgress } = opts;
+  const { signal, onProgress, skipFoldersWith } = opts;
   if (signal?.aborted === true) throw aborted(signal);
   const entries: ZipEntry[] = [];
   for (const { at, name } of items) {
@@ -877,7 +879,7 @@ export async function zipItems(
     if (info.isFile()) {
       entries.push({ name, mtime: info.mtime, file: { at, mode: info.mode, size: info.size } });
     } else if (info.isDirectory()) {
-      await collectTree(entries, at, name, info.mtime);
+      await collectTree(entries, at, name, info.mtime, skipFoldersWith);
     }
   }
   const total = entries.filter((entry) => entry.file !== undefined).length;
@@ -944,10 +946,12 @@ async function collectTree(
   dir: string,
   prefix: string,
   mtime: Date,
+  skip: string | undefined,
 ): Promise<void> {
   const children = (await readdir(dir, { withFileTypes: true })).filter(
     (child) => !PARTIAL.test(child.name),
   );
+  if (skip !== undefined && children.some((child) => child.isFile() && child.name === skip)) return;
   if (children.length === 0 && prefix.length > 0) {
     entries.push({ name: prefix, mtime });
     return;
@@ -956,7 +960,7 @@ async function collectTree(
     const name = prefix.length > 0 ? `${prefix}/${child.name}` : child.name;
     const at = join(dir, child.name);
     if (child.isDirectory()) {
-      await collectTree(entries, at, name, (await lstat(at)).mtime);
+      await collectTree(entries, at, name, (await lstat(at)).mtime, skip);
     } else if (child.isFile()) {
       const info = await lstat(at);
       entries.push({ name, mtime: info.mtime, file: { at, mode: info.mode, size: info.size } });

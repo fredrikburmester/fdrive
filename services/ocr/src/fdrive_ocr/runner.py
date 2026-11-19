@@ -11,6 +11,8 @@ module is the glue, mirroring filesai's `run.sh` behaviour:
   `--force-ocr`, so a text layer it finds is left untouched too (exit 6, or
   `TaggedPDFError`).
 - Signed and encrypted PDFs are refused and only recorded, never touched.
+- A PDF inside an end-to-end encrypted folder is never read, and nothing is
+  recorded for it.
 - A symbolic link is never followed: a path that is one, or passes through one
   below the root, is left alone, as fdrive and the indexer leave it.
 - A rewritten file keeps the original's owner, mode, and mtime; the original
@@ -41,7 +43,7 @@ import psycopg
 from . import db
 from .decide import STATUS_FAILED, STATUS_HAS_TEXT, STATUS_TIMEOUT, Decision, decide
 from .originals import Mapping, mapping_document
-from .rules import RESERVED_FOLDERS, is_excluded, is_too_big
+from .rules import ENCRYPTED_FOLDER_MARKER, RESERVED_FOLDERS, has_encrypted_part, is_excluded, is_too_big
 from .settings import Settings
 
 PROCESS_GROUP_KILL_WAIT_SECONDS = 5
@@ -114,6 +116,25 @@ def through_a_link(root: str, rel_path: str) -> bool:
     real_root = os.path.realpath(root)
     parent = os.path.dirname(os.path.join(real_root, rel_path))
     return os.path.realpath(parent) != parent
+
+
+def in_encrypted_folder(root: str, rel_path: str, markers: dict[str, bool]) -> bool:
+    """Whether the file at `rel_path` lies inside an end-to-end encrypted folder: a part
+    of its path is an encrypted name, or a folder between `root` and it holds the folder's
+    marker. The root itself is never one. `markers` remembers each folder's answer, for one
+    pass."""
+    if has_encrypted_part(rel_path):
+        return True
+    parts = rel_path.split("/")[:-1]
+    for depth in range(1, len(parts) + 1):
+        folder = "/".join(parts[:depth])
+        marked = markers.get(folder)
+        if marked is None:
+            marked = os.path.lexists(os.path.join(root, folder, ENCRYPTED_FOLDER_MARKER))
+            markers[folder] = marked
+        if marked:
+            return True
+    return False
 
 
 def has_text_layer(path: str) -> bool:
@@ -392,8 +413,13 @@ def run_pass(
     totals = RunTotals()
     run_id = db.start_run(conn)
     log(f"OCR pass start (langs={settings.langs}, max {settings.max_mb}MB)")
+    markers: dict[str, bool] = {}
     try:
         for pdf in db.pdf_candidates(conn, target.root_id, RESERVED_FOLDERS):
+            # Never read, and nothing recorded or counted. Once the indexer has looked at it,
+            # the query leaves it out.
+            if in_encrypted_folder(target.abs_path, pdf.path, markers):
+                continue
             if is_excluded(target.name, pdf.path, list(settings.exclude_globs), list(include_globs)):
                 continue
             if is_too_big(pdf.size, settings.max_mb):

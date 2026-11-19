@@ -117,6 +117,10 @@ export interface FileMenuProps {
    * not run the archive jobs (favorites, recents, a tag's files). Both show
    * by default. */
   hideArchive?: boolean;
+  /** The entry is inside an encrypted folder: hides Share, Share with people, Office and
+   * Duplicate, which the server does not do there, and Tags and Favorites, whose lists show
+   * stored names. An encrypted folder itself never shares. */
+  encrypted?: boolean;
   /** Every tag known to the account, for the "Tags" submenu. Defaults to
    * none, so a caller that has not wired up tags yet still renders. */
   tags?: readonly Tag[];
@@ -243,6 +247,7 @@ function FileMenuItems({
   showChat = false,
   showReveal = false,
   hideArchive = false,
+  encrypted = false,
   tags = DEFAULT_TAGS,
   tagCheckState = DEFAULT_TAG_CHECK_STATE,
   onToggleTag = DEFAULT_NO_OP,
@@ -258,18 +263,19 @@ function FileMenuItems({
   const canExtract = !isMultiSelection && archiveKind !== null;
   const restrictions = entryRestrictions(entry, received);
   const locked = restrictions.locked !== null;
+  const encryptedArea = encrypted || entry.encrypted === true;
 
   const { Item, CheckboxItem, Separator, Sub, SubTrigger, SubContent } = kit;
 
   return (
     <>
-      {restrictions.publicLink && (
+      {restrictions.publicLink && !encryptedArea && (
         <Item onClick={() => onAction("share", entry)}>
           <Link2Icon />
           Share
         </Item>
       )}
-      {restrictions.shareWithPeople && !isMultiSelection && (
+      {restrictions.shareWithPeople && !isMultiSelection && !encryptedArea && (
         <Item onClick={() => onAction("shareWithPeople", entry)}>
           <UsersIcon />
           Share with people
@@ -279,7 +285,7 @@ function FileMenuItems({
         <ExternalLinkIcon />
         Open
       </Item>
-      {officeModesFor(entry, officeStatus, selectionCount).map((mode) => (
+      {(encryptedArea ? [] : officeModesFor(entry, officeStatus, selectionCount)).map((mode) => (
         <Item key={mode} onClick={() => onAction(`office:${mode}`, entry)}>
           <ExternalLinkIcon />
           {OFFICE_MODE_LABELS[mode]}
@@ -294,10 +300,12 @@ function FileMenuItems({
       <Separator />
       {!locked && (
         <>
-          <Item disabled={isMultiSelection} onClick={() => onAction("duplicate", entry)}>
-            <CopyIcon />
-            Duplicate
-          </Item>
+          {!encrypted && (
+            <Item disabled={isMultiSelection} onClick={() => onAction("duplicate", entry)}>
+              <CopyIcon />
+              Duplicate
+            </Item>
+          )}
           <Item onClick={() => onAction("rename", entry)}>
             <PencilIcon />
             Rename
@@ -330,47 +338,51 @@ function FileMenuItems({
           )}
         </>
       )}
-      <Separator />
-      <Sub>
-        <SubTrigger>
-          <TagIcon />
-          Tags
-        </SubTrigger>
-        <SubContent className="w-52">
-          {tags.length === 0 ? (
-            <Item disabled>No tags yet</Item>
-          ) : (
-            tags.map((tag) => {
-              const state = tagCheckState(tag.id);
-              return (
-                <CheckboxItem
-                  key={tag.id}
-                  checked={state === "checked"}
-                  onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
-                >
-                  <span
-                    className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
-                  />
-                  <span className="flex-1 truncate">{tag.name}</span>
-                  {state === "indeterminate" && (
-                    <span className="text-[10px] text-muted-foreground">mixed</span>
-                  )}
-                </CheckboxItem>
-              );
-            })
-          )}
+      {!encrypted && (
+        <>
           <Separator />
-          <Item onClick={onOpenTagsEditor}>
-            <PencilIcon />
-            Edit tags
+          <Sub>
+            <SubTrigger>
+              <TagIcon />
+              Tags
+            </SubTrigger>
+            <SubContent className="w-52">
+              {tags.length === 0 ? (
+                <Item disabled>No tags yet</Item>
+              ) : (
+                tags.map((tag) => {
+                  const state = tagCheckState(tag.id);
+                  return (
+                    <CheckboxItem
+                      key={tag.id}
+                      checked={state === "checked"}
+                      onCheckedChange={(checked) => onToggleTag(tag.id, checked)}
+                    >
+                      <span
+                        className={cn("size-2 shrink-0 rounded-full", tagDotClassName(tag.color))}
+                      />
+                      <span className="flex-1 truncate">{tag.name}</span>
+                      {state === "indeterminate" && (
+                        <span className="text-[10px] text-muted-foreground">mixed</span>
+                      )}
+                    </CheckboxItem>
+                  );
+                })
+              )}
+              <Separator />
+              <Item onClick={onOpenTagsEditor}>
+                <PencilIcon />
+                Edit tags
+              </Item>
+            </SubContent>
+          </Sub>
+          <Item onClick={() => onToggleFavorite(!favorite)}>
+            {favorite ? <StarOffIcon /> : <StarIcon />}
+            {favorite ? "Remove from Favorites" : "Add to Favorites"}
           </Item>
-        </SubContent>
-      </Sub>
-      <Item onClick={() => onToggleFavorite(!favorite)}>
-        {favorite ? <StarOffIcon /> : <StarIcon />}
-        {favorite ? "Remove from Favorites" : "Add to Favorites"}
-      </Item>
-      {!hideArchive && (
+        </>
+      )}
+      {!hideArchive && !encryptedArea && (
         <>
           <Separator />
           <Item onClick={() => onAction("compress", entry)}>

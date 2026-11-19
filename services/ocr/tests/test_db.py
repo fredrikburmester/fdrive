@@ -85,6 +85,24 @@ def test_pdf_candidates_leave_out_content_decided_at_another_path(postgres_dsn: 
         conn.close()
 
 
+def test_pdf_candidates_leave_out_what_the_indexer_kept_out_as_encrypted(postgres_dsn: str) -> None:
+    conn = db.connect(postgres_dsn)
+    try:
+        for path, digest, error in (
+            ("Vault/stray.pdf", "a" * 64, db.ENCRYPTED_REASON),
+            ("big.pdf", "b" * 64, "excluded:too_big"),
+            ("plain.pdf", "c" * 64, None),
+        ):
+            conn.execute(
+                'INSERT INTO "idx"."files" (root_id, path, name, ext, size, mtime_ns, sha256, text_status, error) '
+                "VALUES (%s, %s, %s, '.pdf', 10, 20, %s, 'excluded', %s)",
+                (FILES_ROOT_ID, path, path, digest, error),
+            )
+        assert [pdf.path for pdf in db.pdf_candidates(conn, FILES_ROOT_ID, ())] == ["big.pdf", "plain.pdf"]
+    finally:
+        conn.close()
+
+
 def test_start_and_finish_run(postgres_dsn: str) -> None:
     conn = db.connect(postgres_dsn)
     try:

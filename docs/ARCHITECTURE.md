@@ -32,15 +32,19 @@ Current implementation reference. Unfinished work belongs in [plans](plans/READM
   [ML server](../services/ml/README.md). It has no database access and no storage mounts: the
   indexer and the API hand it bytes or text over HTTP, so parsing a hostile file cannot reach
   anyone's storage. It loads a model only while a feature that needs it is enabled.
-- Optional AI organize calls Claude or an OpenAI-compatible server from the API with read-only
-  tools and returns suggestions the person applies through `fs/move-many`. See [AI](AI.md).
+- Optional AI organize calls Claude, Mistral or an OpenAI-compatible server from the API with
+  read-only tools and returns suggestions the person applies through `fs/move-many`. See
+  [AI](AI.md).
 - fdrive serves a folder on its own disk (`FDRIVE_STORAGE_ROOT`, one home per user at
   `<root>/<username>`, plain files) and keeps its own users. That files folder is the only
   storage. Its plain files stay authoritative: fdrive keeps no database of their contents, and
   writers outside fdrive (OCR, rsync, SMB, Syncthing) may change them. fdrive never creates a
   symbolic link and never follows one: storage refuses a path through a link for every caller,
   and the indexer and OCR skip links. The API reaches it
-  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. An installation-wide flag on `/auth/me` says whether the
+  through the [storage port](STORAGE.md). `FDRIVE_STORAGE_ROOT` is required. End-to-end
+  [encrypted folders](ENCRYPTION.md) hold only ciphertext under encrypted names: every storage is
+  wrapped by a guard that refuses their contents to any route not on its allowed list, so share
+  links, Office, AI, MCP, ZIP and the indexer's features never reach them. An installation-wide flag on `/auth/me` says whether the
   UI offers index-backed features: `index` (the files folder is indexed). Trash is always on.
 
 ## Accounts and storage

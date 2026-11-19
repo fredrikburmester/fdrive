@@ -29,6 +29,7 @@ function suggestion(path: string, destination: string, patch: Partial<OrganizeSu
 describe("providerLabel", () => {
   it("names Anthropic and falls back to the administrator's server", () => {
     expect(providerLabel("anthropic")).toBe("Claude (Anthropic)");
+    expect(providerLabel("mistral")).toBe("Mistral");
     expect(providerLabel("openai_compatible")).toBe("your AI server");
     expect(providerLabel(null)).toBe("your AI server");
   });

@@ -1,6 +1,11 @@
 "use client";
 
-import { type AiProvider, AiProvider as AiProviderSchema } from "@fdrive/contracts";
+import {
+  type AiProvider,
+  AiProvider as AiProviderSchema,
+  aiProviderHasBaseUrl,
+  DEFAULT_AI_MODEL,
+} from "@fdrive/contracts";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -41,6 +46,28 @@ const PROVIDER_ITEMS = AiProviderSchema.options.map((value) => ({
 
 const TONE_VARIANT = { on: "default", off: "outline", incomplete: "destructive" } as const;
 
+/** How the model and key fields read for each provider. */
+const PROVIDER_FIELDS: Record<
+  AiProvider,
+  { modelPlaceholder: string; modelDescription: string; keyPlaceholder: string }
+> = {
+  anthropic: {
+    modelPlaceholder: DEFAULT_AI_MODEL.anthropic,
+    modelDescription: "A Claude model ID; claude-opus-5 plans large reorganizations best.",
+    keyPlaceholder: "sk-ant-…",
+  },
+  mistral: {
+    modelPlaceholder: DEFAULT_AI_MODEL.mistral,
+    modelDescription: "A Mistral model ID that supports tool calling.",
+    keyPlaceholder: "Required",
+  },
+  openai_compatible: {
+    modelPlaceholder: "qwen3:32b",
+    modelDescription: "A model your server lists that supports tool calling.",
+    keyPlaceholder: "Optional",
+  },
+};
+
 /** Admin page: `System > AI`, where the provider behind Organize is chosen. */
 export function AiSystemPage() {
   const query = useSystemAi();
@@ -73,7 +100,7 @@ export function AiSystemPage() {
   return (
     <SystemPage
       title="AI"
-      description="Organizes files and chats about them, using Claude or a model you host."
+      description="Organizes files and chats about them, using Claude, Mistral or a model you host."
       lastUpdated={query.dataUpdatedAt > 0 ? new Date(query.dataUpdatedAt) : null}
       actions={
         <SystemSettingsButton
@@ -105,7 +132,9 @@ export function AiSystemPage() {
               <Button
                 variant="outline"
                 size="sm"
-                disabled={test.isPending || (saved.provider === "anthropic" && !saved.hasApiKey)}
+                disabled={
+                  test.isPending || (!aiProviderHasBaseUrl(saved.provider) && !saved.hasApiKey)
+                }
                 onClick={() => test.mutate()}
               >
                 {test.isPending ? "Checking…" : "Check connection"}
@@ -210,13 +239,11 @@ function AiSettingsFields({
   onChange: (patch: Partial<AiDraft>) => void;
   onProviderChange: (provider: AiProvider) => void;
 }) {
-  const anthropic = values.provider === "anthropic";
+  const fields = PROVIDER_FIELDS[values.provider];
   const keyPlaceholder =
     hasSavedKey && !values.clearKey && !keyDropped
       ? "Saved. Enter a new key to replace it"
-      : anthropic
-        ? "sk-ant-…"
-        : "Optional";
+      : fields.keyPlaceholder;
   return (
     <>
       <Field orientation="horizontal">
@@ -267,7 +294,7 @@ function AiSettingsFields({
           Claude gives the best suggestions; a server like Ollama keeps everything on your network.
         </FieldDescription>
       </Field>
-      {anthropic ? null : (
+      {aiProviderHasBaseUrl(values.provider) ? (
         <Field>
           <FieldLabel htmlFor="ai-base-url">Base URL</FieldLabel>
           <Input
@@ -281,21 +308,17 @@ function AiSettingsFields({
             The server's API root, reachable from the fdrive API container.
           </FieldDescription>
         </Field>
-      )}
+      ) : null}
       <Field>
         <FieldLabel htmlFor="ai-model">Model</FieldLabel>
         <Input
           id="ai-model"
           value={values.model}
           disabled={disabled}
-          placeholder={anthropic ? "claude-opus-5" : "qwen3:32b"}
+          placeholder={fields.modelPlaceholder}
           onChange={(event) => onChange({ model: event.target.value })}
         />
-        <FieldDescription>
-          {anthropic
-            ? "A Claude model ID; claude-opus-5 plans large reorganizations best."
-            : "A model your server lists that supports tool calling."}
-        </FieldDescription>
+        <FieldDescription>{fields.modelDescription}</FieldDescription>
       </Field>
       <Field>
         <FieldLabel htmlFor="ai-api-key">API key</FieldLabel>

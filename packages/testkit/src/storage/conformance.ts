@@ -345,6 +345,18 @@ export function describeStorageProvider(name: string, factory: StorageFactory): 
       await expect(storage.zip([file], { signal: aborted.signal })).rejects.toThrow();
     });
 
+    it("leaves a folder holding the skip name out of a zip, with everything in it", async () => {
+      await seed("s/keep.txt", "keep");
+      await seed("s/vault/.skip-me", "marker");
+      await seed("s/vault/inner/secret.txt", "secret");
+      await seed("s/other/.skip-me/x.txt", "a folder by that name does not count");
+      const stream = await storage.zip([`${root}/s`], { skipFoldersWith: ".skip-me" });
+      expect(unzip(new Uint8Array(await new Response(stream).arrayBuffer()))).toEqual({
+        "s/keep.txt": "keep",
+        "s/other/.skip-me/x.txt": "a folder by that name does not count",
+      });
+    });
+
     it("zips the root as its contents", async () => {
       await seed("r.txt", "root");
       const stream = await storage.zip(["/"]);

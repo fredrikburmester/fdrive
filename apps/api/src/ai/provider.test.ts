@@ -55,6 +55,53 @@ describe("createAiModel", () => {
     expect(model.ping).toBeTypeOf("function");
   });
 
+  it("talks to Mistral's API with the saved key for the mistral provider", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      modelsResponse({ object: "list", data: [{ id: "mistral-large-latest" }] }),
+    );
+    const model = createAiModel(
+      {
+        provider: "mistral",
+        model: "mistral-large-latest",
+        baseUrl: null,
+        apiKey: "mistral-key",
+        organize: true,
+        chat: true,
+      },
+      { fetch: fetchImpl },
+    );
+
+    expect(await model.ping(new AbortController().signal)).toEqual({
+      ok: true,
+      message: "Connected to Mistral. mistral-large-latest is available.",
+    });
+    const [url, init] = fetchImpl.mock.calls[0] ?? [];
+    expect(url).toBe("https://api.mistral.ai/v1/models");
+    expect(init?.headers).toMatchObject({ authorization: "Bearer mistral-key" });
+  });
+
+  it("falls back to the global fetch for Mistral and still builds without a key", async () => {
+    const globalFetch = vi.fn<typeof fetch>(async () => new Response("{}", { status: 401 }));
+    vi.stubGlobal("fetch", globalFetch);
+    const model = createAiModel({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      baseUrl: null,
+      apiKey: null,
+      organize: true,
+      chat: true,
+    });
+
+    expect(await model.ping(new AbortController().signal)).toEqual({
+      ok: false,
+      message: "Mistral rejected the API key.",
+    });
+    expect(globalFetch).toHaveBeenCalledWith(
+      "https://api.mistral.ai/v1/models",
+      expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer " }) }),
+    );
+  });
+
   it("talks to the configured address for an OpenAI-compatible provider", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => modelsResponse({ data: [{ id: "llama3" }] }));
     const model = createAiModel(

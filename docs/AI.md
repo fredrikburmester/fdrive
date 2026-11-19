@@ -10,9 +10,11 @@ An administrator opens **System > AI > Settings**:
 | Provider | Needs | Notes |
 | --- | --- | --- |
 | Anthropic (Claude) | API key | Default model `claude-opus-5`. The api container needs outbound HTTPS to `api.anthropic.com`. |
+| Mistral | API key | Default model `mistral-large-latest`. Choose a model that supports tool calling. The api container needs outbound HTTPS to `api.mistral.ai`. |
 | OpenAI-compatible server | Base URL, model | Ollama, LM Studio, vLLM or OpenRouter. Choose a model that supports tool calling. The key is optional. |
 
-**Check connection** verifies the key, address and model without generating text. Two switches
+**Check connection** verifies the key, address and model without generating text. For Mistral
+it also checks that the model can call tools. Two switches
 turn the features on for everyone signed in: **Organize** puts Organize in the selection bar and
 the row context menu, and **Chat** shows the chat panel. Either works on its own.
 
@@ -100,6 +102,13 @@ suggestions, which the person still has to approve; the organizer has no tool th
   automatic prompt caching and server-side refusal fallbacks on `claude-opus-5` and
   `claude-fable-5-1`. The OpenAI-compatible adapter uses `fetch`, refuses redirects and allows
   five minutes per turn.
+- The Mistral adapter (`mistral.ts`) speaks the same protocol to `https://api.mistral.ai/v1`
+  with the same limits, and shares the OpenAI-compatible adapter's tool helpers. Reasoning
+  models (Mistral Large 4, Medium 3.5) send content as `thinking` and `text` chunks: the turn's
+  text is the text chunks, and the chunks are replayed unchanged, because Mistral warns that
+  dropping thinking degrades later turns. A cut-off turn is replayed without its tool calls,
+  since Mistral rejects calls left without results. Its tests check every request against the
+  message rules in Mistral's `mistral-common` validator.
 - The tools live in `apps/api/src/ai/tools/`, shared with the planned chat: `tool.ts` is the
   `AiTool` shape and the executor every agent loop uses, `drive-tools.ts` the read-only drive
   tools built for one *focus* (the items the assistant may read the contents of, and whether it

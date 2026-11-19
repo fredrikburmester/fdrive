@@ -30,6 +30,7 @@ import {
 } from "@/lib/ai/chat-queries";
 import { useAiStatus } from "@/lib/ai/queries";
 import { getActiveDragPaths, readDraggedPaths, subscribeDragSession } from "@/lib/dnd";
+import { useEncryptedFolder } from "@/lib/encryption/queries";
 import { describeFsError } from "@/lib/files/queries";
 import { ChatBubble, useChatFolder, useChatShortcut } from "./chat-bubble";
 import { ChatComposer } from "./chat-composer";
@@ -48,7 +49,9 @@ import { ChatTranscript } from "./chat-transcript";
 export function ChatPanel() {
   const { data: aiStatus } = useAiStatus();
   const folder = useChatFolder();
-  const available = aiStatus?.chat === true && folder !== null;
+  // The assistant never sees inside an encrypted folder, or the folder itself.
+  const encryptedFolder = useEncryptedFolder(aiStatus?.chat === true ? folder : null);
+  const available = aiStatus?.chat === true && folder !== null && encryptedFolder.data === null;
   const [open, setOpen] = useChatPanelOpen();
   const [currentId] = useCurrentChatId();
   const isMobile = useIsMobile();

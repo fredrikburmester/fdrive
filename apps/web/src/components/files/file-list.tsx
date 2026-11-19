@@ -67,6 +67,8 @@ export interface FileListProps {
   /** Shows "Add to chat" in the row context menu, when AI is set up. Hidden by default. */
   showChat?: boolean;
   hideArchive?: boolean;
+  /** Rows are inside an encrypted folder; see `FileContextMenu`. */
+  encrypted?: boolean;
   /** The folders others share with the active login: captions in `Shared with me`, and
    * what each context menu offers (see `FileContextMenu`). Defaults to none. */
   received?: readonly ReceivedGrant[];

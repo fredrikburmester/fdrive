@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { EncryptedFolderInfo } from "./encryption.ts";
 import { ApiError } from "./error.ts";
 import { ArchiveFormat } from "./jobs.ts";
 
@@ -34,6 +35,8 @@ export const FsEntry = z.object({
   ext: z.string(),
   mime: z.string().nullable(),
   meta: FsEntryMeta.optional(),
+  /** A folder that is an end-to-end encrypted folder. */
+  encrypted: z.literal(true).optional(),
 });
 
 export type FsEntry = z.infer<typeof FsEntry>;
@@ -41,6 +44,8 @@ export type FsEntry = z.infer<typeof FsEntry>;
 export const ListResponse = z.object({
   path: z.string(),
   entries: z.array(FsEntry),
+  /** The encrypted folder this listing is, or is inside: its names and files are encrypted. */
+  encryptedFolder: EncryptedFolderInfo.optional(),
 });
 
 export type ListResponse = z.infer<typeof ListResponse>;

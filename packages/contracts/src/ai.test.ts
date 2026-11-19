@@ -3,6 +3,7 @@ import {
   AiSettings,
   AiSettingsUpdateRequest,
   AiStatusResponse,
+  aiProviderHasBaseUrl,
   Chat,
   ChatActionRequest,
   ChatCreateRequest,
@@ -38,6 +39,12 @@ describe("AiSettingsUpdateRequest", () => {
   it("requires a base URL only for OpenAI-compatible servers", () => {
     expect(
       AiSettingsUpdateRequest.safeParse({ ...update, baseUrl: "https://api.example/v1" }).success,
+    ).toBe(false);
+    const mistral = { ...update, provider: "mistral", model: DEFAULT_AI_MODEL.mistral } as const;
+    expect(AiSettingsUpdateRequest.safeParse(mistral).success).toBe(true);
+    expect(
+      AiSettingsUpdateRequest.safeParse({ ...mistral, baseUrl: "https://api.mistral.ai/v1" })
+        .success,
     ).toBe(false);
     expect(
       AiSettingsUpdateRequest.safeParse({ ...update, provider: "openai_compatible" }).success,
@@ -76,6 +83,15 @@ describe("AI responses", () => {
       chat: false,
     });
     expect(DEFAULT_AI_MODEL.anthropic).toBe("claude-opus-5");
+    expect(DEFAULT_AI_MODEL.mistral).toBe("mistral-large-latest");
+  });
+});
+
+describe("aiProviderHasBaseUrl", () => {
+  it("is true only for a server the administrator names", () => {
+    expect(aiProviderHasBaseUrl("openai_compatible")).toBe(true);
+    expect(aiProviderHasBaseUrl("anthropic")).toBe(false);
+    expect(aiProviderHasBaseUrl("mistral")).toBe(false);
   });
 });
 

@@ -1,10 +1,49 @@
 from __future__ import annotations
 
-from fdrive_ocr.rules import is_excluded, is_too_big, root_relative_key
+import pytest
+
+from fdrive_ocr.rules import has_encrypted_part, is_encrypted_name, is_excluded, is_too_big, root_relative_key
+
+
+def _sealed(chars: int, alphabet: str = "a2") -> str:
+    """A name with the encrypted prefix and `chars` base32 characters after it."""
+    return "fe1-" + (alphabet * chars)[:chars]
 
 
 def test_root_relative_key() -> None:
     assert root_relative_key("files", "docs/a.pdf") == "files/docs/a.pdf"
+
+
+@pytest.mark.parametrize("chars", [47, 48, 50, 52, 53, 55, 56, 248, 250])
+def test_encrypted_names_of_every_valid_length(chars: int) -> None:
+    assert is_encrypted_name(_sealed(chars)) is True
+
+
+@pytest.mark.parametrize("chars", [0, 46, 49, 51, 54, 57, 251])
+def test_lengths_base32_never_gives_are_not_encrypted_names(chars: int) -> None:
+    assert is_encrypted_name(_sealed(chars)) is False
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        _sealed(48).upper(),
+        _sealed(48).replace("fe1-", "fe2-"),
+        _sealed(48, "a1"),
+        _sealed(48) + ".pdf",
+        "x" + _sealed(48),
+        "scan.pdf",
+        "",
+    ],
+)
+def test_clear_names_are_not_encrypted_names(name: str) -> None:
+    assert is_encrypted_name(name) is False
+
+
+def test_any_encrypted_part_puts_a_path_inside_an_encrypted_folder() -> None:
+    assert has_encrypted_part(f"alice/.trash/0b8f/{_sealed(48)}") is True
+    assert has_encrypted_part(f"alice/Secret/{_sealed(48)}/scan.pdf") is True
+    assert has_encrypted_part("alice/Secret/scan.pdf") is False
 
 
 def test_is_excluded_matches_glob() -> None:

@@ -138,7 +138,11 @@ export function sharesHarness(options: SharesHarnessOptions = {}) {
     config,
     checkPassword: createPasswordCheck({ limiter: createLoginLimiter({ clock }), users }),
     principalFor: createPrincipalFactory({ folder }),
-    installation: async () => ({ storageName: "Local folder", index: false }),
+    installation: async () => ({
+      storageName: "Local folder",
+      index: false,
+      encryptedFolders: true,
+    }),
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger;
   const activity = activityFixture(clock);

@@ -6,18 +6,32 @@ export const AI_SETTINGS_KEY = "ai.configuration";
 
 /**
  * Where fdrive sends AI requests. `anthropic` is Claude through Anthropic's
- * API; `openai_compatible` is any server speaking the OpenAI chat
- * completions protocol with tool calls (Ollama, LM Studio, vLLM, OpenRouter).
+ * API; `mistral` is Mistral's API; `openai_compatible` is any server
+ * speaking the OpenAI chat completions protocol with tool calls (Ollama,
+ * LM Studio, vLLM, OpenRouter).
  */
-export const AiProvider = z.enum(["anthropic", "openai_compatible"]);
+export const AiProvider = z.enum(["anthropic", "mistral", "openai_compatible"]);
 
 export type AiProvider = z.infer<typeof AiProvider>;
 
 /** The model a provider starts with; OpenAI-compatible servers name their own. */
 export const DEFAULT_AI_MODEL: Record<AiProvider, string> = {
   anthropic: "claude-opus-5",
+  mistral: "mistral-large-latest",
   openai_compatible: "",
 };
+
+/**
+ * Whether the administrator gives the provider's address. Anthropic and
+ * Mistral have a fixed address and always need an API key; an
+ * OpenAI-compatible server needs a base URL and usually no key.
+ */
+export function aiProviderHasBaseUrl(provider: AiProvider): provider is "openai_compatible" {
+  return provider === "openai_compatible";
+}
+
+/** A provider at a fixed address that needs an API key. */
+export type HostedAiProvider = Exclude<AiProvider, "openai_compatible">;
 
 const aiModel = z.string().trim().min(1).max(200);
 
@@ -30,7 +44,7 @@ export const AiSettings = z.object({
   chat: z.boolean(),
   provider: AiProvider,
   model: aiModel,
-  /** Required for `openai_compatible`, e.g. `http://ollama:11434/v1`; always `null` for `anthropic`. */
+  /** Required for `openai_compatible`, e.g. `http://ollama:11434/v1`; always `null` for `anthropic` and `mistral`. */
   baseUrl: HttpUrl.nullable(),
   hasApiKey: z.boolean(),
 });
@@ -52,12 +66,12 @@ export const AiSettingsUpdateRequest = z
      */
     apiKey: z.string().trim().min(1).max(4096).nullable().optional(),
   })
-  .refine((value) => value.provider !== "openai_compatible" || value.baseUrl !== null, {
+  .refine((value) => !aiProviderHasBaseUrl(value.provider) || value.baseUrl !== null, {
     message: "an OpenAI-compatible provider needs a base URL",
     path: ["baseUrl"],
   })
-  .refine((value) => value.provider !== "anthropic" || value.baseUrl === null, {
-    message: "Anthropic does not use a base URL",
+  .refine((value) => aiProviderHasBaseUrl(value.provider) || value.baseUrl === null, {
+    message: "only an OpenAI-compatible provider uses a base URL",
     path: ["baseUrl"],
   });
 

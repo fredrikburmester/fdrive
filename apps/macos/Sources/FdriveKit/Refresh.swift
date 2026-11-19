@@ -45,12 +45,18 @@ public enum RefreshKind: Sendable, Equatable { case feed, full }
 public protocol CatalogRefreshClient: Sendable {
     func list(_ path: String) async throws -> [RemoteEntry]
     func snapshot(_ path: String) async throws -> (entries: [RemoteEntry], token: String?)
+    /// A whole folder with its token and the encrypted folder it is or is inside.
+    func folderSnapshot(_ path: String) async throws -> FolderSnapshot
     func checks(_ folders: [FolderCheck]) async throws -> [FolderStatus]
     func changes(since anchor: String?) async throws -> ChangePage
     func versions(_ paths: [String]) async throws -> [ContentVersion]
 }
 public extension CatalogRefreshClient {
     func snapshot(_ path: String) async throws -> (entries: [RemoteEntry], token: String?) { (try await list(path), nil) }
+    func folderSnapshot(_ path: String) async throws -> FolderSnapshot {
+        let snapshot = try await snapshot(path)
+        return FolderSnapshot(entries: snapshot.entries, token: snapshot.token)
+    }
     func checks(_ folders: [FolderCheck]) async throws -> [FolderStatus] { throw DriveError.missing }
     func changes(since anchor: String?) async throws -> ChangePage { throw DriveError.missing }
 }
@@ -204,15 +210,16 @@ public func refreshCatalog(_ catalog: Catalog, client: some CatalogRefreshClient
             try Task.checkCancellation()
             do {
                 let listing = try await catalog.beginListing(folder)
-                let snapshot = try await client.snapshot(folder)
+                let snapshot = try await client.folderSnapshot(folder)
                 try Task.checkCancellation()
-                try await catalog.reconcile(snapshot.entries, folder: folder, listing: listing, token: snapshot.token)
+                try await catalog.reconcile(snapshot, folder: folder, listing: listing)
             } catch {
                 try Task.checkCancellation()
                 // A parent snapshot may already have removed this folder and its children.
                 switch error as? DriveError {
                 case .missing: break
-                case .forbidden: failure = failure ?? error; try await catalog.forgetToken(folder)
+                // An encrypted folder this Mac cannot open is not an outage: it is listed again when it can be.
+                case .forbidden, .locked: failure = failure ?? error; try await catalog.forgetToken(folder)
                 default: failure = failure ?? error; settled = false
                 }
                 unavailableFolders.append(folder)

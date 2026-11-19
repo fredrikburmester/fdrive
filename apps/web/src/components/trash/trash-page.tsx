@@ -1,8 +1,15 @@
 "use client";
 
-import type { TrashEntry } from "@fdrive/contracts";
-import { joinPath } from "@fdrive/core";
-import { Loader2 } from "lucide-react";
+import {
+  type EncryptedFolderInfo,
+  hasEncryptedName,
+  isEncryptedName,
+  type TrashEntry,
+} from "@fdrive/contracts";
+import { isRoot, joinPath, parentPath, splitSegments } from "@fdrive/core";
+import { decryptName } from "@fdrive/crypto";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { Loader2, LockIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
@@ -30,7 +37,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { apiClient } from "@/lib/api/client";
+import { queryKeys } from "@/lib/api/keys";
 import { useTrashSettings } from "@/lib/api/trash-settings-queries";
+import { keyStore, useKeyState } from "@/lib/encryption/keys";
+import { useEncryptionStatus } from "@/lib/encryption/queries";
 import { describeFsError } from "@/lib/files/queries";
 import { useDefaultView } from "@/lib/files/use-default-view";
 import {
@@ -52,6 +63,134 @@ import {
 } from "@/lib/trash/queries";
 import { useFormatters } from "@/lib/use-format-preferences";
 
+/** How a trashed item reads: its name, null for an encrypted one this browser cannot read, and its original folder. */
+interface TrashLabel {
+  readonly name: string | null;
+  readonly folder: string;
+}
+
+const ENCRYPTED_ITEM = "Encrypted item";
+
+/**
+ * The "Original folder" label for `originalPath`: its parent, or "Home" at the
+ * top. Encrypted names read through `names`; the label stops at the first one
+ * this browser cannot read.
+ */
+function folderLabel(
+  originalPath: string,
+  names: ReadonlyMap<string, string | null> = new Map(),
+): string {
+  const parent = parentPath(originalPath);
+  if (isRoot(parent)) return "Home";
+  const shown: string[] = [];
+  for (const segment of splitSegments(parent)) {
+    const name = isEncryptedName(segment) ? (names.get(segment) ?? null) : segment;
+    if (name === null) {
+      shown.push("…");
+      break;
+    }
+    shown.push(name);
+  }
+  return `/${shown.join("/")}`;
+}
+
+/** The label of an item from inside an encrypted folder, before or without its key. */
+function lockedLabel(entry: TrashEntry): TrashLabel {
+  return {
+    name: isEncryptedName(entry.name) ? null : entry.name,
+    folder: folderLabel(entry.originalPath),
+  };
+}
+
+/** Decrypts the names of items trashed from inside encrypted folders, here in the browser. */
+async function decryptLabels(
+  entries: readonly TrashEntry[],
+  folders: ReadonlyMap<string, EncryptedFolderInfo | null>,
+): Promise<Record<string, TrashLabel>> {
+  const labels: Record<string, TrashLabel> = {};
+  for (const entry of entries) {
+    const info = folders.get(parentPath(entry.originalPath)) ?? null;
+    const folder = info === null ? null : await keyStore.folder(info).catch(() => null);
+    if (folder === null) continue;
+    const names = new Map<string, string | null>();
+    for (const segment of splitSegments(entry.originalPath)) {
+      if (isEncryptedName(segment) && !names.has(segment)) {
+        names.set(segment, await decryptName(segment, folder.nameKey, folder.id));
+      }
+    }
+    labels[entry.id] = {
+      name: isEncryptedName(entry.name) ? (names.get(entry.name) ?? null) : entry.name,
+      folder: folderLabel(entry.originalPath, names),
+    };
+  }
+  return labels;
+}
+
+/**
+ * How each trashed item reads. Items from inside an encrypted folder show
+ * their decrypted names once this browser holds the key; the folder's
+ * marker comes from the item's original parent, and the names never leave
+ * the browser.
+ */
+function useTrashLabels(entries: readonly TrashEntry[]): (entry: TrashEntry) => TrashLabel {
+  const encrypted = useMemo(
+    () => entries.filter((entry) => hasEncryptedName(entry.originalPath)),
+    [entries],
+  );
+  // Learns whether this browser holds the key, once there is something to open with it.
+  useEncryptionStatus(encrypted.length > 0);
+  const keyState = useKeyState();
+  const recipient = keyState.status === "unlocked" ? keyState.recipient : null;
+  const parents = useMemo(
+    () => [...new Set(encrypted.map((entry) => parentPath(entry.originalPath)))],
+    [encrypted],
+  );
+  const folders = useQueries({
+    queries: parents.map((path) => ({
+      queryKey: queryKeys.encryption.folder(path),
+      queryFn: async () => (await apiClient.encryptedFolder(path)).folder,
+      enabled: recipient !== null,
+      staleTime: Number.POSITIVE_INFINITY,
+    })),
+  });
+  const infos = new Map(parents.map((path, index) => [path, folders[index]?.data ?? null]));
+  const labels = useQuery({
+    queryKey: [
+      "encryption",
+      "trash-names",
+      recipient,
+      encrypted.map((entry) => [entry.id, entry.originalPath]),
+      [...infos.values()].map((info) => info?.marker.mac ?? null),
+    ],
+    queryFn: () => decryptLabels(encrypted, infos),
+    enabled:
+      recipient !== null &&
+      encrypted.length > 0 &&
+      folders.every((folder) => folder.isSuccess || folder.isError),
+    // Clear names stay in memory only while something shows them.
+    gcTime: 0,
+    placeholderData: (previous) => previous,
+  });
+  const decrypted = recipient === null ? undefined : labels.data;
+  return (entry) => {
+    if (!hasEncryptedName(entry.originalPath)) {
+      return { name: entry.name, folder: originalFolderLabel(entry.originalPath) };
+    }
+    return decrypted?.[entry.id] ?? lockedLabel(entry);
+  };
+}
+
+/** A trashed item's name, or "Encrypted item" with a lock where it cannot be read. */
+function TrashName({ label }: { label: TrashLabel }) {
+  if (label.name !== null) return label.name;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
+      <LockIcon className="size-3.5" aria-hidden="true" />
+      {ENCRYPTED_ITEM}
+    </span>
+  );
+}
+
 /** What the confirmation dialog is asking about: permanently deleting the
  * given selection, or emptying the whole trash. */
 type ConfirmAction =
@@ -69,7 +208,8 @@ export function TrashPage() {
   const emptyTrash = useTrashEmpty();
   const retention = retentionNote(useTrashSettings().data?.retentionDays);
 
-  const entries = trash.data?.entries ?? [];
+  const entries = useMemo(() => trash.data?.entries ?? [], [trash.data]);
+  const labelOf = useTrashLabels(entries);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [restoreTargetEntry, setRestoreTargetEntry] = useState<TrashEntry | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -111,7 +251,7 @@ export function TrashPage() {
     if (entry === undefined) {
       return;
     }
-    toast.error(restoreConflictMessage(entry.name), {
+    toast.error(restoreConflictMessage(labelOf(entry).name ?? ENCRYPTED_ITEM), {
       action: { label: "Restore to", onClick: () => setRestoreTargetEntry(entry) },
     });
   }
@@ -288,19 +428,20 @@ export function TrashPage() {
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-slot="trash-grid">
                   {entries.map((entry) => {
                     const deletedAt = new Date(entry.deletedAt);
+                    const label = labelOf(entry);
                     return (
                       <div key={entry.id} className="min-w-0 rounded-lg border p-3">
                         <div className="flex items-start gap-2">
                           <Checkbox
                             checked={selected.has(entry.id)}
                             onCheckedChange={(checked) => toggleOne(entry.id, checked)}
-                            aria-label={`Select ${entry.name}`}
+                            aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
                           />
                           <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium">{entry.name}</p>
-                            <p className="truncate text-xs text-muted-foreground">
-                              {originalFolderLabel(entry.originalPath)}
+                            <p className="truncate font-medium">
+                              <TrashName label={label} />
                             </p>
+                            <p className="truncate text-xs text-muted-foreground">{label.folder}</p>
                           </div>
                         </div>
                         <div className="mt-3 flex justify-between gap-2 text-xs text-muted-foreground">
@@ -335,19 +476,20 @@ export function TrashPage() {
                 <TableBody>
                   {entries.map((entry) => {
                     const deletedAt = new Date(entry.deletedAt);
+                    const label = labelOf(entry);
                     return (
                       <TableRow key={entry.id}>
                         <TableCell>
                           <Checkbox
                             checked={selected.has(entry.id)}
                             onCheckedChange={(checked) => toggleOne(entry.id, checked)}
-                            aria-label={`Select ${entry.name}`}
+                            aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
                           />
                         </TableCell>
-                        <TableCell className="font-medium">{entry.name}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {originalFolderLabel(entry.originalPath)}
+                        <TableCell className="font-medium">
+                          <TrashName label={label} />
                         </TableCell>
+                        <TableCell className="text-muted-foreground">{label.folder}</TableCell>
                         <TableCell className="text-right text-muted-foreground">
                           {formatBytes(entry.size)}
                         </TableCell>

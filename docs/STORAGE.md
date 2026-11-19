@@ -23,6 +23,9 @@ filesystem details and lets tests run on an in-memory storage. fdrive checks pas
   ([shared folders](../packages/local/src/shared.ts));
   `admit(username)`, which refuses a disabled or removed user; and `health()`, whether the folder is this installation's (its marker, below) and
   one the API can read, write and enter.
+- `deploymentFilesFolder` wraps every `storage(username)` in `guardEncryptedFolders`, which keeps
+  end-to-end encrypted folders to the routes allowed inside them and refuses clear names and
+  plaintext there ([encryption](ENCRYPTION.md#server)).
 - The files folder's id is the installation setting `storage.id`, created on the first start
   (`ensureStorageId`) and never changed: the Mac app compares it as each location's
   `providerId`, so a new one would have every Mac paired again. A server upgraded from before

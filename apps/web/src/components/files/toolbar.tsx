@@ -16,6 +16,7 @@ import {
   LayoutGridIcon,
   ListIcon,
   ListTreeIcon,
+  LockIcon,
   MessageSquarePlusIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
@@ -100,6 +101,8 @@ export interface FilesBreadcrumbProps {
   /** Called when an internal drag drops onto a breadcrumb segment (moving
    * the dragged entries up to that ancestor folder, or the current one). */
   onInternalDrop?: (paths: string[], targetPath: string, effect: "move" | "copy") => void;
+  /** Names to show for folders on the path, by path: an encrypted folder's decrypted ones. */
+  names?: ReadonlyMap<string, string> | undefined;
 }
 
 /** Shared by the visible crumbs and their hidden measuring copies, so both
@@ -111,9 +114,9 @@ const CRUMB_CLASS = "max-w-48 truncate rounded-sm px-1";
  * ancestors behind an ellipsis only once names would get too narrow (see
  * `breadcrumbLayout`). Below `md` the bar shows only the current folder's
  * name, which opens the folders above it (see `FolderTitleMenu`). */
-export function FilesBreadcrumb({ path, onInternalDrop }: FilesBreadcrumbProps) {
+export function FilesBreadcrumb({ path, onInternalDrop, names }: FilesBreadcrumbProps) {
   const isMobile = useIsMobile();
-  const crumbs = buildBreadcrumbs(path);
+  const crumbs = buildBreadcrumbs(path, names);
   const { navRef, measureRef, widths } = useTrailWidths(path, !isMobile);
   const layout = breadcrumbLayout(crumbs, widths);
 
@@ -425,6 +428,8 @@ export interface FilesToolbarActionsProps {
   gridSize: GridSize;
   onGridSizeChange: (size: GridSize) => void;
   onNewFolder: () => void;
+  /** Makes an end-to-end encrypted folder; absent where one cannot go. */
+  onNewEncryptedFolder?: (() => void) | undefined;
   onNewFile: (kind: NewFileKind) => void;
   onUploadFiles: () => void;
   onUploadFolder: () => void;
@@ -455,6 +460,11 @@ export interface FilesToolbarActionsProps {
    * Duplicate are then off, with the reason as their tooltip.
    */
   writeBlock?: string | null | undefined;
+  /**
+   * The folder is inside an encrypted folder: new text files are hidden, and
+   * Duplicate and Compress are off, since the server cannot read or make them there.
+   */
+  encrypted?: boolean | undefined;
 }
 
 interface ViewSortMenuItemsProps {
@@ -738,6 +748,7 @@ export function FilesToolbarActions({
   gridSize,
   onGridSizeChange,
   onNewFolder,
+  onNewEncryptedFolder,
   onNewFile,
   onNewOfficeDocument,
   onUploadFiles,
@@ -755,6 +766,7 @@ export function FilesToolbarActions({
   showThumbnails,
   onShowThumbnailsChange,
   writeBlock = null,
+  encrypted = false,
 }: FilesToolbarActionsProps) {
   const blocked = writeBlock !== null;
   const isMobile = useIsMobile();
@@ -821,15 +833,25 @@ export function FilesToolbarActions({
             New folder
             <DropdownMenuShortcut>⌘⇧N</DropdownMenuShortcut>
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
-            <FileTextIcon />
-            Text file
-          </DropdownMenuItem>
-          <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("markdown")}>
-            <FileCodeIcon />
-            Markdown file
-          </DropdownMenuItem>
+          {onNewEncryptedFolder !== undefined && (
+            <DropdownMenuItem className="whitespace-nowrap" onClick={onNewEncryptedFolder}>
+              <LockIcon />
+              Encrypted folder
+            </DropdownMenuItem>
+          )}
+          {!encrypted && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("text")}>
+                <FileTextIcon />
+                Text file
+              </DropdownMenuItem>
+              <DropdownMenuItem className="whitespace-nowrap" onClick={() => onNewFile("markdown")}>
+                <FileCodeIcon />
+                Markdown file
+              </DropdownMenuItem>
+            </>
+          )}
           {onNewOfficeDocument && (
             <>
               <DropdownMenuSeparator />
@@ -904,7 +926,7 @@ export function FilesToolbarActions({
                 <Button
                   variant="ghost"
                   size="icon-xs"
-                  disabled={selectedCount !== 1 || blocked}
+                  disabled={selectedCount !== 1 || blocked || encrypted}
                   aria-label="Duplicate"
                   onClick={onDuplicateSelection}
                 />
@@ -921,6 +943,7 @@ export function FilesToolbarActions({
                   variant="ghost"
                   size="icon-xs"
                   aria-label="Compress"
+                  disabled={encrypted}
                   onClick={onCompressSelection}
                 />
               }
@@ -1025,13 +1048,16 @@ export function FilesToolbarActions({
             </DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              disabled={selectedCount !== 1 || blocked}
+              disabled={selectedCount !== 1 || blocked || encrypted}
               onClick={onDuplicateSelection}
             >
               <CopyIcon />
               Duplicate
             </DropdownMenuItem>
-            <DropdownMenuItem disabled={selectedCount === 0} onClick={onCompressSelection}>
+            <DropdownMenuItem
+              disabled={selectedCount === 0 || encrypted}
+              onClick={onCompressSelection}
+            >
               <FileArchiveIcon />
               Compress
             </DropdownMenuItem>

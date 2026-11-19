@@ -95,6 +95,22 @@ export const ROUTES = {
    * `:id` DELETE: remove one -> `OkResponse`. A no-op (200) when gone or another account's.
    */
   savedSearches: "/api/v1/saved-searches",
+  /**
+   * End-to-end encryption, session only. `base` GET: `EncryptionStatus`; POST: turn it on
+   * (`EncryptionSetupRequest`). `password` PUT: a new password copy. `reset` POST: delete every
+   * key copy. `folders` POST: make an encrypted folder -> `EncryptedFolderInfo` (201). `folder`
+   * GET `?path=`: `EncryptedFolderResponse`. `entries` GET `?path=`:
+   * `EncryptedEntriesResponse`. `devices/:id` DELETE: remove a Mac's copy and its token.
+   */
+  encryption: {
+    base: "/api/v1/encryption",
+    password: "/api/v1/encryption/password",
+    reset: "/api/v1/encryption/reset",
+    folders: "/api/v1/encryption/folders",
+    folder: "/api/v1/encryption/folder",
+    entries: "/api/v1/encryption/entries",
+    devices: "/api/v1/encryption/devices",
+  },
   recents: {
     /** GET: the caller's recently opened paths -> `RecentsResponse`. */
     list: "/api/v1/recents",
@@ -315,6 +331,11 @@ export function tagRoute(id: string): string {
 /** GET: every path tagged with `id` -> `TagFilesResponse`. */
 export function tagFilesRoute(id: string): string {
   return `${tagRoute(id)}/files`;
+}
+
+/** DELETE: remove one Mac's copy of the account key and revoke its token -> `OkResponse`. */
+export function encryptionDeviceRoute(id: string): string {
+  return `${ROUTES.encryption.devices}/${encodeURIComponent(id)}`;
 }
 
 /** DELETE: one saved search by id -> `OkResponse`. */

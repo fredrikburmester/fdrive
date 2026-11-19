@@ -1,0 +1,32 @@
+{
+  "name": "@fdrive/crypto",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.package.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "vectors": "tsx --conditions=development scripts/vectors.ts"
+  },
+  "dependencies": {
+    "@fdrive/contracts": "workspace:*",
+    "@scure/base": "2.4.0",
+    "age-encryption": "0.3.1"
+  },
+  "devDependencies": {
+    "@fdrive/config": "workspace:*",
+    "@vitest/coverage-v8": "^5.0.0",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}

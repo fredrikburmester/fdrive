@@ -16,7 +16,9 @@ export interface SuggestionGroup {
 
 /** Who receives the selection's names and excerpts, in words a person recognizes. */
 export function providerLabel(provider: AiProvider | null): string {
-  return provider === "anthropic" ? "Claude (Anthropic)" : "your AI server";
+  if (provider === "anthropic") return "Claude (Anthropic)";
+  if (provider === "mistral") return "Mistral";
+  return "your AI server";
 }
 
 /**

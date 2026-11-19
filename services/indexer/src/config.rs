@@ -12,6 +12,7 @@ pub const SKIP_NAMES: &[&str] = &[
     "desktop.ini",
     ".localized",
     crate::files_marker::FILES_MARKER,
+    crate::encrypted::MARKER,
 ];
 /// Folders a walk never enters, wherever they lie. fdrive's own is the Mac app's folder (its
 /// staged uploads); fdrive's Trash is indexed, so moves into and out of it stay renames that keep

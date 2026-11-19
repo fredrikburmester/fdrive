@@ -96,8 +96,8 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
       .click();
     await expect(page).toHaveURL(new RegExp(`/files/${sandbox}(\\?select=invoice-2024\\.txt)?$`));
     await expect(
-      listing(page).locator(`[data-path="/${sandbox}/invoice-2024.txt"]`),
-    ).toHaveAttribute("data-selected", "true");
+      listing(page).getByRole("checkbox", { name: "Select invoice-2024.txt" }),
+    ).toBeChecked();
 
     // Paths written as code are links too, and find the stored spelling of accented names.
     await panel(page)
@@ -110,10 +110,9 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
       .getByRole("link", { name: `/${sandbox}/shopping.txt` })
       .click();
     await expect(page).toHaveURL(new RegExp(`/files/${sandbox}(\\?select=shopping\\.txt)?$`));
-    await expect(listing(page).locator(`[data-path="/${sandbox}/shopping.txt"]`)).toHaveAttribute(
-      "data-selected",
-      "true",
-    );
+    await expect(
+      listing(page).getByRole("checkbox", { name: "Select shopping.txt" }),
+    ).toBeChecked();
 
     // Dropping a file from the listing attaches it. The account's finished
     // jobs from earlier specs reopen the Activity panel on every page load,

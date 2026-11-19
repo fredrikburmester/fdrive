@@ -1,12 +1,23 @@
 import Foundation
 import Security
 
-/// Where each location's bearer secret is kept: the shared Keychain, or memory in tests.
+/// Where each location's bearer secret and encryption keys are kept: the shared Keychain, or
+/// memory in tests.
 public protocol TokenVault: Sendable {
     func token(_ id: String) throws -> String
     func setToken(_ token: String, id: String) throws
     /// Succeeds when there is no token for `id`.
     func removeToken(_ id: String) throws
+    /// An encryption key by name; nil when there is none.
+    func secret(_ name: String) throws -> String?
+    func setSecret(_ secret: String, name: String) throws
+    /// Succeeds when there is none.
+    func removeSecret(_ name: String) throws
+}
+public extension TokenVault {
+    func secret(_ name: String) throws -> String? { nil }
+    func setSecret(_ secret: String, name: String) throws { throw DriveError.locked(EncryptionLock.noKey) }
+    func removeSecret(_ name: String) throws {}
 }
 
 public struct ConnectionStore: Sendable {
@@ -71,7 +82,35 @@ public struct ConnectionStore: Sendable {
         if FileManager.default.fileExists(atPath: pendingPairingURL.path) { try FileManager.default.removeItem(at: pendingPairingURL) }
     }
     public func catalog(_ location: SavedLocation) throws -> Catalog {
-        try Catalog(url: directory.appendingPathComponent(location.id + ".sqlite"), title: location.title)
+        try Catalog(url: directory.appendingPathComponent(location.id + ".sqlite"), title: location.title,
+                    keyring: keyring(location.id))
+    }
+    /// The account key a location's encrypted folders open with, read from the Keychain on first use.
+    public func keyring(_ id: String) -> EncryptionKeyring {
+        EncryptionKeyring { [vault] in try vault.secret("account:" + id).map(AgeIdentity.init) }
+    }
+    /// This Mac's own identity for a location; the server's copy of the account key is encrypted to it.
+    public func deviceIdentity(_ id: String) throws -> AgeIdentity? { try vault.secret("device:" + id).map(AgeIdentity.init) }
+    public func setDeviceIdentity(_ identity: AgeIdentity, location id: String) throws {
+        try vault.setSecret(identity.string, name: "device:" + id)
+    }
+    /// The account identity, once this Mac has unlocked its copy.
+    public func accountIdentity(_ id: String) throws -> AgeIdentity? { try vault.secret("account:" + id).map(AgeIdentity.init) }
+    public func setAccountIdentity(_ identity: AgeIdentity, location id: String) throws {
+        try vault.setSecret(identity.string, name: "account:" + id)
+    }
+    /// The device identity a pairing under way sent its recipient for, until it is installed.
+    public func pairingIdentity(_ pairingId: String) throws -> AgeIdentity? {
+        try vault.secret("pairing:" + pairingId).map(AgeIdentity.init)
+    }
+    public func setPairingIdentity(_ identity: AgeIdentity, pairing pairingId: String) throws {
+        try vault.setSecret(identity.string, name: "pairing:" + pairingId)
+    }
+    public func removePairingIdentity(_ pairingId: String) throws { try vault.removeSecret("pairing:" + pairingId) }
+    /// Forgets a location's device and account keys.
+    public func removeKeys(_ id: String) throws {
+        try vault.removeSecret("device:" + id)
+        try vault.removeSecret("account:" + id)
     }
     public func token(_ id: String) throws -> String { try vault.token(id) }
     public func setToken(_ token: String, id: String) throws { try vault.setToken(token, id: id) }
@@ -92,16 +131,43 @@ public struct ConnectionStore: Sendable {
     }
 }
 
-/// Credentials in the shared Data Protection Keychain, readable by the app and its extension.
+/// Credentials and encryption keys in the shared Data Protection Keychain, readable by the app
+/// and its extension and never synced or backed up off this Mac.
 public struct KeychainVault: TokenVault {
     public let group: String?
     public init(group: String?) { self.group = group }
-    private func query(_ id: String) -> [String: Any] {
+    private func query(_ id: String, service: String = "fdrive.desktop") -> [String: Any] {
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecUseDataProtectionKeychain as String: true,
-            kSecAttrService as String: "fdrive.desktop", kSecAttrAccount as String: id]
+            kSecAttrService as String: service, kSecAttrAccount as String: id]
         if let group { query[kSecAttrAccessGroup as String] = group }
         return query
+    }
+    public func secret(_ name: String) throws -> String? {
+        var query = query(name, service: "fdrive.encryption"); query[kSecReturnData as String] = true
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data, let secret = String(data: data, encoding: .utf8) else {
+            throw DriveError.locked("FDrive could not read its encryption key from the Keychain.")
+        }
+        return secret
+    }
+    public func setSecret(_ secret: String, name: String) throws {
+        let query = query(name, service: "fdrive.encryption")
+        let attributes: [String: Any] = [kSecValueData as String: Data(secret.utf8)]
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var entry = query.merging(attributes) { _, value in value }
+            entry[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            guard SecItemAdd(entry as CFDictionary, nil) == errSecSuccess else {
+                throw DriveError.locked("FDrive could not keep its encryption key in the Keychain.")
+            }
+        } else if status != errSecSuccess { throw DriveError.locked("FDrive could not keep its encryption key in the Keychain.") }
+    }
+    public func removeSecret(_ name: String) throws {
+        let status = SecItemDelete(query(name, service: "fdrive.encryption") as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw DriveError.authentication }
     }
     public func token(_ id: String) throws -> String {
         var query = query(id); query[kSecReturnData as String] = true

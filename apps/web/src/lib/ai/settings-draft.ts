@@ -2,7 +2,9 @@ import {
   type AiProvider,
   type AiSettings,
   type AiSettingsUpdateRequest,
+  aiProviderHasBaseUrl,
   DEFAULT_AI_MODEL,
+  type HostedAiProvider,
   isHttpUrl,
 } from "@fdrive/contracts";
 
@@ -21,7 +23,14 @@ export interface AiDraft {
 
 export const AI_PROVIDER_LABELS: Record<AiProvider, string> = {
   anthropic: "Anthropic (Claude)",
+  mistral: "Mistral",
   openai_compatible: "OpenAI-compatible server",
+};
+
+/** The key a hosted provider needs, as validation names it. */
+const API_KEY_NAMES: Record<HostedAiProvider, string> = {
+  anthropic: "an Anthropic API key",
+  mistral: "a Mistral API key",
 };
 
 export function draftFrom(settings: AiSettings): AiDraft {
@@ -41,11 +50,16 @@ export function withProvider(draft: AiDraft, provider: AiProvider): AiDraft {
   if (provider === draft.provider) return draft;
   const model =
     draft.model === DEFAULT_AI_MODEL[draft.provider] ? DEFAULT_AI_MODEL[provider] : draft.model;
-  return { ...draft, provider, model, baseUrl: provider === "anthropic" ? "" : draft.baseUrl };
+  return {
+    ...draft,
+    provider,
+    model,
+    baseUrl: aiProviderHasBaseUrl(provider) ? draft.baseUrl : "",
+  };
 }
 
 function sameAddress(draft: AiDraft, saved: AiSettings): boolean {
-  const baseUrl = draft.provider === "anthropic" ? null : draft.baseUrl.trim();
+  const baseUrl = aiProviderHasBaseUrl(draft.provider) ? draft.baseUrl.trim() : null;
   return draft.provider === saved.provider && baseUrl === saved.baseUrl;
 }
 
@@ -71,14 +85,11 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
   const model = draft.model.trim();
   const baseUrl = draft.baseUrl.trim();
   if (model === "") errors.push("Enter a model.");
-  if (draft.provider === "openai_compatible" && !isHttpUrl(baseUrl))
-    errors.push("Enter the server's base URL, starting with http:// or https://.");
-  if (
-    (draft.organize || draft.chat) &&
-    draft.provider === "anthropic" &&
-    !keyAfterSave(draft, saved)
-  )
-    errors.push("Enter an Anthropic API key to turn Organize or Chat on.");
+  if (aiProviderHasBaseUrl(draft.provider)) {
+    if (!isHttpUrl(baseUrl))
+      errors.push("Enter the server's base URL, starting with http:// or https://.");
+  } else if ((draft.organize || draft.chat) && !keyAfterSave(draft, saved))
+    errors.push(`Enter ${API_KEY_NAMES[draft.provider]} to turn Organize or Chat on.`);
   if (errors.length > 0) return { ok: false, errors };
   const apiKey = draft.apiKey.trim();
   return {
@@ -89,7 +100,7 @@ export function requestFrom(draft: AiDraft, saved: AiSettings): AiDraftResult {
       chat: draft.chat,
       provider: draft.provider,
       model,
-      baseUrl: draft.provider === "anthropic" ? null : baseUrl,
+      baseUrl: aiProviderHasBaseUrl(draft.provider) ? baseUrl : null,
       ...(apiKey !== "" ? { apiKey } : draft.clearKey ? { apiKey: null } : {}),
     },
   };
@@ -105,7 +116,7 @@ export type AiStatusTone = "on" | "off" | "incomplete";
 /** How the page summarizes saved settings. */
 export function aiStatus(settings: AiSettings): { tone: AiStatusTone; label: string } {
   if (!settings.organize && !settings.chat) return { tone: "off", label: "Off" };
-  if (settings.provider === "anthropic" && !settings.hasApiKey)
+  if (!aiProviderHasBaseUrl(settings.provider) && !settings.hasApiKey)
     return { tone: "incomplete", label: "Needs an API key" };
   return { tone: "on", label: "On" };
 }

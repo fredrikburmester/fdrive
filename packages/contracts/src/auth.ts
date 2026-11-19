@@ -38,6 +38,8 @@ export const MeResponse = z.object({
    * that needs it is on): search, thumbnails and folder sizes apply.
    */
   index: z.boolean(),
+  /** End-to-end encrypted folders can be made and opened. */
+  encryptedFolders: z.boolean(),
 });
 
 export type MeResponse = z.infer<typeof MeResponse>;

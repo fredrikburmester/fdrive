@@ -6,6 +6,7 @@ export {
   SystemActivityResponse,
   WorkerActivity,
 } from "./activity.ts";
+export type { HostedAiProvider } from "./ai.ts";
 export {
   AI_SETTINGS_KEY,
   AiConnectionTestResponse,
@@ -13,6 +14,7 @@ export {
   AiSettings,
   AiSettingsUpdateRequest,
   AiStatusResponse,
+  aiProviderHasBaseUrl,
   CHAT_RETENTION_DAYS,
   Chat,
   ChatActionEdits,
@@ -69,6 +71,7 @@ export type {
 export { ApiClientError, buildRequestUrl, createApiClient, toQueryString } from "./client.ts";
 export * from "./desktop.ts";
 export * from "./desktop-writes.ts";
+export * from "./encryption.ts";
 export { ApiError, ApiErrorKind, statusForKind } from "./error.ts";
 export {
   FsEvent,
@@ -186,6 +189,7 @@ export {
   chatCancelRoute,
   chatMessagesRoute,
   chatRoute,
+  encryptionDeviceRoute,
   grantRoute,
   jobCancelRoute,
   jobRoute,

@@ -23,6 +23,10 @@ function entry(path: string): FsEntry {
 
 const IDENTITY_ID = "identity-1";
 
+/** A file stored inside an encrypted folder: its name is the encrypted one. */
+const ENCRYPTED_PATH = `/Vault/fe1-${"a".repeat(47)}`;
+const OTHER_ENCRYPTED_PATH = `/Vault/fe1-${"b".repeat(47)}`;
+
 describe("createMetadataService: decorate", () => {
   it("adds empty meta when nothing is tagged or favorited", async () => {
     const { service } = buildService();
@@ -378,5 +382,27 @@ describe("createMetadataService: AI chat references", () => {
     const service = createMetadataService(withoutChats);
     await expect(service.onMoved(IDENTITY_ID, "/a", "/b", false)).resolves.toBeUndefined();
     await expect(service.onDeleted(IDENTITY_ID, "/b", false)).resolves.toBeUndefined();
+  });
+});
+
+describe("createMetadataService: encrypted folders", () => {
+  it("keeps what is inside an encrypted folder out of Recents, Favorites and tags", async () => {
+    const { repos, service } = buildService();
+    const account = await repos.accounts.create({ displayName: "Alice" });
+    const tag = await repos.tags.create(account.id, { name: "Work", color: null });
+    await repos.fileTags.setTags(IDENTITY_ID, ENCRYPTED_PATH, [tag.id]);
+    await repos.favorites.add(IDENTITY_ID, ENCRYPTED_PATH, "file");
+    await repos.favorites.add(IDENTITY_ID, "/Vault", "dir");
+    await repos.recents.touch(IDENTITY_ID, ENCRYPTED_PATH);
+
+    await service.touchRecent(IDENTITY_ID, OTHER_ENCRYPTED_PATH);
+    await service.touchRecent(IDENTITY_ID, "/a.txt");
+
+    expect(await service.filesForTag(IDENTITY_ID, tag.id)).toEqual([]);
+    expect((await service.listFavorites(IDENTITY_ID)).map((f) => f.path)).toEqual(["/Vault"]);
+    expect((await service.listRecents(IDENTITY_ID)).map((r) => r.path)).toEqual(["/a.txt"]);
+    expect((await repos.recents.list(IDENTITY_ID, 10)).map((r) => r.path)).not.toContain(
+      OTHER_ENCRYPTED_PATH,
+    );
   });
 });

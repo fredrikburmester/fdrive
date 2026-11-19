@@ -1,8 +1,9 @@
 /**
  * The provider-neutral surface fdrive's AI features are written against.
- * Each adapter (`anthropic.ts`, `openai-compatible.ts`) keeps its own native
- * conversation history, so provider-specific content such as Claude's
- * thinking blocks is replayed exactly as the provider returned it.
+ * Each adapter (`anthropic.ts`, `mistral.ts`, `openai-compatible.ts`) keeps
+ * its own native conversation history, so provider-specific content such as
+ * Claude's thinking blocks or Mistral's thinking chunks is replayed exactly as
+ * the provider returned it.
  */
 
 /** A tool the model may call. `inputSchema` is a JSON Schema object. */

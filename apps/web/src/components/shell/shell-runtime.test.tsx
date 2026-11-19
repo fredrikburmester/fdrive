@@ -41,6 +41,7 @@ it("hydrates jobs and opens one event stream once mounted", async () => {
     },
   );
   vi.spyOn(apiClient, "me").mockResolvedValue(me);
+  vi.spyOn(apiClient, "encryptionStatus").mockResolvedValue({ enabled: false });
   const jobs = vi.spyOn(apiClient, "jobs").mockResolvedValue([doneJob]);
   const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
   client.setQueryData(["auth", "me"], me);

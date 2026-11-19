@@ -54,9 +54,9 @@ test("folder pins survive reload and another browser; siblings and children inhe
   await page.reload();
   await expectMode(page, "Grid");
   await page.goto(`/files${root}/photos/child`);
-  await expectMode(page, "Tree");
+  await expectMode(page, "List");
   await page.goto(`/files${root}/sibling`);
-  await expectMode(page, "Tree");
+  await expectMode(page, "List");
 
   const state = await page.context().storageState();
   const other = await browser.newContext({
@@ -91,14 +91,14 @@ test("rename carries subtree pins, and account reset removes them", async ({ pag
   await folder(page, root);
   await folder(page, `${root}/child`);
   await page.goto(`/files${root}/child`);
-  await mode(page, "Grid");
+  await mode(page, "Tree");
   await expect
     .poll(
       async () =>
         (await (await page.request.get(`/api/v1/folder-views?path=${root}/child`)).json()).view
           ?.mode,
     )
-    .toBe("grid");
+    .toBe("tree");
   const renamed = `${root}-renamed`;
   expect(
     (
@@ -108,14 +108,14 @@ test("rename carries subtree pins, and account reset removes them", async ({ pag
     ).ok(),
   ).toBe(true);
   await page.goto(`/files${renamed}/child`);
-  await expectMode(page, "Grid");
+  await expectMode(page, "Tree");
   await page.goto("/account");
   await page.getByRole("button", { name: "Reset all folder views", exact: true }).click();
   await expect(
     page.getByText("All folders now use the default view and sort.", { exact: true }),
   ).toBeVisible();
   await page.goto(`/files${renamed}/child`);
-  await expectMode(page, "Tree");
+  await expectMode(page, "List");
 });
 
 test("failed writes restore the previous view", async ({ page }) => {
@@ -134,7 +134,7 @@ test("failed writes restore the previous view", async ({ page }) => {
   });
   await mode(page, "Grid");
   await expect(page.getByText("Could not save the folder view.", { exact: true })).toBeVisible();
-  await expectMode(page, "Tree");
+  await expectMode(page, "List");
 });
 
 test("mobile View submenu saves the current folder and offers both default actions", async ({

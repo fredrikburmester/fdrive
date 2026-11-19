@@ -1,9 +1,23 @@
 import type { Scope } from "@fdrive/core";
 import { describe, expect, it } from "vitest";
-import { roundTripVirtualPath } from "./round-trip.ts";
+import { listedVirtualPath, roundTripVirtualPath } from "./round-trip.ts";
 
 const home: Scope = { fsPrefix: "/alice", virtualPrefix: "/" };
 const shared: Scope = { fsPrefix: "/bob/team", virtualPrefix: "/Shared with me/team" };
+
+describe("listedVirtualPath", () => {
+  const encrypted = `fe1-${"a".repeat(47)}`;
+
+  it("leaves out what is inside an encrypted folder, but not the folder", () => {
+    expect(listedVirtualPath([home], "/alice/Private")).toBe("/Private");
+    expect(listedVirtualPath([home], `/alice/Private/${encrypted}`)).toBeNull();
+    expect(listedVirtualPath([home], "/bob/x")).toBeNull();
+    // The change journal still sees it.
+    expect(roundTripVirtualPath([home], `/alice/Private/${encrypted}`)).toBe(
+      `/Private/${encrypted}`,
+    );
+  });
+});
 
 describe("roundTripVirtualPath", () => {
   it("returns the virtual path for a plain home-scope file", () => {

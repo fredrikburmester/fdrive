@@ -325,6 +325,54 @@ move to Trash, Finder's or a delete's, waits for every write inside the item, a 
 FDrive for Mac 0.5 and earlier refuse every permanent delete in the app itself, without asking
 the server, and macOS retries those deletes until the app is updated.
 
+## Encrypted folders
+
+End-to-end encrypted folders ([encryption](ENCRYPTION.md)) open in Finder when the server says
+`encryptedFolders` on `location` and this Mac holds the account key. FdriveKit implements the
+format with CryptoKit only: age v1 files with one X25519 recipient, `fe1-` names (AES-256-GCM)
+and the `.fdrive-encrypted` marker. It passes `packages/crypto/vectors/v1.json`, and
+`packages/crypto` opens what FdriveKit makes (`v1-swift.json`).
+
+**Keys.** Every pairing makes a new device identity and sends its recipient with the request.
+The connection code is then the Mac's own: SHA-256 of the recipient and the pairing's nonce. The
+app shows the code it computes and refuses to connect when the server's differs. The browser
+that approves encrypts the account key to that recipient. After pairing the app fetches it
+(`GET /encryption`), decrypts it with the device identity and checks it belongs to the
+account's recipient. Both identities are kept per location in the shared Data Protection
+Keychain (service `fdrive.encryption`, AfterFirstUnlockThisDeviceOnly), never in a file. The
+extension reads the account key from there. Remove deletes both.
+
+The location card shows the account key's fingerprint, to compare with Account › Encryption in
+the browser. A Mac paired while encryption was off, or by an older app, shows encrypted folders
+as locked with the reason, and offers Reconnect. The app asks for a missing key on Refresh and
+every ten minutes.
+
+**Browsing.** Every request sends `x-fdrive-encrypted-folders: 1`. A listing of an encrypted
+folder, or of a folder in one, carries the folder's marker. The catalog opens it with the
+account key, checking its MAC first, and decrypts each name. It keeps the server's name and
+path for every request and shows Finder the clear name; the file type comes from it. Two
+entries that decrypt to the same name both show, one with a number. A name that does not
+decrypt is a stray: it shows as "Unreadable item" and is read-only. A folder the catalog knows
+is encrypted, listed without its marker, is refused. One this Mac cannot open fails to open in
+Finder with the reason.
+
+**Opening.** The download is checked as any other: hash and version are the ciphertext's. It is
+then decrypted into a second file, which Finder gets; the free-space check covers both. Finder
+shows the plaintext size. Downloaded files sit decrypted in File Provider storage, protected by
+FileVault, and Spotlight may index them.
+
+**Writes.** New files and saves are encrypted into the recovery copy, so the staged size and
+hash are the ciphertext's, and go up under an encrypted name. So do new folders and renames.
+Names over 128 bytes, and names this Mac already shows in the folder, are refused. A conflict
+copy is named from the clear name, then encrypted. A Finder copy into the folder is a new file.
+Moving an item into or out of an encrypted folder is refused with a message to copy it instead.
+A refusal from the server (`encrypted_folder`) is shown and not retried. A reimport compares
+decrypted contents, never ciphertext.
+
+**Trash.** An item goes to Trash under the server's own name. Finder's Trash shows its clear
+name, decrypted from where it was deleted. **Restore from Trash…** and dragging it out put it
+back only inside its encrypted folder.
+
 ## Build and verify
 
 Use Xcode 26+ with its command-line tools selected. The checked-in Xcode project needs no
@@ -370,7 +418,8 @@ The macOS team-prefixed App Group is deliberate. A `group.*` identifier without 
 provisioning authorization can let the creator app access its container while denying the
 extension, causing Finder's generic loading error. See
 [Apple's App Group guidance](https://developer.apple.com/documentation/xcode/accessing-app-group-containers).
-Credentials use the shared Data Protection Keychain with AfterFirstUnlockThisDeviceOnly.
+Credentials and encryption keys use the shared Data Protection Keychain with
+AfterFirstUnlockThisDeviceOnly.
 
 The **macOS native** GitHub workflow is manual. It builds unsigned and runs Swift tests. Backend work still requires the application and
 integration checks, and browser pairing requires `pnpm test:e2e e2e/desktop.spec.ts` and live
@@ -392,7 +441,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 
 | Endpoint | Authorization and behavior |
 | --- | --- |
-| `POST /pairings` | Creates a five-minute request, app-held secret and visible code |
+| `POST /pairings` | Creates a five-minute request, app-held secret and visible code; with `deviceRecipient`, a `nonce` and a code from both |
 | `GET /pairings/:id` | Signed-in browser reads device/code/expiry only |
 | `POST /pairings/:id/approve` | Browser session and CSRF; `{ access: "read" \| "full" }` for the session's login |
 | `POST /pairings/:id/poll` | App secret; repeated redemption returns the same issued bundle |
@@ -406,6 +455,7 @@ Desktop protocol v1 lives at `/api/v1/desktop`; contracts are in
 | `GET /content?path=` | Original streamed bytes; no MCP size cap |
 | `POST /versions` | Content versions (sha256) of up to 16 authorized files for cache validation, from the index where it provably holds them |
 | `POST /purges` | Protocol 2, full access: `{ itemId }` deletes a whole item in the user's own Trash for good; an item gone already answers `ok`, anything else 409 |
+| `GET /encryption` | Protocol 2, where `location` says `encryptedFolders`: this Mac's copy of the account key, `{ recipient, deviceKey }`; 404 without one. See [encrypted folders](#encrypted-folders) |
 | `POST /disconnect` | Revoke this bearer only |
 
 Every route refuses a bearer it does not accept with 401. For a well-formed desktop credential the
@@ -478,9 +528,9 @@ appear as removal plus addition. Path-only backends cannot prove a delete/recrea
 that occurred entirely between observations. With protocol 2 server handles, a changed
 handle or kind at an unchanged path is treated as delete plus recreate, so cached bytes are
 never served for the new item; a handle observed at another path keeps its item and
-downloaded content. Names colliding by Unicode normalization/case, containing a colon, or
-named `.Trash` in the root of a writable location fail the listing with guidance rather
-than merge, hide or shadow distinct entries. Symlinks, wherever they lead, and other special
+downloaded content. Outside encrypted folders, names colliding by Unicode normalization/case,
+containing a colon, or named `.Trash` in the root of a writable location fail the listing with
+guidance rather than merge, hide or shadow distinct entries. Symlinks, wherever they lead, and other special
 entries have no reading capability: listings show every link as one, and storage refuses any
 path that passes through a link, at any segment, for every caller, since grants and fdrive's
 own folders are checked against the path as asked.

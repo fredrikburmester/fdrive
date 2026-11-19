@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgeFileBase64, AgeRecipient } from "./encryption.ts";
 
 export const DESKTOP_API = "/api/v1/desktop";
 export const DESKTOP_PROTOCOL_VERSION = 1;
@@ -11,9 +12,18 @@ export const DesktopPath = z
     (value) => ![...value].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127),
     "Invalid path",
   );
-export const DesktopPairRequest = z.strictObject({ deviceName: z.string().trim().min(1).max(100) });
+export const DesktopPairRequest = z.strictObject({
+  deviceName: z.string().trim().min(1).max(100),
+  /** The Mac's own age recipient. The pairing code is then a digest of it, and the browser
+   * that approves can give the Mac a copy of the account key. */
+  deviceRecipient: AgeRecipient.optional(),
+});
 /** The browser connects the Mac to its signed-in login, read-only or with Finder writes. */
-export const DesktopPairApproval = z.strictObject({ access: z.enum(["read", "full"]) });
+export const DesktopPairApproval = z.strictObject({
+  access: z.enum(["read", "full"]),
+  /** The account identity as an age file to the device recipient, when encryption is on. */
+  deviceKey: AgeFileBase64.optional(),
+});
 export const DesktopPairSecret = z.strictObject({
   secret: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
 });
@@ -22,6 +32,8 @@ export const DesktopPairing = z.object({
   secret: z.string(),
   code: z.string(),
   expiresAt: z.iso.datetime(),
+  /** With a device recipient: the random value the code covers along with it. */
+  nonce: z.string().optional(),
 });
 export const DesktopPairInfo = z.object({
   deviceName: z.string(),
@@ -29,6 +41,8 @@ export const DesktopPairInfo = z.object({
   expiresAt: z.iso.datetime(),
   approved: z.boolean(),
   supportsWrites: z.boolean().optional(),
+  deviceRecipient: AgeRecipient.optional(),
+  nonce: z.string().optional(),
 });
 export const DesktopLocation = z.object({
   protocolVersion: z.literal(DESKTOP_PROTOCOL_VERSION),

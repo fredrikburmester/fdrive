@@ -22,6 +22,7 @@ use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, SegmentReader, Tant
 use unicode_normalization::UnicodeNormalization;
 
 use crate::db::Db;
+use crate::encrypted::is_encrypted_name;
 use crate::failures::describe;
 use crate::log::log;
 use crate::paths::basename;
@@ -254,6 +255,9 @@ struct Row {
     mtime_ns: i64,
 }
 
+/// The rows the index holds of those `sql` reads. An entry stored under an encrypted name is
+/// left out: its name means nothing to search, and the clients that can read it search what they
+/// decrypt. An encrypted folder's own name, and a clear name someone put inside it, stay in.
 fn read_rows(
     c: &mut Client,
     sql: &str,
@@ -263,10 +267,14 @@ fn read_rows(
     let mut rows = c.query_raw(sql, params.iter().copied())?;
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
+        let path: String = row.get(1);
+        if is_encrypted_name(basename(&path)) {
+            continue;
+        }
         out.push(Row {
             kind,
             id: row.get(0),
-            path: row.get(1),
+            path,
             mtime_ns: row.get(2),
         });
     }

@@ -5,6 +5,8 @@ export const DURABLE_TABLES = [
   "app.accounts",
   "app.identities",
   "app.api_tokens",
+  "app.encryption_keys",
+  "app.encryption_device_keys",
   "app.tags",
   "app.file_tags",
   "app.favorites",

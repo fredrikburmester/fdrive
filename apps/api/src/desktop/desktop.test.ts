@@ -16,6 +16,8 @@ import { memoryTrashItemRepo } from "../../test/trash-items.js";
 import { createApp } from "../app.js";
 import type { Principal, PrincipalExtras } from "../auth/principal.js";
 import { loadConfig } from "../config.js";
+import { guardEncryptedFolders } from "../encryption/guard.js";
+import { registerEncryptedAccess } from "../encryption/routes.js";
 import { ApiHttpError } from "../errors.js";
 import { fileActor } from "../files/operations.js";
 import { createResolveTokenPrincipal } from "../tokens/principal.js";
@@ -233,6 +235,120 @@ async function pairWritable(f: Awaited<ReturnType<typeof fixture>>) {
       headers: { ...json, ...(authorized ? { authorization: `Bearer ${token}` } : {}) },
     });
 }
+
+it("gives a Mac that pairs with a device key its copy of the account key, and encrypted folders", async () => {
+  const deviceKeys = new Map<string, string>();
+  const recipient = `age1${"q".repeat(58)}`;
+  const deviceRecipient = `age1${"d".repeat(58)}`;
+  const marker = {
+    v: 1 as const,
+    id: "2f1b8f3e-8c55-4d2b-9a57-1d3b6f0c2a11",
+    recipient,
+    members: [{ recipient, key: "YWdl" }],
+    mac: `${"A".repeat(43)}=`,
+  };
+  const enc = (letter: string) => `fe1-${"a".repeat(46)}${letter}`;
+  const f = await fixture(true, undefined, {
+    encryption: {
+      setDeviceKey: async (tokenId, _identityId, deviceKey) => {
+        deviceKeys.set(tokenId, deviceKey);
+        return true;
+      },
+      deviceKey: async (tokenId) => {
+        const deviceKey = deviceKeys.get(tokenId);
+        return deviceKey === undefined ? null : { recipient, deviceKey };
+      },
+    },
+    files: {
+      "/Private/.fdrive-encrypted": JSON.stringify(marker),
+      [`/Private/${enc("b")}`]: "age-encryption.org/v1\n",
+    },
+  });
+  const base = "/api/v2/desktop";
+  const post = (route: string, body: unknown, headers: Record<string, string> = {}) =>
+    f.app.request(base + route, {
+      method: "POST",
+      headers: { "x-requested-with": "fdrive", "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+  const created = await post("/pairings", { deviceName: "Mac", deviceRecipient });
+  const request = DesktopPairing.parse(await created.json());
+  // The code is a digest of the device recipient and the pairing's own nonce, as the Mac and
+  // the browser compute it.
+  const nonce = required(request.nonce);
+  const digest = createHash("sha256").update(`${deviceRecipient}\n${nonce}`).digest("hex");
+  expect(request.code).toBe(digest.slice(0, 16).toUpperCase().match(/.{4}/g)?.join("-"));
+  const info = await f.request(`/pairings/${request.id}`, undefined, {
+    cookie: "fdrive_session=test",
+  });
+  expect(await info.json()).toMatchObject({ deviceRecipient, nonce, code: request.code });
+  // Nobody can open a second request with the same Mac's key while this one waits.
+  expect((await post("/pairings", { deviceName: "Copy", deviceRecipient })).status).toBe(409);
+  const approved = await f.request(
+    `/pairings/${request.id}/approve`,
+    { access: "full", deviceKey: "ZGV2aWNl" },
+    { cookie: "fdrive_session=test" },
+  );
+  expect(approved.status).toBe(200);
+  const polled = await post(`/pairings/${request.id}/poll`, { secret: request.secret });
+  const connected = (await polled.json()) as {
+    credentials: Array<{ token: string; location: { encryptedFolders?: true } }>;
+  };
+  expect(connected.credentials[0]?.location.encryptedFolders).toBe(true);
+  const token = required(connected.credentials[0]?.token);
+  const get = (route: string, headers: Record<string, string> = {}) =>
+    f.app.request(base + route, { headers: { authorization: `Bearer ${token}`, ...headers } });
+
+  expect(await (await get("/encryption")).json()).toEqual({ recipient, deviceKey: "ZGV2aWNl" });
+  const header = { "x-fdrive-encrypted-folders": "1" };
+  const root = (await (await get("/entries?path=/", header)).json()) as {
+    entries: Array<{ path: string; encrypted?: true }>;
+  };
+  expect(root.entries.find((entry) => entry.path === "/Private")?.encrypted).toBe(true);
+  const inside = (await (await get("/entries?path=/Private", header)).json()) as {
+    entries: Array<{ name: string }>;
+    encryptedFolder?: unknown;
+  };
+  expect(inside.entries.map((entry) => entry.name)).toEqual([enc("b")]);
+  expect(inside.encryptedFolder).toEqual({ path: "/Private", marker });
+  // An app that does not say it encrypts cannot open the folder, as older apps expect.
+  const old = await get("/entries?path=/Private");
+  expect(old.status).toBe(403);
+  expect(await old.json()).toMatchObject({ error: { details: { code: "encrypted_folder" } } });
+
+  // A pairing without a device key cannot be given one, and a Mac without one gets none.
+  const plain = DesktopPairing.parse(await (await post("/pairings", { deviceName: "Old" })).json());
+  expect(plain.code).toMatch(/^[0-9A-F]{8}$/);
+  const refused = await f.request(
+    `/pairings/${plain.id}/approve`,
+    { access: "full", deviceKey: "ZGV2aWNl" },
+    { cookie: "fdrive_session=test" },
+  );
+  expect(refused.status).toBe(400);
+  await f.request(
+    `/pairings/${plain.id}/approve`,
+    { access: "full" },
+    { cookie: "fdrive_session=test" },
+  );
+  const plainPolled = (await (
+    await post(`/pairings/${plain.id}/poll`, { secret: plain.secret })
+  ).json()) as { credentials: Array<{ token: string }> };
+  const plainToken = required(plainPolled.credentials[0]?.token);
+  const noKey = await f.app.request(`${base}/encryption`, {
+    headers: { authorization: `Bearer ${plainToken}` },
+  });
+  expect(noKey.status).toBe(404);
+});
+
+it("has no keys to give where encryption is not wired", async () => {
+  const f = await fixture(true);
+  const credential = await f.connect("full", 2);
+  expect(credential.location).not.toHaveProperty("encryptedFolders");
+  const response = await f.app.request("/api/v2/desktop/encryption", {
+    headers: { authorization: `Bearer ${credential.token}` },
+  });
+  expect(response.status).toBe(404);
+});
 
 it("keeps Finder's Trash working for FDrive for Mac 0.5.4's requests, on Trash's rows", async () => {
   const f = await fixture(true);
@@ -455,7 +571,14 @@ afterEach(async () => {
     desktopDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(writable = false, changes?: DesktopChanges) {
+async function fixture(
+  writable = false,
+  changes?: DesktopChanges,
+  extra: {
+    encryption?: NonNullable<Parameters<typeof createDesktopPairing>[0]["encryption"]>;
+    files?: Record<string, string>;
+  } = {},
+) {
   const repos = createMemoryRepos();
   let now = new Date("2026-09-13T00:00:00Z");
   const clock = () => now;
@@ -473,15 +596,19 @@ async function fixture(writable = false, changes?: DesktopChanges) {
   const account = { id: identity.accountId };
   // Another person's login, on an account of its own.
   const second = await user("bob");
-  const storage: StorageProvider = createMemoryStorage({
-    "/docs/a.txt": "alpha",
-    "/.trash/old": "trash",
-    "/hidden/b.txt": "private",
-  });
+  const storage: StorageProvider = guardEncryptedFolders(
+    createMemoryStorage({
+      "/docs/a.txt": "alpha",
+      "/.trash/old": "trash",
+      "/hidden/b.txt": "private",
+      ...extra.files,
+    }),
+  );
   const otherStorage = createMemoryStorage({ "/docs/a.txt": "bravo" });
   const deps = {
     ...repos,
     storage: { id: storageId, name: async () => "Family files" },
+    ...(extra.encryption === undefined ? {} : { encryption: extra.encryption }),
     clock,
     principalFor: vi.fn(
       async (login: Login, extras?: PrincipalExtras): Promise<Principal> => ({
@@ -519,7 +646,8 @@ async function fixture(writable = false, changes?: DesktopChanges) {
     startedAt: new Date(0),
     setupRequired: async () => false,
     principalResolver: async (c) => (c.req.header("cookie") ? principal : null),
-    registerRoutes: (groups) =>
+    registerRoutes: (groups) => {
+      registerEncryptedAccess(groups as Parameters<typeof registerEncryptedAccess>[0]);
       registerDesktopRoutes(groups, {
         ...deps,
         ...(changes ? { changes } : {}),
@@ -538,7 +666,8 @@ async function fixture(writable = false, changes?: DesktopChanges) {
               }),
             }
           : {}),
-      }),
+      });
+    },
   });
   function request(route: string, body?: unknown, headers: Record<string, string> = {}) {
     return app.request(DESKTOP_API + route, {

@@ -185,6 +185,7 @@ export function BetaFileList({
   hideMoveCopy = false,
   showReveal = false,
   hideArchive = false,
+  encrypted = false,
   showOrganize = false,
   showChat = false,
   received = EMPTY_RECEIVED,
@@ -266,12 +267,14 @@ export function BetaFileList({
   function handleDragStart(event: DragEvent<HTMLDivElement>, entry: FsEntry) {
     const paths = getDragPaths(entry);
     writeDraggedPaths(event.dataTransfer, paths);
-    writeDownloadUrl(
-      event.dataTransfer,
-      paths,
-      entry,
-      new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
-    );
+    // A file of an encrypted folder would arrive as ciphertext; the browser decrypts downloads itself.
+    if (!encrypted)
+      writeDownloadUrl(
+        event.dataTransfer,
+        paths,
+        entry,
+        new URL(apiClient.downloadUrl(entry.path), window.location.href).href,
+      );
     event.dataTransfer.effectAllowed = "copyMove";
     startDragSession(paths);
     const dragImage = createDragImageElement(document, entry.name, paths.length);
@@ -454,6 +457,7 @@ export function BetaFileList({
             hideMoveCopy,
             showReveal,
             hideArchive,
+            encrypted,
             showOrganize,
             showChat,
             tags,

@@ -222,6 +222,10 @@ A local login changes its own password with `POST /api/v1/auth/password`
 (Account > Password): the current password is checked like a sign-in, behind
 the same limiter, the hash is replaced, and the account's other sessions end.
 
+Encryption keys are separate from the sign-in password: changing or resetting a password never
+touches them, and turning encryption on, changing the encryption password and resetting it each
+ask for the sign-in password again. See [encryption](ENCRYPTION.md#keys).
+
 ## MCP token grants
 
 Every personal token persists required `app.api_tokens.access` JSON with `mode` and normalized

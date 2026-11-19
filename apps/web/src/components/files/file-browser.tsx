@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { OrganizeActivity } from "@/components/ai/organize-activity";
 import { OrganizeSheet } from "@/components/ai/organize-sheet";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
+import { UnlockForm } from "@/components/encryption/unlock-form";
 import { useUploadReveal } from "@/components/files/use-upload-reveal";
 import { LeaveSharedFolderDialog } from "@/components/grants/leave-shared-folder-dialog";
 import { ShareWithPeopleDialog } from "@/components/grants/share-with-people-dialog";
@@ -45,6 +46,7 @@ import { describeApiError } from "@/lib/api/errors";
 import { officeStatusQueryOptions, useOfficeStatus } from "@/lib/api/office-queries";
 import type { NewFileKind } from "@/lib/editor/new-file";
 import { editHref } from "@/lib/editor/route";
+import { useEncryptedView } from "@/lib/encryption/listing";
 import { defaultArchiveName, extractDestinationUnder } from "@/lib/files/archive";
 import { takeFileClipboard, writeFileClipboard } from "@/lib/files/clipboard";
 import { apiClient, PageHeader, queryKeys } from "@/lib/files/deps";
@@ -53,6 +55,7 @@ import {
   adaptDocument,
   createAnchorDownloader,
   downloadEntries,
+  downloadObjectUrl,
 } from "@/lib/files/download";
 import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { useFolderView } from "@/lib/files/folder-view-queries";
@@ -150,6 +153,7 @@ import { ListingSkeleton } from "./listing-skeleton";
 import { NewFolderDialog } from "./new-folder-dialog";
 import { RenameDialog } from "./rename-dialog";
 import { FilesBreadcrumb, FilesToolbarActions, type FolderViewActions } from "./toolbar";
+import { useEncryptedActions } from "./use-encrypted-actions";
 
 export interface FileBrowserProps {
   path: string;
@@ -202,19 +206,41 @@ export function FileBrowser({
   const selectName = parseSelectParam(searchParams.toString());
   const queryClient = useQueryClient();
   const { data, isLoading, isFetching, isError, error, refetch } = useListing(path);
-  const entries = useMemo(() => data?.entries ?? [], [data]);
+  const listedEntries = useMemo(() => data?.entries ?? [], [data]);
+  // Inside an encrypted folder the listing shows decrypted names once this browser has the key.
+  const encryptedView = useEncryptedView(path, data?.encryptedFolder, listedEntries);
+  const entries = useMemo(
+    () =>
+      encryptedView.kind === "open"
+        ? encryptedView.entries
+        : encryptedView.kind === "plain"
+          ? listedEntries
+          : [],
+    [encryptedView, listedEntries],
+  );
+  const encrypted = useEncryptedActions(encryptedView, path, entries, {
+    save: (blob, name) =>
+      downloadObjectUrl(
+        URL.createObjectURL(blob),
+        name,
+        buildDownloadDeps(getAnchorDownloader(), apiClient),
+      ),
+  });
   // Before `me` loads, the folder counts as indexed, so thumbnails never flicker.
   const indexed = me?.index !== false;
   // Folders others share with this login: what they allow, and the
   // `Shared with me` captions and menu items.
   const received = useReceivedGrants();
-  const writeBlock = folderWriteBlock(path, received);
+  const writeBlock = folderWriteBlock(path, received) ?? encrypted.uploadBlock;
+  // The server makes no thumbnails of what it cannot read.
+  const thumbnailsHere = indexed && !encrypted.inside;
 
   const folderView = useFolderView(path);
   const [rowClickAction] = useRowClickAction();
   const [density, setDensity] = useListDensity();
   const [gridSize, setGridSize] = useGridSize();
-  const viewMode = folderView.mode;
+  // The tree lists folders below without their keys, so an encrypted folder shows as a list.
+  const viewMode = encrypted.inside && folderView.mode === "tree" ? "list" : folderView.mode;
   const setViewMode = folderView.setMode;
   const sortSpec = folderView.sort;
   const setSortSpec = folderView.setSort;
@@ -315,6 +341,8 @@ export function FileBrowser({
   });
 
   const [newFolderOpen, setNewFolderOpen] = useState(false);
+  const [newEncryptedFolderOpen, setNewEncryptedFolderOpen] = useState(false);
+  const [encryptedFolderPending, setEncryptedFolderPending] = useState(false);
   const [newFileKind, setNewFileKind] = useState<NewFileKind | null>(null);
   const [newFilePending, setNewFilePending] = useState(false);
   const [renameTarget, setRenameTarget] = useState<FsEntry | null>(null);
@@ -354,7 +382,7 @@ export function FileBrowser({
       toast.error(writeBlock);
       return;
     }
-    uploadFiles(files, path, existingNames);
+    uploadFiles(files, path, existingNames, encrypted.prepareUploads);
   });
   const pasteRef = useRef(handlePaste);
   pasteRef.current = handlePaste;
@@ -363,6 +391,13 @@ export function FileBrowser({
     document.addEventListener("paste", listener);
     return () => document.removeEventListener("paste", listener);
   }, []);
+
+  // The page title the server rendered names the stored folder; show the decrypted one.
+  useEffect(() => {
+    if (encryptedView.kind !== "open") return;
+    const name = encryptedView.crumbs.get(path);
+    if (name !== undefined) document.title = `${name} · fdrive`;
+  }, [encryptedView, path]);
 
   const [scrollRequest, setScrollRequest] = useState<ScrollRequest | null>(null);
   const scrollTokenRef = useRef(0);
@@ -409,6 +444,11 @@ export function FileBrowser({
 
   /** Downloads `targets`: one file directly, anything else as one zip. */
   function runDownload(targets: readonly FsEntry[]) {
+    // An encrypted folder's files are decrypted here, one at a time; the server cannot zip them.
+    if (encrypted.inside) {
+      void encrypted.download(targets);
+      return;
+    }
     downloadEntries(targets, buildDownloadDeps(getAnchorDownloader(), apiClient)).catch(() =>
       toast.error("Could not download the selection."),
     );
@@ -477,7 +517,7 @@ export function FileBrowser({
         availableOffice = undefined;
       }
     }
-    if (me && opensInOffice(entry, availableOffice)) {
+    if (me && !encrypted.inside && opensInOffice(entry, availableOffice)) {
       router.push(toRoute(officeHref(entry.path, "view")));
       return;
     }
@@ -511,12 +551,21 @@ export function FileBrowser({
       return;
     }
     const sources = movablePaths(paths, targetFolderPath);
+    void moveOrCopy(sources, targetFolderPath, effect);
+  }
+
+  /**
+   * Moves or copies `sources` into `folder`: through the browser when that crosses an encrypted
+   * folder's edge, re-encrypting each file, and with one request otherwise.
+   */
+  async function moveOrCopy(sources: readonly string[], folder: string, effect: "move" | "copy") {
+    if (await encrypted.transfer(sources, folder, effect === "move")) return;
     if (effect === "move") {
-      void moveInto(sources, targetFolderPath);
+      await moveInto(sources, folder);
       return;
     }
     for (const source of sources) {
-      copy.mutate({ path: source, target: joinPath(targetFolderPath, baseName(source)) });
+      copy.mutate({ path: source, target: joinPath(folder, baseName(source)) });
     }
   }
 
@@ -691,13 +740,33 @@ export function FileBrowser({
     openCompressDialog(selectedEntries.map((entry) => entry.path));
   }
 
-  function handleCreateFolder(name: string) {
-    mkdir.mutate(joinPath(path, name), {
+  async function handleCreateFolder(name: string) {
+    let stored: string;
+    try {
+      stored = await encrypted.nameFor(name);
+    } catch (err) {
+      toast.error(describeFsError(err, "Could not name the folder."));
+      return;
+    }
+    mkdir.mutate(joinPath(path, stored), {
       onSuccess: (entry) => {
         setNewFolderOpen(false);
         dispatchSelection({ type: "set", paths: [entry.path] });
       },
     });
+  }
+
+  async function handleCreateEncryptedFolder(name: string) {
+    setEncryptedFolderPending(true);
+    try {
+      const created = await encrypted.createEncryptedFolder(name);
+      setNewEncryptedFolderOpen(false);
+      dispatchSelection({ type: "set", paths: [created] });
+    } catch (err) {
+      toast.error(describeFsError(err, "Could not make the encrypted folder."));
+    } finally {
+      setEncryptedFolderPending(false);
+    }
   }
 
   async function handleCreateFile(name: string) {
@@ -748,22 +817,34 @@ export function FileBrowser({
     else if (only !== undefined) setRenameTarget(only);
   }
 
-  function handleRenameSubmit(newName: string) {
+  async function handleRenameSubmit(newName: string) {
     const target = renameTarget;
     if (target === null) {
       return;
     }
+    let stored: string;
+    try {
+      stored = await encrypted.nameFor(newName);
+    } catch (err) {
+      toast.error(describeFsError(err, "Could not rename."));
+      return;
+    }
     rename.mutate(
-      { path: target.path, newName },
+      { path: target.path, newName: stored },
       {
         onSuccess: (renamed) => {
           setRenameTarget(null);
-          offerUndo(`Renamed to "${renamed.name}"`, () =>
-            rename.mutateAsync({ path: renamed.path, newName: target.name }),
+          offerUndo(`Renamed to "${newName}"`, () =>
+            rename.mutateAsync({ path: renamed.path, newName: encrypted.storedName(target) }),
           );
         },
       },
     );
+  }
+
+  /** Renames for the batch dialog, under encrypted names inside an encrypted folder. */
+  async function renameOne(vars: { path: string; newName: string }) {
+    return rename.mutateAsync({ ...vars, newName: await encrypted.nameFor(vars.newName) });
   }
 
   function handleDeleteConfirm() {
@@ -815,13 +896,11 @@ export function FileBrowser({
     ) {
       return;
     }
-    if (destinationPicker.mode === "move") {
-      void moveInto(destinationPicker.paths, destinationDir);
-    } else {
-      for (const source of destinationPicker.paths) {
-        copy.mutate({ path: source, target: joinPath(destinationDir, baseName(source)) });
-      }
-    }
+    void moveOrCopy(
+      destinationPicker.paths,
+      destinationDir,
+      destinationPicker.mode === "move" ? "move" : "copy",
+    );
     setDestinationPicker(null);
   }
 
@@ -860,11 +939,16 @@ export function FileBrowser({
     if (collected.length === 0) {
       return;
     }
+    // Until an encrypted folder is open, an upload would go out with its clear name.
+    if (encrypted.uploadBlock !== null) {
+      toast.error(encrypted.uploadBlock);
+      return;
+    }
     if (onRequestUpload) {
       onRequestUpload(files ?? undefined);
       return;
     }
-    uploadFiles(collectInputFiles(collected), path, existingNames);
+    uploadFiles(collectInputFiles(collected), path, existingNames, encrypted.prepareUploads);
   }
 
   /**
@@ -883,7 +967,7 @@ export function FileBrowser({
     if (files.length > 0) {
       event.preventDefault();
       if (writeBlock !== null) toast.error(writeBlock);
-      else uploadFiles(files, path, existingNames);
+      else uploadFiles(files, path, existingNames, encrypted.prepareUploads);
       return;
     }
     const clipboard = takeFileClipboard();
@@ -1025,7 +1109,13 @@ export function FileBrowser({
   return (
     <>
       <PageHeader
-        breadcrumbs={<FilesBreadcrumb path={path} onInternalDrop={handleInternalDrop} />}
+        breadcrumbs={
+          <FilesBreadcrumb
+            path={path}
+            onInternalDrop={handleInternalDrop}
+            names={encryptedView.kind === "open" ? encryptedView.crumbs : undefined}
+          />
+        }
         actions={
           <FilesToolbarActions
             viewMode={viewMode}
@@ -1039,9 +1129,15 @@ export function FileBrowser({
             gridSize={gridSize}
             onGridSizeChange={setGridSize}
             onNewFolder={() => setNewFolderOpen(true)}
+            onNewEncryptedFolder={
+              me?.encryptedFolders && !encrypted.inside && !path.startsWith("/Shared with me")
+                ? () => setNewEncryptedFolderOpen(true)
+                : undefined
+            }
+            encrypted={encrypted.inside}
             onNewFile={setNewFileKind}
             onNewOfficeDocument={
-              officeStatus?.available && me
+              officeStatus?.available && me && !encrypted.inside
                 ? (kind) => {
                     setOfficeError(null);
                     setOfficeKind(kind);
@@ -1053,22 +1149,22 @@ export function FileBrowser({
             detailsOpen={detailsOpen}
             onToggleDetails={() => setDetailsOpen(!detailsOpen)}
             selection={selectionOf(selectedEntries)}
-            indexed={indexed}
+            indexed={thumbnailsHere}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
             onDuplicateSelection={handleDuplicateSelection}
             onCompressSelection={handleCompressSelection}
             onOrganizeSelection={
-              organizeAvailable && selectedEntries.length > 0
+              organizeAvailable && !encrypted.inside && selectedEntries.length > 0
                 ? () => organize.open(selectedEntries)
                 : undefined
             }
             onAddSelectionToChat={
-              chatAvailable && selectedEntries.length > 0
+              chatAvailable && !encrypted.inside && selectedEntries.length > 0
                 ? () => addToChat(selectedEntries.map((item) => item.path))
                 : undefined
             }
             onDownloadSelection={handleDownloadSelection}
-            showThumbnails={showThumbnails && indexed}
+            showThumbnails={showThumbnails && thumbnailsHere}
             onShowThumbnailsChange={setShowThumbnails}
             writeBlock={writeBlock}
           />
@@ -1116,6 +1212,18 @@ export function FileBrowser({
                 message={describeFsError(error, "Something went wrong.")}
                 onRetry={() => refetch()}
               />
+            ) : encryptedView.kind === "locked" ? (
+              <div className="flex h-full items-start justify-center p-6">
+                <UnlockForm className="w-full max-w-md" />
+              </div>
+            ) : encryptedView.kind === "opening" ? (
+              <ListingSkeleton
+                variant={viewMode === "grid" ? "grid" : "list"}
+                density={density}
+                gridSize={gridSize}
+              />
+            ) : encryptedView.kind === "broken" ? (
+              <ErrorState message="This encrypted folder's keys do not open with your key." />
             ) : sortedEntries.length === 0 ? (
               <EmptyState
                 action={
@@ -1136,8 +1244,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
-                showOrganize={organizeAvailable}
-                showChat={chatAvailable}
+                showOrganize={organizeAvailable && !encrypted.inside}
+                showChat={chatAvailable && !encrypted.inside}
+                encrypted={encrypted.inside}
+                hideArchive={encrypted.inside}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -1149,7 +1259,7 @@ export function FileBrowser({
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && indexed}
+                showThumbnails={showThumbnails && thumbnailsHere}
               />
             ) : viewMode === "grid" ? (
               <FileGrid
@@ -1160,8 +1270,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
-                showOrganize={organizeAvailable}
-                showChat={chatAvailable}
+                showOrganize={organizeAvailable && !encrypted.inside}
+                showChat={chatAvailable && !encrypted.inside}
+                encrypted={encrypted.inside}
+                hideArchive={encrypted.inside}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -1173,7 +1285,7 @@ export function FileBrowser({
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                thumbnails={indexed}
+                thumbnails={thumbnailsHere}
                 size={gridSize}
               />
             ) : (
@@ -1186,8 +1298,10 @@ export function FileBrowser({
                 onEntryDoubleClick={handleEntryDoubleClick}
                 officeStatus={officeStatus}
                 onContextAction={handleContextAction}
-                showOrganize={organizeAvailable}
-                showChat={chatAvailable}
+                showOrganize={organizeAvailable && !encrypted.inside}
+                showChat={chatAvailable && !encrypted.inside}
+                encrypted={encrypted.inside}
+                hideArchive={encrypted.inside}
                 getDragPaths={pathsForAction}
                 onInternalDrop={handleInternalDrop}
                 onToggleSelectAll={handleToggleSelectAll}
@@ -1202,7 +1316,7 @@ export function FileBrowser({
                 received={received}
                 scrollRequest={scrollRequest}
                 onScrollConsumed={handleScrollConsumed}
-                showThumbnails={showThumbnails && indexed}
+                showThumbnails={showThumbnails && thumbnailsHere}
               />
             )}
           </div>
@@ -1212,7 +1326,7 @@ export function FileBrowser({
           <Inspector
             entries={selectedEntries}
             onClose={() => setDetailsOpen(false)}
-            indexed={indexed}
+            indexed={thumbnailsHere}
           />
         )}
       </div>
@@ -1246,8 +1360,16 @@ export function FileBrowser({
       <NewFolderDialog
         open={newFolderOpen}
         onOpenChange={setNewFolderOpen}
-        onCreate={handleCreateFolder}
+        onCreate={(name) => void handleCreateFolder(name)}
         pending={mkdir.isPending}
+      />
+      <NewFolderDialog
+        open={newEncryptedFolderOpen}
+        onOpenChange={setNewEncryptedFolderOpen}
+        onCreate={(name) => void handleCreateEncryptedFolder(name)}
+        pending={encryptedFolderPending}
+        title="New encrypted folder"
+        description="Names and files inside are encrypted in this browser before they upload."
       />
       <NewFileDialog
         kind={newFileKind}
@@ -1266,7 +1388,7 @@ export function FileBrowser({
             setRenameTarget(null);
           }
         }}
-        onRename={handleRenameSubmit}
+        onRename={(name) => void handleRenameSubmit(name)}
         pending={rename.isPending}
       />
       {batchRenameTargets !== null && (
@@ -1274,7 +1396,7 @@ export function FileBrowser({
           entries={batchRenameTargets}
           siblings={displayEntries}
           onClose={() => setBatchRenameTargets(null)}
-          onRename={rename.mutateAsync}
+          onRename={renameOne}
         />
       )}
       <DeleteDialog

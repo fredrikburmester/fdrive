@@ -4,16 +4,24 @@ import { useCallback, useState } from "react";
 import { planUploads } from "@/lib/upload/plan";
 import { useUploadStore } from "@/lib/upload/store";
 import type { DroppedFile } from "@/lib/upload/traverse";
+import type { UploadItem } from "@/lib/upload/types";
 
 function createUploadId(): string {
   return crypto.randomUUID();
 }
+
+/**
+ * Turns planned items into what the queue sends, as an encrypted folder does:
+ * encrypted names, and ciphertext made as each file starts.
+ */
+export type PrepareUploads = (items: readonly UploadItem[]) => Promise<UploadItem[]>;
 
 interface PendingConflict {
   readonly files: readonly DroppedFile[];
   readonly destination: string;
   readonly existingNames: ReadonlySet<string>;
   readonly conflicts: readonly string[];
+  readonly prepare: PrepareUploads | undefined;
 }
 
 export interface ConflictDialogState {
@@ -36,6 +44,7 @@ export interface UseUploadFilesResult {
     files: readonly DroppedFile[],
     destination: string,
     existingNames: ReadonlySet<string>,
+    prepare?: PrepareUploads,
   ): void;
   /** Wire this directly into `<ConflictDialog {...conflictDialog} />`. */
   readonly conflictDialog: ConflictDialogState;
@@ -51,25 +60,36 @@ export function useUploadFiles(): UseUploadFilesResult {
       destination: string,
       existingNames: ReadonlySet<string>,
       policy: "replace" | "skip" | "ask",
+      prepare: PrepareUploads | undefined,
     ) => {
       const result = planUploads(files, destination, existingNames, policy, createUploadId);
 
       if (policy === "ask" && result.conflicts.length > 0) {
-        setPending({ files, destination, existingNames, conflicts: result.conflicts });
+        setPending({ files, destination, existingNames, conflicts: result.conflicts, prepare });
         return;
       }
 
-      enqueue(result.items);
+      if (prepare === undefined) {
+        enqueue(result.items);
+        return;
+      }
+      // A failed prepare reports itself; nothing is queued.
+      prepare(result.items).then(enqueue, () => undefined);
     },
     [enqueue],
   );
 
   const uploadFiles = useCallback(
-    (files: readonly DroppedFile[], destination: string, existingNames: ReadonlySet<string>) => {
+    (
+      files: readonly DroppedFile[],
+      destination: string,
+      existingNames: ReadonlySet<string>,
+      prepare?: PrepareUploads,
+    ) => {
       if (files.length === 0) {
         return;
       }
-      plan(files, destination, existingNames, "ask");
+      plan(files, destination, existingNames, "ask", prepare);
     },
     [plan],
   );
@@ -79,9 +99,9 @@ export function useUploadFiles(): UseUploadFilesResult {
       if (pending === null) {
         return;
       }
-      const { files, destination, existingNames } = pending;
+      const { files, destination, existingNames, prepare } = pending;
       setPending(null);
-      plan(files, destination, existingNames, policy);
+      plan(files, destination, existingNames, policy, prepare);
     },
     [pending, plan],
   );

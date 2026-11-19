@@ -24,10 +24,11 @@ final class ProviderEnumerator: NSObject, NSFileProviderEnumerator, @unchecked S
                     let folder = try await repository.item(NativeEnvironment.id(container))
                     do {
                         let listing = try await repository.beginListing(folder.entry.path)
-                        let snapshot = try await client.snapshot(folder.entry.path)
+                        // Inside an encrypted folder the catalog decrypts names as it applies the listing;
+                        // one this Mac cannot open fails here with the reason.
+                        let snapshot = try await client.folderSnapshot(folder.entry.path)
                         try Task.checkCancellation()
-                        try await repository.reconcile(snapshot.entries, folder: folder.entry.path, listing: listing,
-                                                       token: snapshot.token)
+                        try await repository.reconcile(snapshot, folder: folder.entry.path, listing: listing)
                     } catch {
                         // Offline browsing uses an explicit existing snapshot only. Permission,
                         // malformed-listing and missing-item failures are never hidden as offline.

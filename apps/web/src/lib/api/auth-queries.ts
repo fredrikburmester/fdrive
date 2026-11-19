@@ -5,6 +5,7 @@ import { type QueryClient, useMutation, useQuery, useQueryClient } from "@tansta
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useOrganizeSessionStore } from "@/lib/ai/organize-session";
+import { keyStore } from "@/lib/encryption/keys";
 import { useJobsStore } from "@/lib/jobs/store";
 import { useUploadStore } from "@/lib/upload/store";
 import { apiClient } from "./client";
@@ -47,6 +48,8 @@ export function handleLoginSuccess(
   useJobsStore.getState().reset();
   useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
+  // Another login's keys never carry over to this one.
+  void keyStore.lock();
   queryClient.setQueryData(queryKeys.auth.me(), me);
   router.push(destination ?? (me.isAdmin ? "/setup" : FILES_ROUTE));
 }
@@ -62,6 +65,7 @@ export function handleLogoutSuccess(queryClient: QueryClient, router: NavigableR
   useJobsStore.getState().reset();
   useOrganizeSessionStore.getState().reset();
   useUploadStore.getState().reset();
+  void keyStore.lock();
   router.push("/login");
 }
 

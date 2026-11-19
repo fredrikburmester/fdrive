@@ -3,7 +3,9 @@ import {
   AiProvider,
   type AiSettings,
   type AiSettingsUpdateRequest,
+  aiProviderHasBaseUrl,
   DEFAULT_AI_MODEL,
+  type HostedAiProvider,
 } from "@fdrive/contracts";
 import type { SettingsRepo } from "@fdrive/db";
 import { z } from "zod";
@@ -78,6 +80,12 @@ function keyContext(provider: AiProvider, baseUrl: string | null): string {
   return `ai-api-key:${provider}:${baseUrl ?? ""}`;
 }
 
+/** The key a hosted provider needs, as error messages name it. */
+const API_KEY_NAMES: Record<HostedAiProvider, string> = {
+  anthropic: "an Anthropic API key",
+  mistral: "a Mistral API key",
+};
+
 function publicView(stored: StoredAiSettings, hasApiKey: boolean): AiSettings {
   return {
     revision: stored.revision,
@@ -133,7 +141,7 @@ export function createAiSettingsService(deps: {
   }
 
   function usable(config: ResolvedAiConfig): boolean {
-    return config.provider === "anthropic" ? config.apiKey !== null : config.baseUrl !== null;
+    return aiProviderHasBaseUrl(config.provider) ? config.baseUrl !== null : config.apiKey !== null;
   }
 
   return {
@@ -166,10 +174,14 @@ export function createAiSettingsService(deps: {
                   keyContext(input.provider, input.baseUrl),
                 ),
               ).toString("base64");
-      if ((input.organize || input.chat) && input.provider === "anthropic" && apiKey === null)
+      if (
+        (input.organize || input.chat) &&
+        !aiProviderHasBaseUrl(input.provider) &&
+        apiKey === null
+      )
         throw new ApiHttpError(
           "bad_request",
-          "Enter an Anthropic API key before turning Organize or Chat on.",
+          `Enter ${API_KEY_NAMES[input.provider]} before turning Organize or Chat on.`,
         );
       const next: StoredAiSettings = {
         revision: input.revision + 1,

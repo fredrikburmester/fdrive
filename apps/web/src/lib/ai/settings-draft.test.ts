@@ -19,6 +19,16 @@ const anthropic: AiSettings = {
   hasApiKey: true,
 };
 
+const mistral: AiSettings = {
+  revision: 4,
+  organize: true,
+  chat: false,
+  provider: "mistral",
+  model: "mistral-large-latest",
+  baseUrl: null,
+  hasApiKey: true,
+};
+
 const ollama: AiSettings = {
   revision: 1,
   organize: true,
@@ -63,6 +73,19 @@ describe("withProvider", () => {
     expect(withProvider({ ...draftFrom(ollama), model: "" }, "anthropic").model).toBe(
       "claude-opus-5",
     );
+  });
+
+  it("swaps Claude's default model for Mistral's and clears the URL for Mistral", () => {
+    expect(withProvider(draftFrom(anthropic), "mistral")).toMatchObject({
+      provider: "mistral",
+      model: "mistral-large-latest",
+      baseUrl: "",
+    });
+    expect(withProvider(draftFrom(ollama), "mistral")).toMatchObject({
+      model: "qwen3:32b",
+      baseUrl: "",
+    });
+    expect(withProvider(draftFrom(mistral), "openai_compatible").model).toBe("");
   });
 });
 
@@ -113,6 +136,30 @@ describe("requestFrom", () => {
     ).toEqual({ ok: false, errors: ["Enter an Anthropic API key to turn Organize or Chat on."] });
   });
 
+  it("sends Mistral without a base URL and asks for its key before turning it on", () => {
+    expect(requestFrom(draftFrom(mistral), mistral)).toEqual({
+      ok: true,
+      request: {
+        revision: 4,
+        organize: true,
+        chat: false,
+        provider: "mistral",
+        model: "mistral-large-latest",
+        baseUrl: null,
+      },
+    });
+    expect(requestFrom(withProvider(draftFrom(anthropic), "mistral"), anthropic)).toEqual({
+      ok: false,
+      errors: ["Enter a Mistral API key to turn Organize or Chat on."],
+    });
+    expect(
+      requestFrom(
+        { ...withProvider(draftFrom(anthropic), "mistral"), apiKey: " m-key " },
+        anthropic,
+      ),
+    ).toMatchObject({ ok: true, request: { provider: "mistral", baseUrl: null, apiKey: "m-key" } });
+  });
+
   it("allows an OpenAI-compatible server without a key", () => {
     expect(
       requestFrom({ ...draftFrom(ollama), baseUrl: " http://ollama:11434/v1 " }, ollama),
@@ -143,6 +190,8 @@ describe("keyWillBeDropped", () => {
       false,
     );
     expect(keyWillBeDropped({ ...draft, baseUrl: "http://other/v1" }, ollama)).toBe(false);
+    expect(keyWillBeDropped(withProvider(draftFrom(anthropic), "mistral"), anthropic)).toBe(true);
+    expect(keyWillBeDropped(draftFrom(mistral), mistral)).toBe(false);
   });
 });
 
@@ -158,5 +207,10 @@ describe("aiStatus", () => {
     });
     expect(aiStatus(anthropic)).toEqual({ tone: "on", label: "On" });
     expect(aiStatus(ollama)).toEqual({ tone: "on", label: "On" });
+    expect(aiStatus({ ...mistral, hasApiKey: false })).toEqual({
+      tone: "incomplete",
+      label: "Needs an API key",
+    });
+    expect(aiStatus(mistral)).toEqual({ tone: "on", label: "On" });
   });
 });

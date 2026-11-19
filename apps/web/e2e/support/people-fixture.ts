@@ -12,6 +12,11 @@ export const READ_ONLY_GUEST = {
 };
 /** Changes its own password under Account in `account-password.spec.ts`. */
 export const PASSWORD_USER = { username: "password_user", password: "password-user-test-password" };
+/** Turns encryption on and keeps an encrypted folder in `encrypted-folders.spec.ts`. */
+export const ENCRYPTION_USER = {
+  username: "encryption_user",
+  password: "encryption-user-test-password",
+};
 
 /** The folder `PEOPLE_OWNER` shares, with one file in it. */
 export const PEOPLE_FOLDER = "Team plans";
@@ -28,6 +33,7 @@ export const PEOPLE_USERS: readonly SeedUser[] = [
   READ_ONLY_OWNER,
   READ_ONLY_GUEST,
   PASSWORD_USER,
+  ENCRYPTION_USER,
 ];
 
 export const PEOPLE_FILES = {
