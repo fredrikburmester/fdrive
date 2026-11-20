@@ -49,6 +49,25 @@ test("the beta list opens a folder as a tree, where hovering a folder shows its 
   await expect(docsRow).toHaveAttribute("data-selected", "false");
 });
 
+test("Back from a file opened in the tree returns to the tree, with the file selected", async ({
+  page,
+}) => {
+  await useBetaList(page);
+  const path = await createViewFolder(page, true);
+  const docsRow = listing(page).locator(`[data-path="${path}/docs"]`);
+  await docsRow.hover();
+  await docsRow.getByRole("button", { name: "Expand docs" }).click();
+  const readme = listing(page).locator(`[data-path="${path}/docs/readme.md"]`);
+  await readme.dblclick();
+  await expect(page).toHaveURL(/\/view\/.+\/docs\/readme\.md\?from=/);
+
+  await page.keyboard.press("Escape");
+
+  await expect(page).toHaveURL(new RegExp(`/files${path}$`));
+  await expect(readme).toHaveAttribute("data-selected", "true");
+  await expect(docsRow.getByRole("button", { name: "Collapse docs" })).toHaveCount(1);
+});
+
 test("a beta row's More button opens the same actions as a right-click", async ({ page }) => {
   await useBetaList(page);
   const path = await createViewFolder(page, true);

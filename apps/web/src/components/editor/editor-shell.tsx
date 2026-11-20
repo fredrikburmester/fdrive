@@ -51,6 +51,8 @@ import { previewKindFor } from "@/lib/preview/kind";
 
 export interface EditorShellProps {
   readonly path: string;
+  /** The folder the file was opened from, kept for the viewer's Back (see `viewHref`). */
+  readonly from?: string | null;
 }
 
 interface DocumentBaseline extends SaveBaseline {
@@ -102,7 +104,7 @@ function ErrorState({ backHref }: { backHref: string }) {
  * stats, language selection) lives in `lib/editor` and is unit tested;
  * this component only wires that logic to state and the DOM.
  */
-export function EditorShell({ path }: EditorShellProps) {
+export function EditorShell({ path, from = null }: EditorShellProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [accountId] = useState(
@@ -110,7 +112,7 @@ export function EditorShell({ path }: EditorShellProps) {
   );
   const currentDraftKey = draftKey(accountId, path);
   const parent = parentPath(path);
-  const backHref = viewHref(path);
+  const backHref = viewHref(path, from);
 
   const touchRecent = useTouchRecent(path);
   const touchRecentRef = useRef(touchRecent.mutate);

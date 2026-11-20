@@ -1,4 +1,4 @@
-import { normalizePath, splitSegments } from "@fdrive/core";
+import { normalizePath, parentPath, splitSegments } from "@fdrive/core";
 
 export interface BreadcrumbEntry {
   readonly name: string;
@@ -16,10 +16,46 @@ export function pathToHref(path: string): string {
   return segments.length === 0 ? "/files" : `/files/${encodeSegments(segments)}`;
 }
 
-/** The preview-route URL for `path`, e.g. "/view" or "/view/a/b%20c". */
-export function viewHref(path: string): string {
+/** Whether `folder` is a folder above `path`, such as the root a tree row was opened from. */
+function isAbove(folder: string, path: string): boolean {
+  return folder === "/" ? path !== "/" : path.startsWith(`${folder}/`);
+}
+
+/**
+ * The folder a file's routes return to: `from`, the folder its listing showed when it was opened
+ * (a tree shows files of folders below it), or else the file's own folder.
+ */
+export function originFolder(path: string, from: string | null | undefined): string {
+  return from != null && isAbove(from, path) ? from : parentPath(path);
+}
+
+/**
+ * The `?from=` a file route carries to remember `from`, or "" when there is nothing to remember
+ * because `from` is the file's own folder.
+ */
+export function originQuery(path: string, from: string | null | undefined): string {
+  const folder = originFolder(path, from);
+  return folder === parentPath(path) ? "" : `?from=${encodeURIComponent(folder)}`;
+}
+
+/**
+ * Where a file's viewer goes back to: the folder it was opened from, with the file selected
+ * there, so a tree that showed it shows it again.
+ */
+export function returnHref(path: string, from: string | null | undefined): string {
+  const folder = originFolder(path, from);
+  const relative = path.slice(folder === "/" ? 1 : folder.length + 1);
+  return `${pathToHref(folder)}?select=${encodeURIComponent(relative)}`;
+}
+
+/**
+ * The preview-route URL for `path`, e.g. "/view" or "/view/a/b%20c", remembering `from` when
+ * the file was opened from a folder above its own (see `originQuery`).
+ */
+export function viewHref(path: string, from?: string | null): string {
   const segments = splitSegments(path);
-  return segments.length === 0 ? "/view" : `/view/${encodeSegments(segments)}`;
+  const base = segments.length === 0 ? "/view" : `/view/${encodeSegments(segments)}`;
+  return `${base}${originQuery(path, from)}`;
 }
 
 /**

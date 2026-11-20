@@ -18,11 +18,12 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 // this test has no use for; the pure URL/key helpers are kept real so the
 // asserted hrefs are the ones the app actually navigates to.
 vi.mock("@/lib/preview/deps", async () => {
-  const { pathToHref, viewHref } = await import("@/lib/files/path-url");
+  const { pathToHref, returnHref, viewHref } = await import("@/lib/files/path-url");
   const { queryKeys } = await import("@/lib/api/keys");
   return {
     queryKeys,
     pathToHref,
+    returnHref,
     viewHref,
     apiClient: {
       stat: (path: string) => mocks.stat(path),
@@ -67,14 +68,14 @@ function file(name: string): FsEntry {
 }
 
 /** Previews `/docs/b.txt`: an editable kind with both a previous and a next sibling. */
-async function renderShell() {
+async function renderShell(from: string | null = null) {
   const entries = [file("a.txt"), file("b.txt"), file("c.txt")];
   mocks.stat.mockResolvedValue(file("b.txt"));
   mocks.list.mockResolvedValue({ entries });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <PreviewShell path="/docs/b.txt" />
+      <PreviewShell path="/docs/b.txt" from={from} />
     </QueryClientProvider>,
   );
   await screen.findByText("b.txt");
@@ -89,10 +90,23 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("PreviewShell shortcuts with nothing editable focused", () => {
-  it("navigates back to the parent folder on Escape", async () => {
+  it("navigates back to the parent folder on Escape, with the file selected", async () => {
     await renderShell();
     fireEvent.keyDown(document.body, { key: "Escape" });
-    expect(mocks.push).toHaveBeenCalledWith("/files/docs");
+    expect(mocks.push).toHaveBeenCalledWith("/files/docs?select=b.txt");
+  });
+
+  it("goes back to the folder a tree opened it from, and keeps it while stepping and editing", async () => {
+    await renderShell("/");
+    expect(screen.getByRole("button", { name: "Back" }).getAttribute("href")).toBe(
+      "/files?select=docs%2Fb.txt",
+    );
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    fireEvent.keyDown(document.body, { key: "e", metaKey: true });
+    expect(mocks.push).toHaveBeenNthCalledWith(1, "/files?select=docs%2Fb.txt");
+    expect(mocks.push).toHaveBeenNthCalledWith(2, "/view/docs/c.txt?from=%2F");
+    expect(mocks.push).toHaveBeenNthCalledWith(3, "/edit/docs/b.txt?from=%2F");
   });
 
   it("steps to the previous and next sibling on the arrow keys", async () => {
@@ -118,7 +132,7 @@ describe("PreviewShell shortcuts with nothing editable focused", () => {
     fireEvent.keyDown(checkbox, { key: "ArrowRight" });
     fireEvent.keyDown(checkbox, { key: "Escape" });
     expect(mocks.push).toHaveBeenNthCalledWith(1, "/view/docs/c.txt");
-    expect(mocks.push).toHaveBeenNthCalledWith(2, "/files/docs");
+    expect(mocks.push).toHaveBeenNthCalledWith(2, "/files/docs?select=b.txt");
   });
 });
 

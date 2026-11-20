@@ -14,3 +14,10 @@ describe("editHref", () => {
     expect(editHref("/a/b c.md")).toBe("/edit/a/b%20c.md");
   });
 });
+
+describe("editHref with an origin", () => {
+  it("keeps a folder above the file so the viewer's Back can return there", () => {
+    expect(editHref("/scores/notes.md", "/")).toBe("/edit/scores/notes.md?from=%2F");
+    expect(editHref("/scores/notes.md", "/scores")).toBe("/edit/scores/notes.md");
+  });
+});

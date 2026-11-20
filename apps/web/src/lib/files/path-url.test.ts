@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBreadcrumbs,
+  originFolder,
   pathFromFilesPathname,
   pathToHref,
+  returnHref,
   segmentsToPath,
   viewHref,
 } from "./path-url";
@@ -32,6 +34,39 @@ describe("viewHref", () => {
 
   it("encodes segments", () => {
     expect(viewHref("/a/b c.txt")).toBe("/view/a/b%20c.txt");
+  });
+
+  it("remembers a folder above the file's own, the way a tree opens it", () => {
+    expect(viewHref("/scores/a b.png", "/")).toBe("/view/scores/a%20b.png?from=%2F");
+    expect(viewHref("/a/b/c.png", "/a")).toBe("/view/a/b/c.png?from=%2Fa");
+  });
+
+  it("leaves the URL alone when the file was opened from its own folder", () => {
+    expect(viewHref("/a/c.png", "/a")).toBe("/view/a/c.png");
+    expect(viewHref("/c.png", "/")).toBe("/view/c.png");
+  });
+
+  it("ignores a folder that is not above the file", () => {
+    expect(viewHref("/a/c.png", "/b")).toBe("/view/a/c.png");
+    expect(viewHref("/ab/c.png", "/a")).toBe("/view/ab/c.png");
+  });
+});
+
+describe("returnHref", () => {
+  it("goes back to the folder the file was opened from, with the file selected there", () => {
+    expect(returnHref("/scores/a b.png", "/")).toBe("/files?select=scores%2Fa%20b.png");
+    expect(returnHref("/a/b/c.png", "/a")).toBe("/files/a?select=b%2Fc.png");
+  });
+
+  it("falls back to the file's own folder", () => {
+    expect(returnHref("/a/c.png", null)).toBe("/files/a?select=c.png");
+    expect(returnHref("/a/c.png", "/elsewhere")).toBe("/files/a?select=c.png");
+    expect(returnHref("/c.png", undefined)).toBe("/files?select=c.png");
+  });
+
+  it("names the folder it returns to in originFolder", () => {
+    expect(originFolder("/a/b/c.png", "/a")).toBe("/a");
+    expect(originFolder("/a/b/c.png", "/a/b/c.png")).toBe("/a/b");
   });
 });
 
