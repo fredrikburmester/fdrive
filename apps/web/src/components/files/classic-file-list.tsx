@@ -46,7 +46,10 @@ interface RowIcon {
   readonly boxed: boolean;
 }
 
-/** "compact" is the list as it was before rows got taller; "comfortable" fills a 64px row. */
+/**
+ * "standard" is the list as it always was; "comfortable" fills a 64px row, and "compact" draws
+ * a smaller thumbnail in a 30px one.
+ */
 const DESKTOP_ICONS: Record<ListDensity, RowIcon> = {
   comfortable: {
     slot: "size-10",
@@ -55,17 +58,23 @@ const DESKTOP_ICONS: Record<ListDensity, RowIcon> = {
     thumbnail: "size-10 rounded-md",
     boxed: true,
   },
-  compact: { slot: "size-6", icon: "", thumbnail: "size-6 rounded-xs", boxed: false },
+  standard: { slot: "size-6", icon: "", thumbnail: "size-6 rounded-xs", boxed: false },
+  compact: { slot: "size-5", icon: "", thumbnail: "size-5 rounded-xs", boxed: false },
 };
 
 /** A phone row's icon, next to two lines of text. */
 const PHONE_ICONS: Record<ListDensity, RowIcon> = {
   comfortable: { slot: "size-10", icon: "size-6", thumbnail: "size-10 rounded-md", boxed: true },
-  compact: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm", boxed: true },
+  standard: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm", boxed: true },
+  compact: { slot: "size-7", icon: "size-[18px]", thumbnail: "size-7 rounded-sm", boxed: true },
 };
 
 /** A desktop row's name; sizes and dates stay small at every density. */
-const NAME_TEXT: Record<ListDensity, string> = { comfortable: "text-[15px]", compact: "" };
+const NAME_TEXT: Record<ListDensity, string> = {
+  comfortable: "text-[15px]",
+  standard: "",
+  compact: "text-[13px]",
+};
 
 /**
  * The chevron column that leads each tree row: its box, its icon and the indent per tree
@@ -73,7 +82,8 @@ const NAME_TEXT: Record<ListDensity, string> = { comfortable: "text-[15px]", com
  */
 const TREE: Record<ListDensity, { box: string; icon: string; indentPx: number }> = {
   comfortable: { box: "size-5", icon: "size-4", indentPx: 24 },
-  compact: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+  standard: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+  compact: { box: "size-4", icon: "size-3.5", indentPx: 16 },
 };
 
 const LIST_THUMBNAIL_SIZE = 256;

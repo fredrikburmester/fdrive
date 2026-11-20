@@ -21,7 +21,8 @@ const NAME_WIDTHS = ["w-1/3", "w-1/2", "w-2/5", "w-1/4", "w-3/5"];
 /** The icon stub of a list row, as large as the real row's icon at that density. */
 const ICON_STUBS: Record<ListDensity, { desktop: string; phone: string }> = {
   comfortable: { desktop: "size-10 rounded-md", phone: "size-10 rounded-md" },
-  compact: { desktop: "size-4 rounded-sm", phone: "size-8 rounded-sm" },
+  standard: { desktop: "size-4 rounded-sm", phone: "size-8 rounded-sm" },
+  compact: { desktop: "size-4 rounded-sm", phone: "size-7 rounded-sm" },
 };
 
 export type ListingSkeletonVariant = "list" | "grid";
@@ -29,7 +30,7 @@ export type ListingSkeletonVariant = "list" | "grid";
 export interface ListingSkeletonProps {
   /** Which view's placeholder to render. Defaults to the list layout. */
   variant?: ListingSkeletonVariant;
-  /** Row height preset for the list layout, matching the real list. Defaults to "comfortable". */
+  /** Row height preset for the list layout, matching the real list. Defaults to "standard". */
   density?: ListDensity;
   /** Tile size preset for the grid layout, matching the real grid. Defaults to "medium". */
   gridSize?: GridSize;

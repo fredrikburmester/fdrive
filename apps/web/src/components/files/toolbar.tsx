@@ -487,6 +487,7 @@ interface ViewSortMenuItemsProps {
 
 const DENSITY_LABELS: Record<ListDensity, string> = {
   comfortable: "Comfortable",
+  standard: "Standard",
   compact: "Compact",
 };
 

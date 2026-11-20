@@ -247,8 +247,8 @@ worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
   are set in Settings (`/account`) or in the View menu: row click (`fdrive.list.rowClick`: select,
   toggle selection, highlight or open; highlight moves the focus ring and range anchor without
   changing the selection; modified clicks, Enter and double-click keep their meaning), list
-  density (`fdrive.list.density`: 36px compact rows, or 64px comfortable rows with larger icons
-  and thumbnails, the default), size units (`fdrive.format.sizes`), date style
+  density (`fdrive.list.rowDensity`: 36px standard rows, the default, 64px comfortable rows
+  with larger icons and thumbnails, or 30px compact rows), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
   The desktop sidebar's width (`fdrive.sidebar.width`) is one of them, set by dragging the

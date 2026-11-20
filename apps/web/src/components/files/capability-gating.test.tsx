@@ -150,6 +150,8 @@ it("toolbar lists sorting right under the view mode, before thumbnails and densi
     "Use default sort",
     "Show thumbnails",
     "Density",
+    "Comfortable",
+    "Standard",
     "Compact",
   ].map((label) => text.indexOf(label));
   expect(positions.every((position) => position >= 0)).toBe(true);

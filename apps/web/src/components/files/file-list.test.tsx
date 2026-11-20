@@ -232,9 +232,9 @@ describe("FileList", () => {
     expect(onScrollConsumed).toHaveBeenCalledWith(2);
   });
 
-  it("renders a 40px rounded thumbnail img for image files when showThumbnails is true", () => {
+  it("renders a 40px rounded thumbnail img for image files in comfortable rows when showThumbnails is true", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
-    const { container } = renderList({ entries, showThumbnails: true });
+    const { container } = renderList({ entries, showThumbnails: true, density: "comfortable" });
 
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
@@ -245,7 +245,7 @@ describe("FileList", () => {
 
   it("falls back to FileIcon in a matching 40px container when an image thumbnail fails to load", () => {
     const entries = [makeEntry("broken.png", { ext: ".png", mime: "image/png" })];
-    const { container } = renderList({ entries, showThumbnails: true });
+    const { container } = renderList({ entries, showThumbnails: true, density: "comfortable" });
 
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
@@ -261,7 +261,7 @@ describe("FileList", () => {
 
   it("renders a matching 40px fallback container for non-image entries when showThumbnails is true", () => {
     const entries = [makeEntry("notes.txt", { ext: ".txt", mime: "text/plain" })];
-    const { container } = renderList({ entries, showThumbnails: true });
+    const { container } = renderList({ entries, showThumbnails: true, density: "comfortable" });
 
     expect(container.querySelector("img")).toBeNull();
     const iconContainer = container.querySelector(".size-10");
@@ -280,7 +280,7 @@ describe("FileList", () => {
       );
 
     it("fills a 64px comfortable row with a large boxed icon, a lighter line and a larger name", () => {
-      const { container, getByText } = renderList({ entries });
+      const { container, getByText } = renderList({ entries, density: "comfortable" });
 
       expect(rowHeights(container)).toEqual(new Set(["64px"]));
       const icon = container.querySelector('[data-path="/notes.txt"] svg[data-icon-kind="text"]');
@@ -291,12 +291,8 @@ describe("FileList", () => {
       expect(getByText("notes.txt").className).toContain("text-[15px]");
     });
 
-    it("keeps the earlier 36px row, 24px thumbnail and name size when compact", () => {
-      const { container, getByText } = renderList({
-        entries,
-        density: "compact",
-        showThumbnails: true,
-      });
+    it("gives standard rows, the default, 36px with a 24px thumbnail and the plain name size", () => {
+      const { container, getByText } = renderList({ entries, showThumbnails: true });
 
       expect(rowHeights(container)).toEqual(new Set(["36px"]));
       const img = container.querySelector("img");
@@ -306,10 +302,30 @@ describe("FileList", () => {
       expect(icon?.getAttribute("class")).toContain("size-4");
       expect(icon?.getAttribute("stroke-width")).toBe("2");
       expect(icon?.parentElement?.className).toContain("size-6");
-      expect(getByText("notes.txt").className).not.toContain("text-[15px]");
+      expect(getByText("notes.txt").className).not.toContain("text-[");
+      cleanup();
+
+      const explicit = renderList({ entries, showThumbnails: true, density: "standard" });
+      expect(rowHeights(explicit.container)).toEqual(new Set(["36px"]));
     });
 
-    it("indents a tree level by 24px, and by the earlier 20px when compact", () => {
+    it("gives compact rows 30px with a 20px thumbnail and a smaller name", () => {
+      const { container, getByText } = renderList({
+        entries,
+        density: "compact",
+        showThumbnails: true,
+      });
+
+      expect(rowHeights(container)).toEqual(new Set(["30px"]));
+      const img = container.querySelector("img");
+      expect(img?.className).toContain("size-5");
+      expect(img?.className).toContain("rounded-xs");
+      const icon = container.querySelector('[data-path="/notes.txt"] svg[data-icon-kind="text"]');
+      expect(icon?.parentElement?.className).toContain("size-5");
+      expect(getByText("notes.txt").className).toContain("text-[13px]");
+    });
+
+    it("indents a tree level by 24px when comfortable, 20px by default and 16px when compact", () => {
       const tree = {
         entries: [makeEntry("a", { kind: "dir" }), makeEntry("b.txt", { path: "/a/b.txt" })],
         treeDepths: new Map([
@@ -321,13 +337,18 @@ describe("FileList", () => {
       const indent = (container: HTMLElement) =>
         container.querySelector<HTMLElement>('[data-path="/a/b.txt"]')?.style.paddingLeft;
 
-      const comfortable = renderList(tree);
+      const comfortable = renderList({ ...tree, density: "comfortable" });
       expect(indent(comfortable.container)).toBe("36px");
       expect(comfortable.getByRole("button", { name: "Collapse a" }).className).toContain("size-5");
       cleanup();
 
+      const standard = renderList(tree);
+      expect(indent(standard.container)).toBe("32px");
+      expect(standard.getByRole("button", { name: "Collapse a" }).className).toContain("size-4");
+      cleanup();
+
       const compact = renderList({ ...tree, density: "compact" });
-      expect(indent(compact.container)).toBe("32px");
+      expect(indent(compact.container)).toBe("28px");
       expect(compact.getByRole("button", { name: "Collapse a" }).className).toContain("size-4");
     });
   });
@@ -386,9 +407,9 @@ describe("FileList", () => {
     expect((await findAllByRole("menuitem")).length).toBeGreaterThan(0);
   });
 
-  it("renders standard FileIcon directly when showThumbnails is false and rows are compact", () => {
+  it("renders the plain FileIcon directly when showThumbnails is false and rows are standard", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
-    const { container } = renderList({ entries, showThumbnails: false, density: "compact" });
+    const { container } = renderList({ entries, showThumbnails: false, density: "standard" });
 
     expect(container.querySelector("img")).toBeNull();
     expect(container.querySelector(".size-6")).toBeNull();
@@ -433,7 +454,7 @@ describe("FileList", () => {
       expect(getByText("1 item")).toBeTruthy();
     });
 
-    it("gives rows two-line height, 68px by default and 56px at compact density", () => {
+    it("gives rows two-line height: 56px by default, 68px when comfortable and 48px when compact", () => {
       const { container, rerender } = renderList();
       const heights = () =>
         new Set(
@@ -441,6 +462,23 @@ describe("FileList", () => {
             (row) => row.style.height,
           ),
         );
+      expect(heights()).toEqual(new Set(["56px"]));
+
+      rerender(
+        <FileList
+          entries={ENTRIES}
+          selected={new Set()}
+          focusedPath={null}
+          onEntryClick={noop}
+          onEntryDoubleClick={noop}
+          onContextAction={noop}
+          getDragPaths={() => []}
+          onInternalDrop={noop}
+          onToggleSelectAll={noop}
+          onClearSelection={noop}
+          density="comfortable"
+        />,
+      );
       expect(heights()).toEqual(new Set(["68px"]));
 
       rerender(
@@ -458,7 +496,7 @@ describe("FileList", () => {
           density="compact"
         />,
       );
-      expect(heights()).toEqual(new Set(["56px"]));
+      expect(heights()).toEqual(new Set(["48px"]));
     });
 
     it("marks folders with a trailing chevron, except in tree view where they already have one", () => {
@@ -493,14 +531,18 @@ describe("FileList", () => {
       expect(getByText(/ · alice · Can view$/)).toBeTruthy();
     });
 
-    it("shows a 40px thumbnail next to the two lines, and 32px when compact", () => {
+    it("shows a 32px thumbnail next to the two lines, 40px when comfortable and 28px when compact", () => {
       const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
       const { container } = renderList({ entries, showThumbnails: true });
-      expect(container.querySelector("img")?.className).toContain("size-10");
+      expect(container.querySelector("img")?.className).toContain("size-8");
+      cleanup();
+
+      const comfortable = renderList({ entries, showThumbnails: true, density: "comfortable" });
+      expect(comfortable.container.querySelector("img")?.className).toContain("size-10");
       cleanup();
 
       const compact = renderList({ entries, showThumbnails: true, density: "compact" });
-      expect(compact.container.querySelector("img")?.className).toContain("size-8");
+      expect(compact.container.querySelector("img")?.className).toContain("size-7");
     });
 
     it("keeps a symbolic link's name and date readable", () => {

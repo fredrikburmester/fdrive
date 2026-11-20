@@ -9,6 +9,7 @@ import {
   Download,
   Ellipsis,
   ExternalLink,
+  FolderOpen,
   Info,
   SquarePenIcon,
   X,
@@ -218,6 +219,9 @@ function PreviewShellContent({ path, from = null }: PreviewShellProps) {
   // Back returns to the folder the file was opened from, which in a tree can be above its own,
   // with the file selected there. Stepping through siblings and editing keep that folder.
   const backHref = returnHref(path, from);
+  // The file's own folder with it selected, wherever the file was opened from: Recents, a
+  // search, a link, or a folder further up a tree.
+  const folderHref = returnHref(path, null);
   const prevHref = siblings.prev !== null ? viewHref(siblings.prev, from) : undefined;
   const nextHref = siblings.next !== null ? viewHref(siblings.next, from) : undefined;
   const entry = encrypted ? shown : entryQuery.data;
@@ -320,6 +324,11 @@ function PreviewShellContent({ path, from = null }: PreviewShellProps) {
           </div>
 
           <div className="hidden shrink-0 items-center gap-2 sm:flex">
+            <TopBarAction label="Show in folder" route={folderHref}>
+              <FolderOpen />
+              <span className="sr-only">Show in folder</span>
+            </TopBarAction>
+
             {(!encrypted || decryptedUrl !== null) && (
               <TopBarAction
                 label="Download"
@@ -372,6 +381,13 @@ function PreviewShellContent({ path, from = null }: PreviewShellProps) {
                   Edit
                 </DropdownMenuItem>
               )}
+              <DropdownMenuItem
+                className="min-h-11 gap-3 px-3"
+                render={<Link href={toRoute(folderHref)} />}
+              >
+                <FolderOpen />
+                Show in folder
+              </DropdownMenuItem>
               <DropdownMenuItem
                 className="min-h-11 gap-3 px-3"
                 render={

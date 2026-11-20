@@ -39,10 +39,14 @@ describe("ListingSkeleton", () => {
           (row) => row.style.height,
         ),
       );
-    expect(heights(render(<ListingSkeleton />).container)).toEqual(new Set(["68px"]));
+    expect(heights(render(<ListingSkeleton />).container)).toEqual(new Set(["56px"]));
+    cleanup();
+    expect(heights(render(<ListingSkeleton density="comfortable" />).container)).toEqual(
+      new Set(["68px"]),
+    );
     cleanup();
     expect(heights(render(<ListingSkeleton density="compact" />).container)).toEqual(
-      new Set(["56px"]),
+      new Set(["48px"]),
     );
   });
 
@@ -53,20 +57,29 @@ describe("ListingSkeleton", () => {
     const iconStub = (container: HTMLElement) =>
       firstRow(container)?.querySelectorAll('[data-slot="skeleton"]')[1]?.className ?? "";
 
-    const comfortable = render(<ListingSkeleton />);
+    const comfortable = render(<ListingSkeleton density="comfortable" />);
     expect(firstRow(comfortable.container)?.style.height).toBe("64px");
     expect(iconStub(comfortable.container)).toContain("size-10");
     cleanup();
 
+    const standard = render(<ListingSkeleton />);
+    expect(firstRow(standard.container)?.style.height).toBe("36px");
+    expect(iconStub(standard.container)).toContain("size-4");
+    cleanup();
+
     const compact = render(<ListingSkeleton density="compact" />);
-    expect(firstRow(compact.container)?.style.height).toBe("36px");
+    expect(firstRow(compact.container)?.style.height).toBe("30px");
     expect(iconStub(compact.container)).toContain("size-4");
     cleanup();
 
     viewport.mobile = true;
-    expect(iconStub(render(<ListingSkeleton />).container)).toContain("size-10");
+    expect(iconStub(render(<ListingSkeleton density="comfortable" />).container)).toContain(
+      "size-10",
+    );
     cleanup();
-    expect(iconStub(render(<ListingSkeleton density="compact" />).container)).toContain("size-8");
+    expect(iconStub(render(<ListingSkeleton />).container)).toContain("size-8");
+    cleanup();
+    expect(iconStub(render(<ListingSkeleton density="compact" />).container)).toContain("size-7");
   });
 
   it("never sets a fixed pixel width on a row or its stubs, so rows fill the listing area", () => {
