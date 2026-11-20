@@ -1,6 +1,6 @@
 /**
  * The `claude` CLI command that adds fdrive's MCP server with a bearer
- * token, shown on the account page's "Connect Claude" snippet.
+ * token, shown in the settings page's "Connect Claude" snippet.
  */
 export function claudeMcpAddCommand(publicUrl: string, token: string): string {
   return `claude mcp add --transport http fdrive ${publicUrl}/mcp --header "Authorization: Bearer ${token}"`;

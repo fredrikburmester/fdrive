@@ -19,7 +19,10 @@ const short = revision.slice(0, 12);
 async function serverVersion(build: Pick<AboutResponse, "version" | "release" | "revision">) {
   about.mockResolvedValue({ ...build, uptimeSeconds: 90, setupRequired: false });
   render(await AboutPage());
-  const value = screen.getByText("Server version").nextElementSibling;
+  // A detail row: the label in the left column, its value in the right one.
+  const value = screen
+    .getByText("Server version")
+    .closest('[data-slot="setting-row"]')?.lastElementChild;
   if (!(value instanceof HTMLElement)) throw new Error("Server version has no value");
   return value;
 }

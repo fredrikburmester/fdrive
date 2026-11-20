@@ -150,9 +150,11 @@ test.describe("installation backups", () => {
         ).toBe(true);
         expect(
           await page
-            .locator("main [data-slot=card]")
-            .evaluateAll((cards) =>
-              cards.every((card) => card.scrollWidth <= card.clientWidth + 1),
+            .locator("main [data-slot=page-section]")
+            .evaluateAll(
+              (sections) =>
+                sections.length > 0 &&
+                sections.every((section) => section.scrollWidth <= section.clientWidth + 1),
             ),
         ).toBe(true);
       }

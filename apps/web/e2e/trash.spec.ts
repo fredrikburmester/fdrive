@@ -17,11 +17,10 @@ function trashRow(page: Page, name: string): Locator {
   return page.locator("table tbody tr").filter({ hasText: name });
 }
 
-/** The Trash card on System > General. */
+/** The Trash section on System > General. */
 function trashSettings(page: Page): Locator {
   return page
-    .getByRole("main")
-    .locator('[data-slot="card"]')
+    .locator('[data-slot="page-section"]')
     .filter({ has: page.getByLabel("Days in Trash") });
 }
 
@@ -172,17 +171,26 @@ test.describe("trash available", () => {
 
     // It appears on /trash with its original folder, which says when Trash deletes it.
     await page.goto(`${webBaseUrl}/trash`);
+    await expect(page.getByRole("heading", { name: "Trash", exact: true })).toBeVisible();
     await expect(
       page.getByText("Items in Trash are deleted permanently after 30 days.", { exact: false }),
     ).toBeVisible();
     const row = trashRow(page, fileName);
     await expect(row).toBeVisible({ timeout: 15_000 });
     await expect(row).toContainText("Home");
+    // The page reads like the file list: a bar summing up what Trash holds over a table of
+    // rows, and no header search, which would look through files rather than Trash.
+    await expect(page.getByText("1 item", { exact: true })).toBeVisible();
+    for (const column of ["Name", "Original folder", "Size", "Deleted"]) {
+      await expect(page.getByRole("columnheader", { name: column, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
 
     // Restore returns it to the listing. The request is held back once so the
     // toolbar's busy state is observable: Restore shows progressive copy and
     // both restore buttons are disabled until it completes.
     await row.getByRole("checkbox", { name: `Select ${fileName}` }).check();
+    await expect(page.getByText("1 selected", { exact: true })).toBeVisible();
     const releaseRestore = await holdRequests(page, "**/api/v1/trash/restore");
     await page.getByRole("button", { name: "Restore", exact: true }).click();
     const restoring = page.getByRole("button", { name: "Restoring…" });

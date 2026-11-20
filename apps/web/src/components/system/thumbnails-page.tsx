@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +31,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
 /** Admin controls for preview cache maintenance, independent of text indexing. */
 export function ThumbnailsPage() {
@@ -99,12 +100,18 @@ export function ThumbnailsPage() {
           <Button
             type="button"
             variant="outline"
+            size="sm"
             disabled={unavailable || busy}
             onClick={() => setClearOpen(true)}
           >
             Clear cache
           </Button>
-          <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={unavailable || busy}
+            onClick={() => setRebuildOpen(true)}
+          >
             Rebuild
           </Button>
           <LogSheet subsystem="thumbnails" />
@@ -112,46 +119,52 @@ export function ThumbnailsPage() {
       }
     >
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SystemLine>Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection
-            title="Status"
-            description={
-              status === "ok"
-                ? "Thumbnail cache is available."
-                : status === "unreachable"
-                  ? "The indexer that generates thumbnails is unreachable."
-                  : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."
-            }
-          >
-            <StatusBadge status={status} />
-            <p className="text-sm text-muted-foreground">
-              Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
-              existing previews. Clear cache removes previews globally. Original files, text, search
-              data, and metadata stay unchanged. Normal indexing or on-demand generation can create
-              previews again.
-            </p>
+          <SystemSection title="Status">
+            <SettingRow
+              label="Thumbnail cache"
+              description={
+                status === "ok"
+                  ? "Thumbnail cache is available."
+                  : status === "unreachable"
+                    ? "The indexer that generates thumbnails is unreachable."
+                    : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."
+              }
+            >
+              <StatusBadge status={status} />
+            </SettingRow>
+            <MaintenanceProgress
+              title="Thumbnail rebuild"
+              job={indexer.data?.stats?.thumbnailRebuild}
+            />
+            <MaintenanceProgress
+              title="Thumbnail cache clear"
+              job={indexer.data?.stats?.thumbnailClear}
+            />
+            <SystemNote>
+              <p>
+                Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
+                existing previews. Clear cache removes previews globally. Original files, text,
+                search data, and metadata stay unchanged. Normal indexing or on-demand generation
+                can create previews again.
+              </p>
+            </SystemNote>
           </SystemSection>
           {indexer.error ? (
             <SystemErrorState error={indexer.error} onRetry={() => void indexer.refetch()} />
           ) : null}
-          <StatGrid
-            stats={[
-              { label: "Thumbnails", value: data.count.toLocaleString() },
-              { label: "Cache size", value: formatBytes(data.bytes) },
-            ]}
-          />
-          <MaintenanceProgress
-            title="Thumbnail rebuild"
-            job={indexer.data?.stats?.thumbnailRebuild}
-          />
-          <MaintenanceProgress
-            title="Thumbnail cache clear"
-            job={indexer.data?.stats?.thumbnailClear}
-          />
+          <SystemSection title="Cache">
+            <StatGrid
+              stats={[
+                { label: "Thumbnails", value: data.count.toLocaleString() },
+                { label: "Cache size", value: formatBytes(data.bytes) },
+              ]}
+            />
+          </SystemSection>
         </>
       )}
       <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>

@@ -5,22 +5,26 @@ import { baseName } from "@fdrive/core";
 import { FolderIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageSection,
+} from "@/components/shell/page-layout";
+import { RowsSkeleton, TruncatedCell } from "@/components/shell/page-rows";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { describeApiError } from "@/lib/api/errors";
 import { pathToHref } from "@/lib/files/path-url";
 import { useGrants } from "@/lib/grants/queries";
 import { AccessSelect } from "./access-select";
 import { useOwnedGrant } from "./use-owned-grant";
+
+/** A line of the section that is not a row: the same side padding, in small muted text. */
+const NOTE = "px-3 py-2.5 text-muted-foreground text-xs";
 
 /** One folder shared with one person: where it is, who has it, and what they may do. */
 function OwnedGrantRow({ grant }: { grant: OwnedGrant }) {
@@ -28,27 +32,36 @@ function OwnedGrantRow({ grant }: { grant: OwnedGrant }) {
   const { busy, changeAccess, stopSharing } = useOwnedGrant(grant, name);
 
   return (
-    <TableRow>
-      <TableCell>
-        <Link
-          href={pathToHref(grant.path) as Route}
-          className="flex min-w-0 items-center gap-2 font-medium hover:underline"
-        >
-          <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="truncate">{name}</span>
-        </Link>
-        <span className="block truncate text-xs text-muted-foreground">{grant.path}</span>
-      </TableCell>
-      <TableCell>{grant.username}</TableCell>
-      <TableCell>
+    <DataTableRow>
+      <DataTableCell>
+        <div className="flex min-w-0 items-center gap-2">
+          <Link
+            href={pathToHref(grant.path) as Route}
+            className="flex min-w-0 items-center gap-2 hover:underline"
+          >
+            <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+            <span className="truncate">{name}</span>
+          </Link>
+          {/* Beside the name where there is room; a narrow page keeps the name whole instead. */}
+          <span className="hidden min-w-0 shrink-[2] truncate text-muted-foreground text-xs @xl:block">
+            {grant.path}
+          </span>
+        </div>
+        {/* The Person column, folded under the folder where the page is too narrow for it. */}
+        <span className="block truncate pl-6 text-muted-foreground text-xs @xl:hidden">
+          {grant.username}
+        </span>
+      </DataTableCell>
+      <TruncatedCell className="hidden @xl:table-cell">{grant.username}</TruncatedCell>
+      <DataTableCell>
         <AccessSelect
           value={grant.access}
           label={`Access for ${grant.username} to ${name}`}
           disabled={busy}
           onChange={changeAccess}
         />
-      </TableCell>
-      <TableCell className="text-right">
+      </DataTableCell>
+      <DataTableCell className="text-right">
         <Button
           type="button"
           variant="ghost"
@@ -59,8 +72,8 @@ function OwnedGrantRow({ grant }: { grant: OwnedGrant }) {
         >
           Stop sharing
         </Button>
-      </TableCell>
-    </TableRow>
+      </DataTableCell>
+    </DataTableRow>
   );
 }
 
@@ -76,41 +89,34 @@ export function SharedWithPeopleSection() {
   );
 
   return (
-    <section aria-labelledby="shared-with-people" className="space-y-3">
-      <div>
-        <h2 id="shared-with-people" className="text-lg font-semibold tracking-tight">
-          Shared with people
-        </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Folders you share with other people here. Choose Share with people on a folder in Files to
-          add one.
-        </p>
-      </div>
+    <PageSection
+      aria-labelledby="shared-with-people"
+      title={<span id="shared-with-people">Shared with people</span>}
+      description="Folders you share with other people here. Choose Share with people on a folder in Files to add one."
+    >
       {grants.isPending ? (
-        <Skeleton className="h-16 w-full" />
+        <RowsSkeleton label="Loading shared folders…" rows={2} />
       ) : grants.isError ? (
-        <FieldError>{describeApiError(grants.error)}</FieldError>
+        <FieldError className="px-3 py-2.5">{describeApiError(grants.error)}</FieldError>
       ) : owned.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          You don't share any folders with people yet.
-        </p>
+        <p className={NOTE}>You don't share any folders with people yet.</p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Folder</TableHead>
-              <TableHead>Person</TableHead>
-              <TableHead>Access</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
+        <DataTable className="table-fixed">
+          <DataTableHeader>
+            <DataTableRow>
+              <DataTableHead>Folder</DataTableHead>
+              <DataTableHead className="hidden w-[22%] @xl:table-cell">Person</DataTableHead>
+              <DataTableHead className="w-32">Access</DataTableHead>
+              <DataTableHead className="w-28 text-right">Actions</DataTableHead>
+            </DataTableRow>
+          </DataTableHeader>
+          <DataTableBody>
             {owned.map((grant) => (
               <OwnedGrantRow key={grant.id} grant={grant} />
             ))}
-          </TableBody>
-        </Table>
+          </DataTableBody>
+        </DataTable>
       )}
-    </section>
+    </PageSection>
   );
 }

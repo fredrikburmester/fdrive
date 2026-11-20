@@ -7,14 +7,15 @@ const LiveActivityDockContext = createContext<HTMLElement | null>(null);
 
 /**
  * The one corner where live activities show while their own UI is closed:
- * a fixed column at the bottom right in which the Organize pill, the
- * activity panel (uploads and jobs, `order-last`) and, on folder pages, the
- * chat panel and its bubble (below it, in the very corner) stack.
+ * a fixed column at the bottom right in which the Organize pill and the
+ * activity panel (uploads and jobs, `order-last`, in the very corner) stack.
  * Activities render into it through `LiveActivity` from wherever they are
  * mounted, so they share the corner instead of covering one another; the
  * column stops short of the top of the window and its items shrink to fit.
  * The dock lets pointer events through, so an empty corner never blocks what
- * is under it.
+ * is under it. Nothing else may cover the corner: the chat overlay, which
+ * hangs from the top right, measures the dock through `useLiveActivityDock`
+ * and ends above it.
  */
 export function LiveActivityDock({ children }: { children?: ReactNode }) {
   const [node, setNode] = useState<HTMLElement | null>(null);
@@ -37,4 +38,9 @@ export function LiveActivityDock({ children }: { children?: ReactNode }) {
 export function LiveActivity({ children }: { children: ReactNode }) {
   const node = useContext(LiveActivityDockContext);
   return node === null ? children : createPortal(children, node);
+}
+
+/** The dock's element, for UI that has to keep clear of it; `null` without a dock. */
+export function useLiveActivityDock(): HTMLElement | null {
+  return useContext(LiveActivityDockContext);
 }

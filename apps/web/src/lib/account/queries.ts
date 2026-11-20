@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 
-/** The signed-in account's API tokens (never their secrets), for the account page's tokens table. */
+/** The signed-in account's API tokens (never their secrets), for the settings page's tokens table. */
 export function useApiTokens() {
   return useQuery({
     queryKey: queryKeys.account.tokens(),

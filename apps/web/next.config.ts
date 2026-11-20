@@ -134,7 +134,7 @@ const nextConfig: NextConfig = {
   // re-read API_INTERNAL_URL at `next start`), so it only matters for local
   // `next dev`. In the compose deployment (see deploy/README.md), Caddy
   // routes /api/* and /mcp* straight to the api service; local development
-  // proxies both so the connection URLs shown on the account page work.
+  // proxies both so the connection URLs shown on the settings page work.
   async rewrites() {
     return [
       {

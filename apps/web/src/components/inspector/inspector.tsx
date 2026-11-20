@@ -20,7 +20,6 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { useActivityGesture } from "@/lib/activity/gestures";
 import { useFolderSize, usePhotoDetails } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
 import { describeEntry, describePhoto } from "@/lib/preview/describe";
@@ -42,6 +41,7 @@ export interface InspectorProps {
 
 const NOT_INDEXED = { isPending: false, isError: false } as const;
 
+/** Same breakpoint as `INSPECTOR_SIDE_PANEL_QUERY`, which decides whether the panel starts open. */
 const WIDE_MEDIA_QUERY = "(min-width: 1024px)";
 
 /** True on viewports at or above Tailwind's `lg` breakpoint. */
@@ -186,15 +186,17 @@ function InspectorBody({ entries, indexed }: { entries: readonly FsEntry[]; inde
 /**
  * The trailing details panel: a fixed 320px aside on wide screens, a
  * shadcn `Sheet` on narrow ones. Shows a single entry's icon/thumbnail and
- * `describeEntry` rows, or a count-and-size summary for a multi-selection.
+ * `describeEntry` rows, or a count-and-size summary for several. The file
+ * browser passes its selection or, with none, the highlighted row
+ * (`inspectedEntries`). Showing a file here records nothing: the panel is open by default, so
+ * the file browser records "Viewed info" only when the person opens it on a file.
  */
 export function Inspector({ entries, onClose, indexed = true }: InspectorProps) {
-  useActivityGesture("file.inspect", entries.length === 1 ? entries[0]?.path : undefined);
   const isWide = useIsWideScreen();
 
   if (isWide) {
     return (
-      <aside className="flex h-full w-80 shrink-0 flex-col border-l bg-card">
+      <aside aria-label="Info" className="flex h-full w-80 shrink-0 flex-col border-l bg-card">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <span className="text-sm font-medium">Info</span>
           <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close info">

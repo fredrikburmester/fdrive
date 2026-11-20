@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { create } from "zustand";
 
 /**
@@ -86,9 +86,37 @@ export function useChatPanelOpen() {
   return [open, setChatPanelOpen] as const;
 }
 
+/**
+ * Opens or closes the panel for the person: the toolbar button, the shortcut,
+ * the panel's own close button and "Add to chat" all come through here. Opening
+ * also asks the message box to take focus, which a panel restored open on page
+ * load never does.
+ */
 export function setChatPanelOpen(open: boolean): void {
   writeJson(window.localStorage, CHAT_OPEN_KEY, open);
+  useChatPanelStore.setState({ focusPending: open });
   announce();
+}
+
+/** Cmd+Shift+K on Apple platforms, Ctrl+Shift+K elsewhere: next to search's Cmd+K. */
+export function isChatShortcut(
+  event: Pick<KeyboardEvent, "key" | "metaKey" | "ctrlKey" | "shiftKey">,
+): boolean {
+  return event.key.toLowerCase() === "k" && event.shiftKey && (event.metaKey || event.ctrlKey);
+}
+
+/** Opens and closes the chat panel from the keyboard while `enabled`. */
+export function useChatShortcut(enabled: boolean): void {
+  useEffect(() => {
+    if (!enabled) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (!isChatShortcut(event)) return;
+      event.preventDefault();
+      setChatPanelOpen(!readChatOpen(window.localStorage));
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [enabled]);
 }
 
 export function useChatPanelWidth() {
@@ -122,10 +150,12 @@ export function setCurrentChatId(id: string | null): void {
 /**
  * What the panel is about to attach: paths dropped on it or added from a
  * selection, waiting in the composer until the next message is sent. In
- * memory only, so a reload starts with an empty composer.
+ * memory only, so a reload starts with an empty composer and takes no focus.
  */
 export interface ChatPanelState {
   readonly chips: readonly string[];
+  /** True from the person opening the panel until its message box has taken focus. */
+  readonly focusPending: boolean;
   addChips(paths: readonly string[]): void;
   removeChip(path: string): void;
   clearChips(): void;
@@ -133,6 +163,7 @@ export interface ChatPanelState {
 
 export const useChatPanelStore = create<ChatPanelState>((set) => ({
   chips: [],
+  focusPending: false,
   addChips(paths) {
     set((state) => {
       const next = [...state.chips];

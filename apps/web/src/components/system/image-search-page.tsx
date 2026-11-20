@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +29,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
 /** Admin controls for image-content (thumbnail embedding) search maintenance. */
 export function ImageSearchPage() {
@@ -97,12 +98,18 @@ export function ImageSearchPage() {
           <Button
             type="button"
             variant="outline"
+            size="sm"
             disabled={unavailable || busy}
             onClick={() => setClearOpen(true)}
           >
             Clear embeddings
           </Button>
-          <Button type="button" disabled={unavailable || busy} onClick={() => setRebuildOpen(true)}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={unavailable || busy}
+            onClick={() => setRebuildOpen(true)}
+          >
             Rebuild
           </Button>
           <LogSheet subsystem="image-search" />
@@ -110,61 +117,65 @@ export function ImageSearchPage() {
       }
     >
       {isLoading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading…
-        </p>
+        <SystemLine role="status">Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection
-            title="Status"
-            description={
-              status === "loading"
-                ? "The image search model is loading."
-                : status === "ok"
-                  ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
-                  : status === "unreachable"
-                    ? "The image search model is unreachable."
-                    : "Not configured: set FDRIVE_ML_URL."
-            }
-          >
-            <StatusBadge status={status} />
-            <p className="text-sm text-muted-foreground">
-              Image search matches a thumbnail's contents to a text query using a SigLIP 2 embedding
-              sidecar. Rebuild fills missing embeddings for photos with a thumbnail. Force rebuild
-              replaces embeddings written by a different model. Clear removes every embedding.
-              Original files, thumbnails, and text search data stay unchanged.
-            </p>
+          <SystemSection title="Status">
+            <SettingRow
+              label="Image search model"
+              description={
+                status === "loading"
+                  ? "The image search model is loading."
+                  : status === "ok"
+                    ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
+                    : status === "unreachable"
+                      ? "The image search model is unreachable."
+                      : "Not configured: set FDRIVE_ML_URL."
+              }
+            >
+              <StatusBadge status={status} />
+            </SettingRow>
+            <MaintenanceProgress title="Image embedding rebuild" job={data.rebuild} />
+            <MaintenanceProgress title="Image embedding clear" job={data.clear} />
+            <SystemNote>
+              <p>
+                Image search matches a thumbnail's contents to a text query using a SigLIP 2
+                embedding sidecar. Rebuild fills missing embeddings for photos with a thumbnail.
+                Force rebuild replaces embeddings written by a different model. Clear removes every
+                embedding. Original files, thumbnails, and text search data stay unchanged.
+              </p>
+            </SystemNote>
           </SystemSection>
-          <StatGrid
-            stats={[
-              { label: "Embedded thumbnails", value: data.embedded.toLocaleString() },
-              {
-                label: "Embedding model",
-                value: (
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="min-w-0">{data.embeddedModel ?? "None yet"}</span>
-                    {modelMismatch ? (
-                      <Badge
-                        variant="destructive"
-                        className="h-auto min-h-5 max-w-full whitespace-normal"
-                      >
-                        Model mismatch
-                      </Badge>
-                    ) : null}
-                  </span>
-                ),
-                ...(modelMismatch
-                  ? {
-                      hint: `The sidecar now runs ${data.model}. Force rebuild to replace these rows.`,
-                    }
-                  : {}),
-              },
-            ]}
-          />
-          <MaintenanceProgress title="Image embedding rebuild" job={data.rebuild} />
-          <MaintenanceProgress title="Image embedding clear" job={data.clear} />
+          <SystemSection title="Embeddings">
+            <StatGrid
+              stats={[
+                { label: "Embedded thumbnails", value: data.embedded.toLocaleString() },
+                {
+                  label: "Embedding model",
+                  value: (
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="min-w-0">{data.embeddedModel ?? "None yet"}</span>
+                      {modelMismatch ? (
+                        <Badge
+                          variant="destructive"
+                          className="h-auto min-h-5 max-w-full whitespace-normal"
+                        >
+                          Model mismatch
+                        </Badge>
+                      ) : null}
+                    </span>
+                  ),
+                  ...(modelMismatch
+                    ? {
+                        hint: `The sidecar now runs ${data.model}. Force rebuild to replace these rows.`,
+                      }
+                    : {}),
+                },
+              ]}
+            />
+          </SystemSection>
         </>
       )}
       <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>

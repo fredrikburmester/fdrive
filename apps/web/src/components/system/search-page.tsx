@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { SettingRow } from "@/components/shell/page-layout";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,7 +23,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
 /** Admin page: `System > Search`. Semantic status, index totals, and a re-embed action. */
 export function SearchPage() {
@@ -53,6 +54,7 @@ export function SearchPage() {
           <Button
             type="button"
             variant="outline"
+            size="sm"
             onClick={() => setReembedOpen(true)}
             disabled={data === undefined || !data.configured}
           >
@@ -63,51 +65,55 @@ export function SearchPage() {
       }
     >
       {isLoading ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading…
-        </p>
+        <SystemLine role="status">Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection
-            title="Semantic search"
-            description={
-              data.semantic.configured
-                ? "The text embedding model fdrive queries at search time."
-                : "Not configured: set FDRIVE_ML_URL."
-            }
-          >
-            <div className="flex flex-wrap items-center gap-3">
-              <StatusBadge
-                status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
-              />
-              {data.semantic.model !== undefined ? (
-                <Badge variant="secondary">{data.semantic.model}</Badge>
-              ) : null}
-              {data.semantic.maxInputLength !== undefined ? (
-                <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
-              ) : null}
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Each chunk of text is turned into a 384-dimension vector by this model, so search can
-              rank results by meaning, not just matching words. The badge above shows the model's
-              own limit on how much text it can embed at once.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings.
-              On a large index this can take a long time and loads the indexer with work.
-            </p>
+          <SystemSection title="Status">
+            <SettingRow
+              label="Embedding model"
+              description={
+                data.semantic.configured
+                  ? "The text embedding model fdrive queries at search time."
+                  : "Not configured: set FDRIVE_ML_URL."
+              }
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <StatusBadge
+                  status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
+                />
+                {data.semantic.model !== undefined ? (
+                  <Badge variant="secondary">{data.semantic.model}</Badge>
+                ) : null}
+                {data.semantic.maxInputLength !== undefined ? (
+                  <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
+                ) : null}
+              </div>
+            </SettingRow>
+            <SystemNote>
+              <p>
+                Each chunk of text is turned into a 384-dimension vector by this model, so search
+                can rank results by meaning, not just matching words. The badge above shows the
+                model's own limit on how much text it can embed at once.
+              </p>
+              <p>
+                Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings.
+                On a large index this can take a long time and loads the indexer with work.
+              </p>
+            </SystemNote>
           </SystemSection>
 
-          <StatGrid
-            stats={[
-              { label: "Files", value: data.index.files.toLocaleString() },
-              { label: "With text", value: data.index.withText.toLocaleString() },
-              { label: "Chunks", value: data.index.chunks.toLocaleString() },
-              { label: "Embedded", value: data.index.embedded.toLocaleString() },
-            ]}
-          />
+          <SystemSection title="Index">
+            <StatGrid
+              stats={[
+                { label: "Files", value: data.index.files.toLocaleString() },
+                { label: "With text", value: data.index.withText.toLocaleString() },
+                { label: "Chunks", value: data.index.chunks.toLocaleString() },
+                { label: "Embedded", value: data.index.embedded.toLocaleString() },
+              ]}
+            />
+          </SystemSection>
         </>
       )}
 

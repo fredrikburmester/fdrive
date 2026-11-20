@@ -29,11 +29,17 @@ export interface PageHeaderProps {
  * With the sidebar open on a wide screen, the sidebar's own button closes
  * it, so the trigger here steps aside. Phones drop the separator, leaving
  * the room to the page's title.
+ *
+ * `SearchButton` shows its button only on the file browser, and keeps the
+ * search panel mounted on every page for Cmd/Ctrl+K and saved searches.
+ *
+ * The header is a size container named `header`: its buttons show their text by the width the
+ * header really has beside the sidebar, not by the window's.
  */
 export function PageHeader({ breadcrumbs, actions }: PageHeaderProps) {
   const { open } = useSidebar();
   return (
-    <header className="sticky top-0 z-10 flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md">
+    <header className="@container/header sticky top-0 z-10 flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border bg-background/80 px-3 backdrop-blur-md">
       <SidebarTrigger className={cn(open && "md:hidden")} />
       <Separator
         orientation="vertical"

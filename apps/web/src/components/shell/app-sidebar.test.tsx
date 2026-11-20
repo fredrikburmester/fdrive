@@ -102,6 +102,20 @@ it("always shows Trash, and names the signed-in login and its storage", async ()
   expect(screen.getByText("Main")).toBeTruthy();
 });
 
+it("opens Settings from the account menu, beside Appearance, Storage and About", async () => {
+  renderSidebar();
+  fireEvent.click(await screen.findByRole("button", { name: /ada/ }));
+
+  const settings = await screen.findByRole("menuitem", { name: "Settings" });
+  // Settings keeps the URL it had while the page was called Account.
+  expect(settings.getAttribute("href")).toBe("/account");
+  expect(screen.queryByRole("menuitem", { name: "Account" })).toBeNull();
+  expect(screen.getByRole("menuitem", { name: "Appearance" })).toBeTruthy();
+  expect(screen.getByRole("menuitem", { name: "Storage" }).getAttribute("href")).toBe("/storage");
+  expect(screen.getByRole("menuitem", { name: "About" }).getAttribute("href")).toBe("/about");
+  expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeTruthy();
+});
+
 it("closes from its own header button, beside the wordmark", async () => {
   const { container } = renderSidebar();
   const sidebar = container.querySelector('[data-slot="sidebar"]');

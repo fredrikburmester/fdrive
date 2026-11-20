@@ -1,16 +1,40 @@
 // @vitest-environment jsdom
 import { ApiClientError, type Chat } from "@fdrive/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// The sticky conversation scroller measures itself; jsdom has no ResizeObserver.
+// jsdom has no ResizeObserver. The sticky conversation scroller measures itself with one and
+// the panel watches the live activity dock with another; `resize` plays a size change for the
+// observers of one element.
+const resizeListeners = new Map<Element, Set<() => void>>();
 class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
+  readonly #notify: () => void;
+  readonly #targets = new Set<Element>();
+  constructor(callback: ResizeObserverCallback) {
+    this.#notify = () => callback([], this as unknown as ResizeObserver);
+  }
+  observe(target: Element) {
+    this.#targets.add(target);
+    const listeners = resizeListeners.get(target) ?? new Set();
+    listeners.add(this.#notify);
+    resizeListeners.set(target, listeners);
+  }
+  unobserve(target: Element) {
+    this.#targets.delete(target);
+    resizeListeners.get(target)?.delete(this.#notify);
+  }
+  disconnect() {
+    for (const target of [...this.#targets]) this.unobserve(target);
+  }
 }
-(globalThis as { ResizeObserver?: unknown }).ResizeObserver ??= ResizeObserverStub;
+(globalThis as { ResizeObserver?: unknown }).ResizeObserver = ResizeObserverStub;
+function resize(target: Element, height: number) {
+  Object.defineProperty(target, "offsetHeight", { configurable: true, value: height });
+  act(() => {
+    for (const notify of resizeListeners.get(target) ?? []) notify();
+  });
+}
 // Base UI's scroll area asks the viewport for its animations; jsdom has none.
 (Element.prototype as { getAnimations?: () => Animation[] }).getAnimations ??= () => [];
 
@@ -48,6 +72,7 @@ vi.mock("sonner", () => ({ toast: { error: mocks.error, success: mocks.success }
 vi.mock("@/components/files/destination-picker", () => ({ DestinationPicker: () => null }));
 
 const { ChatPanel } = await import("./chat-panel");
+const { ChatToggle } = await import("./chat-toggle");
 const { LiveActivityDock } = await import("@/components/activity/live-activity-dock");
 const { addToChat, setChatPanelOpen, setCurrentChatId, useChatPanelStore } = await import(
   "@/lib/ai/chat-panel"
@@ -106,17 +131,25 @@ function notFound() {
   return new ApiClientError("not_found", "That item could not be found.", 404);
 }
 
+/** The panel as the shell mounts it, with the toolbar button the file browser renders. */
+function view(queryClient: QueryClient) {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <LiveActivityDock>
+        <header>
+          <ChatToggle />
+        </header>
+        <ChatPanel />
+      </LiveActivityDock>
+    </QueryClientProvider>
+  );
+}
+
 function renderPanel() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <LiveActivityDock>
-        <ChatPanel />
-      </LiveActivityDock>
-    </QueryClientProvider>,
-  );
+  return render(view(queryClient));
 }
 
 beforeEach(() => {
@@ -140,78 +173,88 @@ afterEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   useChatPanelStore.getState().clearChips();
+  useChatPanelStore.setState({ focusPending: false });
+  resizeListeners.clear();
   mocks.mobile = false;
   mocks.pathname = "/files/Inbox";
 });
 
-it("stays hidden until AI is set up, then opens and closes from the bubble, which says when something waits", async () => {
+it("stays hidden until AI is set up, then opens and closes from the toolbar button, which says when something waits", async () => {
   mocks.client.aiStatus.mockResolvedValue({ provider: null, organize: false, chat: false });
+  setChatPanelOpen(true);
   const { container } = renderPanel();
   await waitFor(() => expect(mocks.client.aiStatus).toHaveBeenCalled());
   expect(container.querySelector('[data-slot="chat-panel"]')).toBeNull();
   expect(screen.queryByRole("button", { name: "Chat" })).toBeNull();
 
   cleanup();
+  localStorage.clear();
   mocks.client.aiStatus.mockResolvedValue({ provider: "anthropic", organize: true, chat: true });
   renderPanel();
-  const bubble = await screen.findByRole("button", { name: "Chat" });
-  expect(bubble.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.click(bubble);
+  const toggle = await screen.findByRole("button", { name: "Chat" });
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull();
+  fireEvent.click(toggle);
   expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
-  expect(bubble.getAttribute("aria-expanded")).toBe("true");
-  fireEvent.click(bubble);
+  expect(toggle.getAttribute("aria-expanded")).toBe("true");
+  fireEvent.click(toggle);
   await waitFor(() => expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull());
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
 
   cleanup();
   mocks.client.chat.mockResolvedValue(chat({ state: "awaiting_approval" }));
   setCurrentChatId("c1");
   renderPanel();
-  fireEvent.click(await screen.findByRole("button", { name: "Waiting for you" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Chat", description: "Waiting for you" }),
+  );
   expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Chat" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-expanded")).toBe("true");
 });
 
-it("attaches items dropped on the closed bubble and opens the panel with them", async () => {
+it("attaches items dropped on the toolbar button and opens the panel with them", async () => {
   renderPanel();
-  const bubble = await screen.findByRole("button", { name: "Chat" });
+  const toggle = await screen.findByRole("button", { name: "Chat" });
   const dataTransfer = {
     types: [INTERNAL_DND_TYPE],
     getData: () => JSON.stringify(["/Inbox/b.txt"]),
     setData: () => {},
     dropEffect: "none",
   };
-  // Nothing dragged from a listing: the bubble is no drop target.
-  fireEvent.dragOver(bubble, { dataTransfer });
-  expect(bubble.getAttribute("data-dropping")).toBeNull();
   act(() => startDragSession(["/Inbox/b.txt"]));
-  fireEvent.dragOver(bubble, { dataTransfer });
-  expect(bubble.getAttribute("data-dropping")).toBe("true");
-  expect(dataTransfer.dropEffect).toBe("copy");
-  fireEvent.dragLeave(bubble);
-  expect(bubble.getAttribute("data-dropping")).toBeNull();
-  fireEvent.dragOver(bubble, { dataTransfer });
-  fireEvent.drop(bubble, { dataTransfer });
+  fireEvent.dragOver(toggle, { dataTransfer });
+  expect(toggle.getAttribute("data-dropping")).toBe("true");
+  fireEvent.drop(toggle, { dataTransfer });
   act(() => endDragSession());
   expect(useChatPanelStore.getState().chips).toEqual(["/Inbox/b.txt"]);
   const panel = await screen.findByRole("complementary", { name: "Chat" });
   expect(panel.textContent).toContain("b.txt");
 });
 
-it("starts a chat from a suggestion with the attached chips and the current folder", async () => {
+it("is only the header and the message box before the first message, and starts a chat with the attached chips and the open folder", async () => {
   mocks.client.createChat.mockResolvedValue(
     chat({ id: "c9", title: "New chat", references: [], messages: [] }),
   );
   mocks.client.sendChatMessage.mockResolvedValue(
     chat({ id: "c9", state: "running", messages: [] }),
   );
-  setChatPanelOpen(true);
   addToChat(["/Inbox/a.txt"]);
   renderPanel();
 
-  expect(await screen.findByText("Ask about your files")).toBeTruthy();
-  expect(screen.getByText("a.txt")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "What are these files about?" }));
+  const panel = await screen.findByRole("complementary", { name: "Chat" });
+  const chats = within(panel).getByRole("button", { name: "Chats" });
+  expect(chats.textContent).toBe("New chat");
+  expect(within(panel).getByText("a.txt")).toBeTruthy();
+  // No transcript, no empty state and no suggestions: the message box follows the header.
+  const textarea = within(panel).getByRole("textbox", { name: "Message" });
+  expect(chats.parentElement?.nextElementSibling?.contains(textarea)).toBe(true);
+  expect(screen.queryByRole("log")).toBeNull();
+  expect(screen.queryByText("Ask about your files")).toBeNull();
+  expect(screen.queryByRole("button", { name: "What are these files about?" })).toBeNull();
+  expect(textarea.getAttribute("placeholder")).toBe("Ask about the attached items…");
 
+  fireEvent.change(textarea, { target: { value: "What are these files about?" } });
+  fireEvent.keyDown(textarea, { key: "Enter" });
   await waitFor(() =>
     expect(mocks.client.sendChatMessage).toHaveBeenCalledWith("c9", {
       text: "What are these files about?",
@@ -221,6 +264,65 @@ it("starts a chat from a suggestion with the attached chips and the current fold
   );
   expect(localStorage.getItem("fdrive.chat.current")).toBe('"c9"');
   await waitFor(() => expect(useChatPanelStore.getState().chips).toEqual([]));
+});
+
+it("hangs under the page header, stays open when the person clicks elsewhere, and ends above the live activity dock", async () => {
+  setChatPanelOpen(true);
+  renderPanel();
+  const panel = await screen.findByRole("complementary", { name: "Chat" });
+  expect(panel.className).toContain("fixed");
+  expect(panel.className).toContain("top-14");
+  expect(panel.className).toContain("right-3");
+  // Under dialogs, sheets and the dock, which sit at z-50.
+  expect(panel.className).toContain("z-40");
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  fireEvent.pointerDown(document.body);
+  fireEvent.mouseDown(document.body);
+  fireEvent.click(document.body);
+  fireEvent.keyDown(document.body, { key: "Escape" });
+  expect(screen.getByRole("complementary", { name: "Chat" })).toBeTruthy();
+
+  // An empty dock leaves only a margin; one showing something is kept clear, gap included.
+  const dock = document.querySelector('[data-slot="live-activity-dock"]') as HTMLElement;
+  expect(dock.contains(panel)).toBe(false);
+  expect(panel.style.getPropertyValue("--chat-dock-reserve")).toBe("16px");
+  resize(dock, 200);
+  expect(panel.style.getPropertyValue("--chat-dock-reserve")).toBe("224px");
+  resize(dock, 0);
+  expect(panel.style.getPropertyValue("--chat-dock-reserve")).toBe("16px");
+});
+
+it("puts the cursor in the message box when the person opens the panel, not when it was open already", async () => {
+  // Restored from the browser's preference on page load: nobody asked for focus.
+  localStorage.setItem("fdrive.chat.open", "true");
+  renderPanel();
+  await screen.findByRole("complementary", { name: "Chat" });
+  expect(document.activeElement).toBe(document.body);
+
+  const toggle = screen.getByRole("button", { name: "Chat" });
+  fireEvent.click(toggle);
+  await waitFor(() => expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull());
+  fireEvent.click(toggle);
+  await waitFor(() =>
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "Message" })),
+  );
+  expect(useChatPanelStore.getState().focusPending).toBe(false);
+});
+
+it("resizes from its left edge with the arrow keys and remembers the width", async () => {
+  setChatPanelOpen(true);
+  renderPanel();
+  const panel = await screen.findByRole("complementary", { name: "Chat" });
+  const handle = screen.getByRole("separator", { name: "Resize chat panel" });
+  expect(panel.style.width).toBe("384px");
+  fireEvent.keyDown(handle, { key: "ArrowLeft" });
+  expect(panel.style.width).toBe("400px");
+  expect(handle.getAttribute("aria-valuenow")).toBe("400");
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  fireEvent.keyDown(handle, { key: "ArrowRight" });
+  expect(panel.style.width).toBe("368px");
+  expect(localStorage.getItem("fdrive.chat.width")).toBe("368");
 });
 
 it("shows the transcript with tool rows and links, sends typed messages, and can stop a reply", async () => {
@@ -341,20 +443,15 @@ it("offers chat only on folder pages, keeping the panel open for the next one", 
   mocks.client.chat.mockResolvedValue(chat({ state: "awaiting_approval" }));
   setCurrentChatId("c1");
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const view = () => (
-    <QueryClientProvider client={queryClient}>
-      <LiveActivityDock>
-        <ChatPanel />
-      </LiveActivityDock>
-    </QueryClientProvider>
-  );
-  const { rerender } = render(view());
-  // Closed in a folder: the bubble, saying a card waits.
-  expect(await screen.findByRole("button", { name: "Waiting for you" })).toBeTruthy();
+  const { rerender } = render(view(queryClient));
+  // Closed in a folder: the toolbar button, saying a card waits.
+  expect(
+    await screen.findByRole("button", { name: "Chat", description: "Waiting for you" }),
+  ).toBeTruthy();
 
   mocks.pathname = "/system/ai";
-  rerender(view());
-  expect(screen.queryByRole("button", { name: "Waiting for you" })).toBeNull();
+  rerender(view(queryClient));
+  expect(screen.queryByRole("button", { name: "Chat" })).toBeNull();
   fireEvent.keyDown(window, { key: "k", shiftKey: true, metaKey: true });
   expect(localStorage.getItem("fdrive.chat.open")).toBeNull();
 
@@ -362,7 +459,7 @@ it("offers chat only on folder pages, keeping the panel open for the next one", 
   act(() => setChatPanelOpen(true));
   expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull();
   mocks.pathname = "/files/Docs";
-  rerender(view());
+  rerender(view(queryClient));
   expect(await screen.findByRole("complementary", { name: "Chat" })).toBeTruthy();
   expect(screen.getByRole("button", { name: "Chat" }).getAttribute("aria-expanded")).toBe("true");
 });
@@ -465,11 +562,23 @@ it("applies a card, switches chats from the menu, and closes", async () => {
   expect(localStorage.getItem("fdrive.chat.open")).toBe("false");
 });
 
-it("opens as a sheet on narrow screens and toggles with the keyboard shortcut", async () => {
+it("opens as a sheet on narrow screens, without an empty state, and toggles with the keyboard shortcut", async () => {
   mocks.mobile = true;
-  setChatPanelOpen(true);
   renderPanel();
-  expect(await screen.findByRole("dialog")).toBeTruthy();
+  const toggle = await screen.findByRole("button", { name: "Chat" });
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(toggle);
+
+  const sheet = await screen.findByRole("dialog");
+  expect(screen.queryByRole("complementary", { name: "Chat" })).toBeNull();
+  expect(within(sheet).getByRole("button", { name: "Chats" }).textContent).toBe("New chat");
+  expect(within(sheet).getByRole("textbox", { name: "Message" })).toBeTruthy();
+  expect(within(sheet).queryByRole("log")).toBeNull();
+  expect(within(sheet).queryByText("Ask about your files")).toBeNull();
+
   fireEvent.keyDown(window, { key: "k", shiftKey: true, metaKey: true });
   await waitFor(() => expect(localStorage.getItem("fdrive.chat.open")).toBe("false"));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.keyDown(window, { key: "K", shiftKey: true, ctrlKey: true });
+  expect(await screen.findByRole("dialog")).toBeTruthy();
 });

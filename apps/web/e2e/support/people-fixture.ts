@@ -10,7 +10,7 @@ export const READ_ONLY_GUEST = {
   username: "handbook_reader",
   password: "handbook-reader-password",
 };
-/** Changes its own password under Account in `account-password.spec.ts`. */
+/** Changes its own password in Settings in `account-password.spec.ts`. */
 export const PASSWORD_USER = { username: "password_user", password: "password-user-test-password" };
 /** Turns encryption on and keeps an encrypted folder in `encrypted-folders.spec.ts`. */
 export const ENCRYPTION_USER = {

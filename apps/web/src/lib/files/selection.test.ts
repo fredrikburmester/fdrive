@@ -7,6 +7,7 @@ import {
   contextSelectionCount,
   EMPTY_SELECTION,
   focus,
+  inspectedEntries,
   NO_SELECTION,
   reconcile,
   type SelectionState,
@@ -346,6 +347,49 @@ describe("contextEntries", () => {
 
   it("returns just the target entry for an empty selection", () => {
     expect(contextEntries(a, entries, new Set())).toEqual([a]);
+  });
+});
+
+describe("inspectedEntries", () => {
+  const a = { path: "/a" };
+  const b = { path: "/b" };
+  const c = { path: "/c" };
+  const entries = [a, b, c];
+
+  it("returns the selected entries in listing order, whatever is focused", () => {
+    const state = { focus: "/b", selected: new Set(["/c", "/a"]) };
+    expect(inspectedEntries(entries, state)).toEqual([a, c]);
+  });
+
+  it("falls back to the highlighted entry when nothing is selected", () => {
+    expect(inspectedEntries(entries, focus(EMPTY_SELECTION, "/b"))).toEqual([b]);
+  });
+
+  it("shows the row a toggle click just deselected, since it stays highlighted", () => {
+    const toggledOff = click(click(EMPTY_SELECTION, order, "/c"), order, "/c", { meta: true });
+    expect(toggledOff.selected.size).toBe(0);
+    expect(inspectedEntries(entries, toggledOff)).toEqual([c]);
+  });
+
+  it("returns nothing once the selection is cleared, or when the focus is not listed", () => {
+    expect(inspectedEntries(entries, clear())).toEqual([]);
+    expect(inspectedEntries(entries, focus(EMPTY_SELECTION, "/gone"))).toEqual([]);
+  });
+
+  it("shows the row a highlight click just marked, over an earlier selection", () => {
+    const state = focus(click(EMPTY_SELECTION, order, "/a"), "/b");
+    expect(state.selected).toEqual(new Set(["/a"]));
+    expect(inspectedEntries(entries, state, "/b")).toEqual([b]);
+    // Without the highlight, as after a toggle that deselected "/b", the selection stays shown.
+    expect(inspectedEntries(entries, state)).toEqual([a]);
+  });
+
+  it("returns to the selection once the highlighted row is selected or the focus moves on", () => {
+    const highlighted = focus(click(EMPTY_SELECTION, order, "/a"), "/b");
+    const selectedToo = click(highlighted, order, "/b", { meta: true });
+    expect(inspectedEntries(entries, selectedToo, "/b")).toEqual([a, b]);
+    const movedOn = arrow(highlighted, order, "down");
+    expect(inspectedEntries(entries, movedOn, "/b")).toEqual([c]);
   });
 });
 

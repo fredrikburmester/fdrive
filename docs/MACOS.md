@@ -110,7 +110,7 @@ fails stops there: the location stays marked, its card says why, and every launc
 tries again, so a domain is never left running on a revoked credential. Telling the server is a
 courtesy with a ten-second limit, never a precondition: when it cannot be reached, answers with an
 error, or no longer serves fdrive, the location is still removed and the app says the credential
-remains until it expires or is revoked from Account → API tokens, which works at any time.
+remains until it expires or is revoked from Settings → API tokens, which works at any time.
 Revocation cannot erase previously exported copies.
 
 Every launch and refresh also reconciles File Provider's registered domains with the saved
@@ -342,7 +342,7 @@ account's recipient. Both identities are kept per location in the shared Data Pr
 Keychain (service `fdrive.encryption`, AfterFirstUnlockThisDeviceOnly), never in a file. The
 extension reads the account key from there. Remove deletes both.
 
-The location card shows the account key's fingerprint, to compare with Account › Encryption in
+The location card shows the account key's fingerprint, to compare with Settings › Encryption in
 the browser. A Mac paired while encryption was off, or by an older app, shows encrypted folders
 as locked with the reason, and offers Reconnect. The app asks for a missing key on Refresh and
 every ten minutes.

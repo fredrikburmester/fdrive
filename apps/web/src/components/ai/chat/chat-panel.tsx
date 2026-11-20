@@ -2,10 +2,10 @@
 
 import { ApiClientError, type ChatActionRequest } from "@fdrive/contracts";
 import { cn } from "cn";
-import type { DragEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { LiveActivity } from "@/components/activity/live-activity-dock";
+import { useLiveActivityDock } from "@/components/activity/live-activity-dock";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { pendingActions } from "@/lib/ai/chat";
@@ -16,6 +16,7 @@ import {
   useChatPanelOpen,
   useChatPanelStore,
   useChatPanelWidth,
+  useChatShortcut,
   useCurrentChatId,
 } from "@/lib/ai/chat-panel";
 import {
@@ -28,64 +29,45 @@ import {
   useRenameChat,
   useSendChatMessage,
 } from "@/lib/ai/chat-queries";
-import { useAiStatus } from "@/lib/ai/queries";
 import { getActiveDragPaths, readDraggedPaths, subscribeDragSession } from "@/lib/dnd";
-import { useEncryptedFolder } from "@/lib/encryption/queries";
 import { describeFsError } from "@/lib/files/queries";
-import { ChatBubble, useChatFolder, useChatShortcut } from "./chat-bubble";
+import { useChatAvailability } from "./chat-availability";
 import { ChatComposer } from "./chat-composer";
 import { ChatHeader } from "./chat-header";
 import { ChatTranscript } from "./chat-transcript";
 
 /**
- * The chat: a bubble in the live activity dock at the bottom right that
- * opens a floating panel above it on wide screens, a full-height sheet on
- * narrow ones. The panel stays open between folders, accepts files and
- * folders dragged from the listing, and shows the chat the browser last had
- * open. The assistant works from the folder in view, so chat is offered only
- * on folder pages, and only while AI is set up; it comes back open on the
- * next folder page.
+ * The chat: an overlay hanging under the files toolbar at the top right on
+ * wide screens, a full-height sheet on narrow ones. The toolbar's sparkle
+ * button (`ChatToggle`) and Cmd/Ctrl+Shift+K open and close it. The panel
+ * stays open between folders, accepts files and folders dragged from the
+ * listing, and shows the chat the browser last had open. The assistant works
+ * from the folder in view, so chat is offered only on folder pages, and only
+ * while AI is set up; it comes back open on the next folder page.
  */
 export function ChatPanel() {
-  const { data: aiStatus } = useAiStatus();
-  const folder = useChatFolder();
-  // The assistant never sees inside an encrypted folder, or the folder itself.
-  const encryptedFolder = useEncryptedFolder(aiStatus?.chat === true ? folder : null);
-  const available = aiStatus?.chat === true && folder !== null && encryptedFolder.data === null;
+  const folder = useChatAvailability();
   const [open, setOpen] = useChatPanelOpen();
-  const [currentId] = useCurrentChatId();
   const isMobile = useIsMobile();
-  useChatShortcut(available);
-  // The bubble shows the chat's state while the panel is closed.
-  const current = useChat(available && !open ? currentId : null);
+  useChatShortcut(folder !== null);
 
-  if (!available) return null;
-  return (
-    <>
-      {open && isMobile ? (
-        <Sheet open onOpenChange={(next) => setOpen(next)}>
-          <SheetContent
-            side="right"
-            className="w-full gap-0 p-0 sm:max-w-full"
-            showCloseButton={false}
-          >
-            <SheetTitle className="sr-only">Chat</SheetTitle>
-            <ChatPanelBody folder={folder} onClose={() => setOpen(false)} />
-          </SheetContent>
-        </Sheet>
-      ) : null}
-      <LiveActivity>
-        {open && !isMobile ? (
-          <FloatingPanel folder={folder} onClose={() => setOpen(false)} />
-        ) : null}
-        <ChatBubble
-          open={open}
-          state={current.data?.state ?? null}
-          onToggle={() => setOpen(!open)}
-        />
-      </LiveActivity>
-    </>
-  );
+  if (folder === null || !open) return null;
+  if (isMobile) {
+    return (
+      <Sheet open onOpenChange={(next) => setOpen(next)}>
+        <SheetContent
+          side="right"
+          // The sheet's own width is set per side, so the override has to be too.
+          className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-full"
+          showCloseButton={false}
+        >
+          <SheetTitle className="sr-only">Chat</SheetTitle>
+          <ChatPanelBody folder={folder} onClose={() => setOpen(false)} />
+        </SheetContent>
+      </Sheet>
+    );
+  }
+  return <ChatOverlay folder={folder} onClose={() => setOpen(false)} />;
 }
 
 interface PanelProps {
@@ -94,10 +76,52 @@ interface PanelProps {
   readonly onClose: () => void;
 }
 
-/** The panel above the bubble, as wide as the person dragged its left edge. */
-function FloatingPanel({ folder, onClose }: PanelProps) {
+/** The dock's offset from the window's bottom edge (`bottom-4`), and the gap the overlay keeps above it. */
+const DOCK_OFFSET = 16;
+const DOCK_GAP = 8;
+
+/**
+ * How much of the window's bottom the overlay leaves free, in pixels: the
+ * live activity dock when it shows something, a margin otherwise. The bottom
+ * right corner belongs to the dock, so the overlay ends above it instead of
+ * sliding under the activity panel.
+ */
+function useDockReserve(): number {
+  const dock = useLiveActivityDock();
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    if (dock === null) return;
+    const observer = new ResizeObserver(() => setHeight(dock.offsetHeight));
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [dock]);
+  return height > 0 ? DOCK_OFFSET + height + DOCK_GAP : DOCK_OFFSET;
+}
+
+/**
+ * The desktop panel: fixed under the 48px page header at the top right, above
+ * the listing and the details panel and below dialogs, sheets and the live
+ * activity dock. It is as short as its content (a new chat is the header and
+ * the message box), grows with the conversation up to 36rem or the room above
+ * the dock, never below 20rem of room, and scrolls inside after that. It is as
+ * wide as the person dragged its left edge. Not a dialog: people drag files
+ * onto it and keep browsing with it open, so only its close button, the
+ * toolbar button and the shortcut close it.
+ */
+function ChatOverlay({ folder, onClose }: PanelProps) {
   const [width, setWidth] = useChatPanelWidth();
+  const reserve = useDockReserve();
+  const panel = useRef<HTMLElement>(null);
   const dragging = useRef<{ startX: number; startWidth: number } | null>(null);
+  const focusPending = useChatPanelStore((state) => state.focusPending);
+
+  // The person just opened the panel: the cursor goes to the message box. A panel that was
+  // already open when the page loaded leaves focus where it is.
+  useEffect(() => {
+    if (!focusPending) return;
+    panel.current?.querySelector<HTMLTextAreaElement>('textarea[name="message"]')?.focus();
+    useChatPanelStore.setState({ focusPending: false });
+  }, [focusPending]);
 
   function onPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     dragging.current = { startX: event.clientX, startWidth: width };
@@ -116,12 +140,11 @@ function FloatingPanel({ folder, onClose }: PanelProps) {
 
   return (
     <aside
+      ref={panel}
       data-slot="chat-panel"
       aria-label="Chat"
-      // Between the activity panel's `order-last` and the bubble; it gives way to the activity
-      // panel when both would not fit, down to its minimum height.
-      className="relative order-[10000] flex h-[min(36rem,calc(100svh-6.5rem))] min-h-80 max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-xl bg-background text-sm shadow-lg ring-1 ring-foreground/10"
-      style={{ width }}
+      className="fixed top-14 right-3 z-40 flex max-h-[clamp(min(20rem,100svh_-_4.5rem),100svh_-_3.5rem_-_var(--chat-dock-reserve),36rem)] max-w-[calc(100vw-1.5rem)] flex-col overflow-hidden rounded-xl bg-popover text-popover-foreground text-sm shadow-lg ring-1 ring-foreground/10"
+      style={{ width, "--chat-dock-reserve": `${reserve}px` } as CSSProperties}
     >
       {/* biome-ignore lint/a11y/useSemanticElements: an <hr> cannot be dragged; this is a resize handle with the separator role WAI-ARIA gives it. */}
       <div
@@ -266,11 +289,10 @@ function ChatPanelBody({ folder, onClose }: PanelProps) {
         chat={chat.data ?? null}
         actingOn={actingOn}
         onAct={onAct}
-        onSuggestion={(text) => void sendText(text, chips).catch(() => {})}
         onRetry={onRetry}
       />
       {pending.length > 0 && state === "awaiting_approval" ? (
-        <p className="border-t px-3 py-1.5 text-muted-foreground text-xs" role="status">
+        <p className="px-3 pt-1.5 text-muted-foreground text-xs" role="status">
           Apply or decline the card above to continue.
         </p>
       ) : null}

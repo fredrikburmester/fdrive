@@ -35,12 +35,13 @@ test("/about identifies the running API and links to the project and feature gui
     `${github}/blob/main/docs/SEARCH-AND-AI.md`,
   );
   await expect(info.getByRole("heading", { name: "Feature documentation" })).toBeVisible();
-  await expect(info.locator("dt", { hasText: "API uptime" }).locator("+ dd")).toHaveText(
-    /^(\d+d )?(\d+h )?\d+[ms]$/,
-  );
+  // Each detail is a row: the label in the left column, its value in the right one.
+  const detail = (label: string) =>
+    info.locator('[data-slot="setting-row"]', { hasText: label }).locator("> div").last();
+  await expect(detail("API uptime")).toHaveText(/^(\d+d )?(\d+h )?\d+[ms]$/);
   // The e2e API runs from a checkout: a development build, with Git's commit when it has one.
   expect(about.release).toBeUndefined();
-  const version = info.locator("dt", { hasText: "Server version" }).locator("+ dd");
+  const version = detail("Server version");
   if (about.revision === undefined) {
     expect(about.version).toBe("development");
     await expect(version).toHaveText("Development (version unavailable)");
@@ -74,16 +75,20 @@ test("/about fits phones and desktop in both themes", async ({ page }) => {
       const bounds = await info.evaluate((element) => ({
         width: element.clientWidth,
         scrollWidth: element.scrollWidth,
-        links: [...element.querySelectorAll("a.border")].map((link) => {
+        links: [...element.querySelectorAll('a[data-slot="resource-link"]')].map((link) => {
           const rect = link.getBoundingClientRect();
           return { height: rect.height, left: rect.left, right: rect.right };
         }),
       }));
       expect(bounds.scrollWidth).toBeLessThanOrEqual(bounds.width);
+      expect(bounds.links).toHaveLength(11);
       for (const link of bounds.links) {
-        expect(link.height).toBeGreaterThanOrEqual(44);
+        // A phone gets a full tap target; wider windows get rows as tall as the file list's.
+        expect(link.height).toBeGreaterThanOrEqual(width < 640 ? 44 : 36);
         expect(link.left).toBeGreaterThanOrEqual(0);
-        expect(link.right).toBeLessThanOrEqual(width);
+        // Each link's right hairline overlaps its neighbour's, so the last column's sits one
+        // pixel past the grid, which clips it; the scroll width above proves nothing overflows.
+        expect(link.right).toBeLessThanOrEqual(width + 1);
       }
       if (width === 320 || width === 1280) {
         await page.screenshot({

@@ -30,7 +30,7 @@ async function send(page: Page, text: string): Promise<void> {
   await box.press("Enter");
 }
 
-test("chat follows the person between folders, hides elsewhere, takes dropped files, reads them, moves, rewrites and renames them through cards, and sorts the open folder", async ({
+test("chat opens from the toolbar as a short overlay, follows the person between folders, hides elsewhere, takes dropped files, reads them, moves, rewrites and renames them through cards, and sorts the open folder", async ({
   page,
 }) => {
   test.setTimeout(150_000);
@@ -58,6 +58,36 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
     // Named the way macOS stores it: "A" plus a combining ring, where the assistant writes "Å".
     await createFolder(page, DECOMPOSED_FOLDER);
 
+    // The toolbar's sparkle opens the chat: an overlay hanging under the toolbar at the top
+    // right, only its header and the message box before the first message, the cursor in the box.
+    const chatButton = page.getByRole("button", { name: "Chat", exact: true });
+    await expect(chatButton).toHaveAttribute("aria-expanded", "false");
+    await chatButton.click();
+    await expect(panel(page)).toBeVisible();
+    await expect(chatButton).toHaveAttribute("aria-expanded", "true");
+    const messageBox = panel(page).getByRole("textbox", { name: "Message" });
+    await expect(messageBox).toBeFocused();
+    await expect(messageBox).toHaveAttribute(
+      "placeholder",
+      "Ask about this folder, or drop files here…",
+    );
+    await expect(panel(page).getByRole("log")).toHaveCount(0);
+    await expect(panel(page).getByText("Ask about your files")).toHaveCount(0);
+    const newChat = await panel(page).boundingBox();
+    const toolbarButton = await chatButton.boundingBox();
+    if (newChat === null || toolbarButton === null) throw new Error("The chat is not on screen.");
+    expect(newChat.height).toBeLessThan(260);
+    expect(newChat.y).toBeGreaterThan(toolbarButton.y + toolbarButton.height);
+    expect(newChat.y).toBeLessThan(80);
+    expect((page.viewportSize()?.width ?? 0) - (newChat.x + newChat.width)).toBeLessThan(32);
+
+    // Not a dialog: browsing behind it leaves it open. Its toolbar button closes it.
+    await listing(page).getByText("shopping.txt", { exact: true }).click();
+    await expect(panel(page)).toBeVisible();
+    await chatButton.click();
+    await expect(panel(page)).toBeHidden();
+    await expect(chatButton).toHaveAttribute("aria-expanded", "false");
+
     // Add the selection to the chat: the panel opens with both files ready to attach.
     await listing(page).getByText("invoice-2024.txt", { exact: true }).click();
     await listing(page)
@@ -79,10 +109,10 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
 
     // Chat works from the folder in view, so other pages do not offer it; the next folder
     // brings the panel back with the same chat, and so does a reload.
-    const chatButton = page.getByRole("button", { name: "Chat", exact: true });
     await expect(chatButton).toBeVisible();
     await page.goto("/favorites");
-    await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+    // The page has loaded once its header shows the listing's item count.
+    await expect(page.locator("header").getByText(/^\d+ items?$/)).toBeVisible();
     await expect(panel(page)).toBeHidden();
     await expect(chatButton).toBeHidden();
     await page.goto(`/files/${sandbox}`);
@@ -115,8 +145,8 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
     ).toBeChecked();
 
     // Dropping a file from the listing attaches it. The account's finished
-    // jobs from earlier specs reopen the Activity panel on every page load,
-    // over the middle of the chat panel where the drops below land.
+    // jobs from earlier specs reopen the Activity panel on every page load;
+    // a tall one reaches over the chat panel, where the drops below land.
     await dismissActivityPanel(page);
     await listing(page).getByText("shopping.txt", { exact: true }).dragTo(panel(page));
     await expect(attached.getByText("shopping.txt")).toBeVisible();
@@ -180,10 +210,15 @@ test("chat follows the person between folders, hides elsewhere, takes dropped fi
     expect(offered).toContain("rename_items");
     expect(offered).not.toContain("submit_suggestions");
 
+    // A long conversation scrolls inside the panel instead of growing past its maximum.
+    const grown = await panel(page).boundingBox();
+    expect(grown?.height).toBeGreaterThan(newChat.height);
+    expect(grown?.height).toBeLessThanOrEqual(576);
+
     await panel(page).getByRole("button", { name: "Close chat" }).click();
     await expect(panel(page)).toBeHidden();
 
-    // The bubble in the corner opens it again.
+    // The toolbar button opens it again.
     await chatButton.click();
     await expect(panel(page).getByText("Moved them into Notes.").last()).toBeVisible();
   } finally {

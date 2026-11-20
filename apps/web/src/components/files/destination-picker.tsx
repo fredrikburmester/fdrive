@@ -163,7 +163,7 @@ function DestinationPickerContent({
             {isLoading && <li className="px-3 py-2 text-muted-foreground text-sm">Loading…</li>}
             {!isLoading && view.kind === "locked" && (
               <li className="px-3 py-2 text-muted-foreground text-sm">
-                Unlock encryption in Account to choose a folder in here.
+                Unlock encryption in Settings to choose a folder in here.
               </li>
             )}
             {!isLoading && view.kind !== "locked" && folders.length === 0 && (

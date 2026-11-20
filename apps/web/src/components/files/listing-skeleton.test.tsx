@@ -33,9 +33,40 @@ describe("ListingSkeleton", () => {
 
   it("uses the taller two-line rows on a phone, like the real list", () => {
     viewport.mobile = true;
-    const { container } = render(<ListingSkeleton density="compact" />);
-    const rows = container.querySelectorAll<HTMLElement>('[data-slot="skeleton-row"]');
-    expect(new Set([...rows].map((row) => row.style.height))).toEqual(new Set(["44px"]));
+    const heights = (container: HTMLElement) =>
+      new Set(
+        [...container.querySelectorAll<HTMLElement>('[data-slot="skeleton-row"]')].map(
+          (row) => row.style.height,
+        ),
+      );
+    expect(heights(render(<ListingSkeleton />).container)).toEqual(new Set(["68px"]));
+    cleanup();
+    expect(heights(render(<ListingSkeleton density="compact" />).container)).toEqual(
+      new Set(["56px"]),
+    );
+  });
+
+  it("sizes each row and its icon stub like the real list at that density", () => {
+    const firstRow = (container: HTMLElement) =>
+      container.querySelector<HTMLElement>('[data-slot="skeleton-row"]');
+    // The stubs in a row: the checkbox, the icon, then the name and columns.
+    const iconStub = (container: HTMLElement) =>
+      firstRow(container)?.querySelectorAll('[data-slot="skeleton"]')[1]?.className ?? "";
+
+    const comfortable = render(<ListingSkeleton />);
+    expect(firstRow(comfortable.container)?.style.height).toBe("64px");
+    expect(iconStub(comfortable.container)).toContain("size-10");
+    cleanup();
+
+    const compact = render(<ListingSkeleton density="compact" />);
+    expect(firstRow(compact.container)?.style.height).toBe("36px");
+    expect(iconStub(compact.container)).toContain("size-4");
+    cleanup();
+
+    viewport.mobile = true;
+    expect(iconStub(render(<ListingSkeleton />).container)).toContain("size-10");
+    cleanup();
+    expect(iconStub(render(<ListingSkeleton density="compact" />).container)).toContain("size-8");
   });
 
   it("never sets a fixed pixel width on a row or its stubs, so rows fill the listing area", () => {

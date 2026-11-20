@@ -248,6 +248,26 @@ export function contextEntries<T extends { path: string }>(
   return [entry];
 }
 
+/**
+ * The entries the details panel describes. Normally the selected ones, in `entries`' order.
+ * A row can also be marked without being selected, and the panel then shows that row:
+ * with nothing selected, the focused row (a "highlight" row click, or a toggle that deselected
+ * the last selected row); and `highlighted`, the row a highlight click just marked, even while
+ * an earlier selection it is not part of remains.
+ */
+export function inspectedEntries<T extends { path: string }>(
+  entries: readonly T[],
+  state: Pick<SelectionState, "focus" | "selected">,
+  highlighted: string | null = null,
+): T[] {
+  const focused = entries.filter((entry) => entry.path === state.focus);
+  if (highlighted !== null && highlighted === state.focus && !state.selected.has(highlighted)) {
+    return focused;
+  }
+  const selected = entries.filter((entry) => state.selected.has(entry.path));
+  return selected.length > 0 ? selected : focused;
+}
+
 /** How many files and folders an action would apply to. */
 export interface BrowserSelection {
   readonly files: number;

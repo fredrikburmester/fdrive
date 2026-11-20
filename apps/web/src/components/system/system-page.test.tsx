@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemFeaturesResponse } from "@fdrive/contracts";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -56,6 +56,47 @@ function mount(props: Partial<Parameters<typeof SystemPage>[0]> = {}) {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("SystemPage header and bar", () => {
+  it("names the page in the header's trail, as its heading", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    mount({ title: "General" });
+
+    const trail = screen.getByRole("navigation", { name: "breadcrumb" });
+    expect(within(trail).getByText("System")).toBeTruthy();
+    const heading = within(trail).getByRole("heading", { level: 1, name: "General" });
+    expect(heading.getAttribute("aria-current")).toBe("page");
+    // The page has one heading for its name: the bar under the header does not repeat it.
+    expect(screen.getAllByRole("heading", { name: "General" })).toHaveLength(1);
+  });
+
+  it("carries the description, scope note, last update and actions in one bar", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    const { container } = mount({ title: "General", lastUpdated: new Date() });
+
+    const bar = container.querySelector('[data-slot="page-bar"]') as HTMLElement;
+    expect(within(bar).getByText("Page description")).toBeTruthy();
+    expect(within(bar).getByText(/^Installation-wide\./)).toBeTruthy();
+    expect(within(bar).getByText("Last updated just now")).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Page action" })).toBeTruthy();
+    // The content follows the bar edge to edge, inside the page body.
+    const body = container.querySelector('[data-slot="page-body"]') as HTMLElement;
+    expect(body.contains(bar)).toBe(true);
+    expect(body.contains(screen.getByText("Sidecar content"))).toBe(true);
+  });
+
+  it("leaves out the last update until the page has data, and the actions when there are none", () => {
+    useSystemFeatures.mockReturnValue({ data: features("settings") });
+    const { container } = render(
+      <SystemPage title="General" description="Page description" lastUpdated={null}>
+        <p>Sidecar content</p>
+      </SystemPage>,
+    );
+
+    expect(screen.queryByText(/^Last updated/)).toBeNull();
+    expect(container.querySelector('[data-slot="system-page-actions"]')).toBeNull();
+  });
 });
 
 describe("SystemPage feature admission", () => {

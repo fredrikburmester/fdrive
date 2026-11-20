@@ -40,7 +40,11 @@ export interface ChatComposerProps {
   readonly onStop: () => void;
 }
 
-/** The message box: the open folder and the chips of what will be attached, the text, and send or stop. */
+/**
+ * The message box: the open folder and the chips of what will be attached, the
+ * text, and send or stop. It sits at the bottom of the panel; in a new chat it
+ * is all there is under the header, so its placeholder says what chat is for.
+ */
 export function ChatComposer({
   folder,
   chips,
@@ -52,7 +56,7 @@ export function ChatComposer({
   onStop,
 }: ChatComposerProps) {
   return (
-    <div className="shrink-0 border-t p-2">
+    <div className="mt-auto shrink-0 p-2">
       {closed ? (
         <p className="px-2 pb-2 text-muted-foreground text-xs">
           This chat is full. Start a new chat to continue.
@@ -76,6 +80,8 @@ export function ChatComposer({
         <PromptInputBody>
           <PromptInputTextarea
             aria-label="Message"
+            // One line until the person types more, to keep a new chat's panel short.
+            className="min-h-10"
             placeholder={
               chips.length > 0
                 ? "Ask about the attached items…"

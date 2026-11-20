@@ -25,11 +25,12 @@ shows as missing.
 
 ## Chat
 
-With Chat on, a chat bubble in the bottom-right corner of a folder (or Cmd+Shift+K,
-Ctrl+Shift+K elsewhere) opens a panel above it that stays open while you move between folders;
-uploads and other activity stack above it. Other pages do not offer chat; the panel comes back
+With Chat on, the sparkle button at the top right of a folder's toolbar (or Cmd+Shift+K,
+Ctrl+Shift+K elsewhere) opens a panel below it that stays open while you move between folders.
+A new chat is just the message box; the panel grows with the conversation and ends above
+uploads and other activity. Other pages do not offer chat; the panel comes back
 with the next folder you open. Ask about the folder in view ("sort the files in this folder"),
-or drop files and folders onto the panel or the bubble, or use **Add to chat** from a selection
+or drop files and folders onto the panel or the button, or use **Add to chat** from a selection
 or a row's menu, then ask: what the files are about, whether one is
 a duplicate, whether they can be removed, where they should go, for clearer names, or for a
 more professional version of a text file. The assistant reads and proposes changes only to the

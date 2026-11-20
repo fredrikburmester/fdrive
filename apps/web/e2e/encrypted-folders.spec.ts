@@ -16,13 +16,15 @@ test("turns encryption on, keeps names and files encrypted on the server, and op
   const { username, password } = ENCRYPTION_USER;
   await loginAs(page, username, password);
 
-  // Account > Encryption: a password, then the recovery key pasted back.
-  await page.goto("/account");
-  const card = page.locator('[data-slot="card"]').filter({ hasText: "Encryption password" });
-  await card.getByLabel("Encryption password", { exact: true }).fill(ENCRYPTION_PASSWORD);
-  await card.getByLabel("Confirm encryption password").fill(ENCRYPTION_PASSWORD);
-  await card.getByLabel("Sign-in password").fill(password);
-  await card.getByRole("button", { name: "Continue" }).click();
+  // Settings > Encryption: a password, then the recovery key pasted back.
+  await page.goto("/account/encryption");
+  const section = page
+    .locator('[data-slot="page-section"]')
+    .filter({ hasText: "Encryption password" });
+  await section.getByLabel("Encryption password", { exact: true }).fill(ENCRYPTION_PASSWORD);
+  await section.getByLabel("Confirm encryption password").fill(ENCRYPTION_PASSWORD);
+  await section.getByLabel("Sign-in password").fill(password);
+  await section.getByRole("button", { name: "Continue" }).click();
   const recovery = page.locator('[data-slot="recovery-key"]');
   await expect(recovery).toContainText("AGE-SECRET-KEY-1", { timeout: 30_000 });
   const recoveryKey = (await recovery.textContent())?.trim() ?? "";

@@ -763,18 +763,18 @@ final class AppModel: ObservableObject {
     struct EncryptionNote: Equatable { let text: String; let locked: Bool }
     static func unlockedNote(_ account: AgeIdentity) -> EncryptionNote {
         EncryptionNote(text: "Encrypted folders open on this Mac. Account key \(AccountKeys.fingerprint(account.recipient.string)): "
-            + "compare it with Account › Encryption in the browser. Files you open from them are stored decrypted "
+            + "compare it with Settings › Encryption in the browser. Files you open from them are stored decrypted "
             + "on this Mac, protected by FileVault, and Spotlight may index them.", locked: false)
     }
     /// The note after a reconnect brought a different account key than the one this Mac held.
     static func changedNote(_ account: AgeIdentity) -> EncryptionNote {
         EncryptionNote(text: "This location's account key changed when it reconnected. Its fingerprint is now "
-            + "\(AccountKeys.fingerprint(account.recipient.string)): make sure Account › Encryption in the browser shows the same.",
+            + "\(AccountKeys.fingerprint(account.recipient.string)): make sure Settings › Encryption in the browser shows the same.",
             locked: false)
     }
     static let noDeviceKey = "Encrypted folders are locked: this Mac was connected without a key of its own. Choose Reconnect."
     static let encryptionWasOff = "Encrypted folders are locked: encryption was off in fdrive when this Mac was connected. "
-        + "Turn it on under Account › Encryption in the browser, then choose Reconnect."
+        + "Turn it on under Settings › Encryption in the browser, then choose Reconnect."
     static let foreignDeviceKey = "Encrypted folders are locked: the key the server sent does not open with this Mac's own. Choose Reconnect."
     /// Brings this Mac's copy of the account key into the Keychain, where the extension opens
     /// encrypted folders with it. `ask` lets this ask the server; `replacing` asks even when a
@@ -1073,7 +1073,7 @@ final class AppModel: ObservableObject {
     /// Shown after a removal the server did not confirm. Not an error: the location is
     /// gone from this Mac, and the web account can still revoke the credential today.
     static let unrevokedNotice = "Removed this location. The server did not confirm revoking its access, "
-        + "so that access remains until it expires or you revoke it from Account → API tokens on the web."
+        + "so that access remains until it expires or you revoke it from Settings → API tokens on the web."
     /// Best effort: a token missing from the Keychain and a server that cannot be reached
     /// both leave the credential unconfirmed, and neither is a reason to keep the location.
     nonisolated private static func revokeAccess(_ location: SavedLocation, store: ConnectionStore) async -> Bool {

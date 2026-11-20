@@ -10,12 +10,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
-import {
-  DEFAULT_LIST_DENSITY,
-  type ListDensity,
-  listRowHeight,
-  ROW_HEIGHTS,
-} from "@/lib/files/density";
+import { DEFAULT_LIST_DENSITY, type ListDensity, listRowHeight } from "@/lib/files/density";
 import {
   apiClient,
   INTERNAL_DND_TYPE,
@@ -38,26 +33,65 @@ import type { ClickModifierKeys, FileListProps } from "./file-list";
 
 const FILE_LIST_HEADER_HEIGHT = 36;
 
-/** Indent, in pixels, added per tree depth level in tree view. */
-const TREE_INDENT_PX = 20;
+/**
+ * A row's icon at one density: the box a thumbnail fills, the kind icon (with a lighter line
+ * where it is drawn large) and the thumbnail. Where `boxed` is false the icon stands alone
+ * while thumbnails are off, as the list always showed it.
+ */
+interface RowIcon {
+  readonly slot: string;
+  readonly icon: string;
+  readonly iconStroke?: number;
+  readonly thumbnail: string;
+  readonly boxed: boolean;
+}
+
+/** "compact" is the list as it was before rows got taller; "comfortable" fills a 64px row. */
+const DESKTOP_ICONS: Record<ListDensity, RowIcon> = {
+  comfortable: {
+    slot: "size-10",
+    icon: "size-7",
+    iconStroke: 1.5,
+    thumbnail: "size-10 rounded-md",
+    boxed: true,
+  },
+  compact: { slot: "size-6", icon: "", thumbnail: "size-6 rounded-xs", boxed: false },
+};
+
+/** A phone row's icon, next to two lines of text. */
+const PHONE_ICONS: Record<ListDensity, RowIcon> = {
+  comfortable: { slot: "size-10", icon: "size-6", thumbnail: "size-10 rounded-md", boxed: true },
+  compact: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm", boxed: true },
+};
+
+/** A desktop row's name; sizes and dates stay small at every density. */
+const NAME_TEXT: Record<ListDensity, string> = { comfortable: "text-[15px]", compact: "" };
+
+/**
+ * The chevron column that leads each tree row: its box, its icon and the indent per tree
+ * level, in pixels.
+ */
+const TREE: Record<ListDensity, { box: string; icon: string; indentPx: number }> = {
+  comfortable: { box: "size-5", icon: "size-4", indentPx: 24 },
+  compact: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+};
 
 const LIST_THUMBNAIL_SIZE = 256;
 
 /**
- * A list row's icon slot: a 24px image thumbnail when `showThumbnail` is true
- * and `wantsThumbnail` accepts the file, falling back to a 24px container holding
- * `FileIcon` if the image fails to load or for non-image entries to preserve layout.
- * On phones (`mobile`) the slot is always a 32px box with a larger icon, next to the
- * row's two lines of text.
+ * A list row's icon slot: an image thumbnail when `showThumbnail` is true and
+ * `wantsThumbnail` accepts the file, falling back to a box of the same size holding
+ * `FileIcon` if the image fails to load or for non-image entries, to preserve layout.
+ * The sizes follow the density (`sizes`).
  */
 function ListRowIcon({
   entry,
   showThumbnail,
-  mobile,
+  sizes,
 }: {
   entry: FsEntry;
   showThumbnail: boolean;
-  mobile: boolean;
+  sizes: RowIcon;
 }) {
   const [errored, setErrored] = useState(false);
   const icon = (
@@ -65,21 +99,18 @@ function ListRowIcon({
       kind={entry.kind}
       ext={entry.ext}
       mime={entry.mime}
-      className={cn(mobile && "size-5")}
+      className={sizes.icon}
+      strokeWidth={sizes.iconStroke}
     />
   );
 
-  if (!showThumbnail && !mobile) {
+  if (!showThumbnail && !sizes.boxed) {
     return icon;
   }
 
   if (!showThumbnail || errored || !wantsThumbnail(entry)) {
     return (
-      <div
-        className={cn("flex shrink-0 items-center justify-center", mobile ? "size-8" : "size-6")}
-      >
-        {icon}
-      </div>
+      <div className={cn("flex shrink-0 items-center justify-center", sizes.slot)}>{icon}</div>
     );
   }
 
@@ -90,7 +121,7 @@ function ListRowIcon({
       alt=""
       loading="lazy"
       decoding="async"
-      className={cn("shrink-0 object-cover", mobile ? "size-8 rounded-sm" : "size-6 rounded-xs")}
+      className={cn("shrink-0 object-cover", sizes.thumbnail)}
       onError={() => setErrored(true)}
     />
   );
@@ -153,6 +184,8 @@ export function ClassicFileList({
   density = DEFAULT_LIST_DENSITY,
 }: FileListProps) {
   const mobile = useIsMobile();
+  const icons = (mobile ? PHONE_ICONS : DESKTOP_ICONS)[density];
+  const tree = TREE[density];
   const rowHeight = listRowHeight(density, mobile);
   const { formatBytes, formatDate } = useFormatters();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -313,7 +346,7 @@ export function ClassicFileList({
           const rowStyle = {
             height: virtualRow.size,
             transform: `translateY(${virtualRow.start - FILE_LIST_HEADER_HEIGHT}px)`,
-            paddingLeft: 12 + depth * TREE_INDENT_PX,
+            paddingLeft: 12 + depth * tree.indentPx,
             paddingRight: 12,
           };
           if (isLink(entry)) {
@@ -328,20 +361,22 @@ export function ClassicFileList({
                 className="absolute inset-x-0 flex items-center gap-3 border-border/60 border-b px-3 text-muted-foreground text-sm"
                 style={rowStyle}
               >
-                {isTreeRow && <span className="size-4 shrink-0" />}
+                {isTreeRow && <span className={cn("shrink-0", tree.box)} />}
                 <div className="flex min-w-0 flex-1 items-center gap-3 opacity-60">
                   <span className="size-4 shrink-0" />
                   <ListRowIcon
                     key={entry.path}
                     entry={entry}
                     showThumbnail={showThumbnails}
-                    mobile={mobile}
+                    sizes={icons}
                   />
                   {mobile ? (
                     <RowText name={entry.name} detail={formatDate(new Date(entry.modifiedAt))} />
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className={cn("min-w-0 flex-1 truncate", NAME_TEXT[density])}>
+                        {entry.name}
+                      </span>
                       <span className="w-20 shrink-0 text-right text-xs">--</span>
                       <span className="w-28 shrink-0 text-xs">
                         {formatDate(new Date(entry.modifiedAt))}
@@ -410,17 +445,21 @@ export function ClassicFileList({
                       aria-label={
                         isExpandedFolder ? `Collapse ${entry.name}` : `Expand ${entry.name}`
                       }
-                      className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                      className={cn(
+                        "flex shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground",
+                        tree.box,
+                      )}
                     >
                       <ChevronRightIcon
                         className={cn(
-                          "size-3.5 transition-transform",
+                          "transition-transform",
+                          tree.icon,
                           isExpandedFolder && "rotate-90",
                         )}
                       />
                     </button>
                   ) : (
-                    <span className="size-4 shrink-0" />
+                    <span className={cn("shrink-0", tree.box)} />
                   ))}
                 {/**
                  * Only this inner wrapper (the checkbox through the date
@@ -447,7 +486,7 @@ export function ClassicFileList({
                     key={entry.path}
                     entry={entry}
                     showThumbnail={showThumbnails}
-                    mobile={mobile}
+                    sizes={icons}
                   />
                   {mobile ? (
                     <>
@@ -472,7 +511,9 @@ export function ClassicFileList({
                     </>
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className={cn("min-w-0 flex-1 truncate", NAME_TEXT[density])}>
+                        {entry.name}
+                      </span>
                       {sharedBy !== null && (
                         <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
                       )}

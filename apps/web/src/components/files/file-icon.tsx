@@ -49,13 +49,15 @@ const CLASSIC_SHAPES: Partial<Record<FileIconKind, LucideIcon>> = {
 
 export interface FileIconProps extends FileIconInput {
   className?: string;
+  /** The line weight, for an icon drawn large enough that lucide's default looks heavy. */
+  strokeWidth?: number | undefined;
 }
 
 /**
  * Renders the lucide icon matching an entry's kind and extension: muted, or in that kind's
  * color while the File list setting is the beta.
  */
-export function FileIcon({ className, ...entry }: FileIconProps) {
+export function FileIcon({ className, strokeWidth, ...entry }: FileIconProps) {
   const [design] = useListDesign();
   const kind = fileIconKind(entry);
   const beta = design === "beta";
@@ -66,6 +68,7 @@ export function FileIcon({ className, ...entry }: FileIconProps) {
       data-icon-kind={kind}
       className={cn("size-4 shrink-0", color, className)}
       aria-hidden="true"
+      {...(strokeWidth === undefined ? {} : { strokeWidth })}
     />
   );
 }

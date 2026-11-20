@@ -7,9 +7,9 @@ indexed.
 
 ## Create a token
 
-Open the sidebar account menu → **Account** → **Create token**. Choose a name, access level,
-allowed folders and expiry; Read is the default. The token acts as your login. Enter one
-absolute virtual folder per line, or `/` for all your folders.
+Open the sidebar account menu → **Settings** → **API tokens** → **Create token**. Choose a name,
+access level, allowed folders and expiry; Read is the default. The token acts as your login. Enter
+one absolute virtual folder per line, or `/` for all your folders.
 The token is shown once. Copy it before closing the dialog.
 
 | Access | Available actions |

@@ -1,8 +1,10 @@
 "use client";
 
 import type { OcrSettingsValue } from "@fdrive/contracts";
+import { ScanText } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { PageEmpty, SettingRow } from "@/components/shell/page-layout";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,7 +45,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemLine, SystemSection } from "./system-section";
 
 interface SettingsDraft {
   hour: string;
@@ -143,7 +145,8 @@ export function OcrPage() {
         lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
         feature="pdfOcr"
       >
-        <SystemSection
+        <PageEmpty
+          icon={ScanText}
           title="Not configured"
           description={
             <>
@@ -164,7 +167,12 @@ export function OcrPage() {
       feature="pdfOcr"
       actions={
         <>
-          <Button type="button" onClick={() => setRunOpen(true)} disabled={data === undefined}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setRunOpen(true)}
+            disabled={data === undefined}
+          >
             Run now
           </Button>
           <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
@@ -173,31 +181,37 @@ export function OcrPage() {
       }
     >
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SystemLine>Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Schedule" contentClassName="flex-row flex-wrap items-center gap-3">
-            {status !== null ? <StatusBadge status={status} /> : null}
-            <span className="text-sm text-muted-foreground">
-              Runs nightly at {data.settings.values.hour.toString().padStart(2, "0")}:00
-              {data.stats?.nextRunAt !== null && data.stats?.nextRunAt !== undefined
-                ? ` · next run ${formatRelativeTime(new Date(data.stats.nextRunAt), new Date())}`
-                : ""}
-              {data.stats?.running === true ? " · running now" : ""}
-            </span>
+          <SystemSection title="Schedule">
+            <SettingRow label="OCR service">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                {status !== null ? <StatusBadge status={status} /> : null}
+                <span className="text-muted-foreground">
+                  Runs nightly at {data.settings.values.hour.toString().padStart(2, "0")}:00
+                  {data.stats?.nextRunAt !== null && data.stats?.nextRunAt !== undefined
+                    ? ` · next run ${formatRelativeTime(new Date(data.stats.nextRunAt), new Date())}`
+                    : ""}
+                  {data.stats?.running === true ? " · running now" : ""}
+                </span>
+              </div>
+            </SettingRow>
           </SystemSection>
 
           {data.stats?.lastRun !== null && data.stats?.lastRun !== undefined ? (
-            <StatGrid
-              stats={[
-                { label: "Seen", value: data.stats.lastRun.seen.toLocaleString() },
-                { label: "OCR'd", value: data.stats.lastRun.ocred.toLocaleString() },
-                { label: "Skipped", value: data.stats.lastRun.skipped.toLocaleString() },
-                { label: "Failed", value: data.stats.lastRun.failed.toLocaleString() },
-              ]}
-            />
+            <SystemSection title="Last run">
+              <StatGrid
+                stats={[
+                  { label: "Seen", value: data.stats.lastRun.seen.toLocaleString() },
+                  { label: "OCR'd", value: data.stats.lastRun.ocred.toLocaleString() },
+                  { label: "Skipped", value: data.stats.lastRun.skipped.toLocaleString() },
+                  { label: "Failed", value: data.stats.lastRun.failed.toLocaleString() },
+                ]}
+              />
+            </SystemSection>
           ) : null}
 
           <SystemSection

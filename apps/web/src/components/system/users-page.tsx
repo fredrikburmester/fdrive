@@ -1,9 +1,18 @@
 "use client";
 
 import { type AdminUser, ApiClientError, LOCAL_PASSWORD_MIN_LENGTH } from "@fdrive/contracts";
-import { MoreHorizontal, UserPlus } from "lucide-react";
+import { MoreHorizontal, ShieldAlert, UserPlus } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageEmpty,
+} from "@/components/shell/page-layout";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,14 +44,6 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from "@/c
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { formatOptionalTimestamp, formatShortDate } from "@/lib/account/format";
 import { describeApiError } from "@/lib/api/errors";
 import {
@@ -54,7 +55,7 @@ import {
 import { localPasswordError, localUsernameError } from "@/lib/auth/local-account";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemNote, SystemSection } from "./system-section";
 
 /** A user error as a sentence; a taken name gets its own, since the generic one says "refresh". */
 function describeUserError(error: unknown): string {
@@ -331,24 +332,26 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
   }
 
   return (
-    <TableRow>
-      <TableCell>
+    <DataTableRow>
+      <DataTableCell className="@max-xl:whitespace-normal">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="font-medium">{user.username}</span>
           {user.isYou ? <Badge variant="outline">You</Badge> : null}
           {user.isAdmin ? <Badge variant="secondary">Admin</Badge> : null}
           {user.disabled ? <Badge variant="destructive">Disabled</Badge> : null}
         </div>
-      </TableCell>
-      <TableCell className="text-muted-foreground tabular-nums">
+      </DataTableCell>
+      <DataTableCell className="text-muted-foreground tabular-nums @max-xl:whitespace-normal">
         {user.storageUsed === null ? "Not indexed" : formatBytes(user.storageUsed)}
         {user.storageLimit === null ? null : ` of ${formatBytes(user.storageLimit)}`}
-      </TableCell>
-      <TableCell className="text-muted-foreground">
+      </DataTableCell>
+      <DataTableCell className="text-muted-foreground @max-xl:hidden">
         {formatOptionalTimestamp(user.lastLoginAt, "Never")}
-      </TableCell>
-      <TableCell className="text-muted-foreground">{formatShortDate(user.createdAt)}</TableCell>
-      <TableCell className="text-right">
+      </DataTableCell>
+      <DataTableCell className="text-muted-foreground @max-xl:hidden">
+        {formatShortDate(user.createdAt)}
+      </DataTableCell>
+      <DataTableCell className="text-right">
         {user.isYou ? null : (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -402,8 +405,8 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
             </DropdownMenuContent>
           </DropdownMenu>
         )}
-      </TableCell>
-    </TableRow>
+      </DataTableCell>
+    </DataTableRow>
   );
 }
 
@@ -413,7 +416,7 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
  * them, reset a password, set a storage limit, disable or enable, change the
  * administrator flag, or remove them. Their own row offers none of that to
  * the administrator, as the API refuses most of it; their password changes
- * on the Account page.
+ * in Settings.
  */
 export function UsersPage() {
   const { data, isLoading, isError, error, dataUpdatedAt } = useAdminUsers();
@@ -453,35 +456,40 @@ export function UsersPage() {
         </Button>
       }
     >
-      {isLoading ? <Skeleton className="h-40 w-full" /> : null}
+      {isLoading ? (
+        <div className="flex flex-col gap-2 px-3 py-2.5">
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-full" />
+          <Skeleton className="h-5 w-2/3" />
+        </div>
+      ) : null}
       {forbidden ? (
-        <SystemSection
+        <PageEmpty
+          icon={ShieldAlert}
           title="Administrators only"
           description="Users can only be viewed and managed by an administrator."
         />
       ) : isError ? (
-        <p role="alert" className="text-sm text-destructive">
-          {describeApiError(error)}
-        </p>
+        <SystemAlert row>{describeApiError(error)}</SystemAlert>
       ) : null}
       {data !== undefined ? (
         <SystemSection
           title={users.length === 1 ? "1 user" : `${users.length} users`}
           description="Removing a user, resetting their password or disabling them signs them out everywhere."
         >
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Username</TableHead>
-                <TableHead>Storage</TableHead>
-                <TableHead>Last sign-in</TableHead>
-                <TableHead>Added</TableHead>
-                <TableHead className="w-12">
+          <DataTable>
+            <DataTableHeader>
+              <DataTableRow>
+                <DataTableHead>Username</DataTableHead>
+                <DataTableHead>Storage</DataTableHead>
+                <DataTableHead className="@max-xl:hidden">Last sign-in</DataTableHead>
+                <DataTableHead className="@max-xl:hidden">Added</DataTableHead>
+                <DataTableHead className="w-12">
                   <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+                </DataTableHead>
+              </DataTableRow>
+            </DataTableHeader>
+            <DataTableBody>
               {users.map((user) => (
                 <UserRow
                   key={user.username}
@@ -491,13 +499,14 @@ export function UsersPage() {
                   onRemove={setRemoving}
                 />
               ))}
-            </TableBody>
-          </Table>
+            </DataTableBody>
+          </DataTable>
           {users.some((user) => user.isYou) ? (
-            <p className="text-xs text-muted-foreground">
-              You can't disable, demote or remove yourself. Change your own password on the Account
-              page.
-            </p>
+            <SystemNote className="border-border/60 border-t">
+              <p>
+                You can't disable, demote or remove yourself. Change your own password in Settings.
+              </p>
+            </SystemNote>
           ) : null}
         </SystemSection>
       ) : null}

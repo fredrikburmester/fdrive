@@ -2,14 +2,15 @@
 
 import { TrashSettings } from "@fdrive/contracts";
 import { useState } from "react";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { describeApiError } from "@/lib/api/errors";
 import { useTrashSettings, useUpdateTrashSettings } from "@/lib/api/trash-settings-queries";
 import { SystemErrorState } from "./system-error-state";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemSection } from "./system-section";
 
 const FIELD = "trash-retention-days";
 
@@ -41,18 +42,23 @@ export function TrashSettingsCard() {
     <SystemSection
       title="Trash"
       description="Deleted files wait in each user's Trash, then fdrive deletes them permanently."
-      contentClassName="gap-4"
     >
       {query.isError ? (
         <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : saved === undefined ? (
-        <Skeleton className="h-24 w-full" />
+        <div className="px-3 py-2.5">
+          <Skeleton className="h-8 w-full max-w-md" />
+        </div>
       ) : (
-        <>
-          <Field>
-            <FieldLabel htmlFor={FIELD}>Days in Trash</FieldLabel>
+        <SettingRow
+          label="Days in Trash"
+          htmlFor={FIELD}
+          description="Items in Trash longer than this are deleted permanently."
+        >
+          <div className="flex flex-wrap items-center gap-2">
             <Input
               id={FIELD}
+              className="w-28 max-md:min-h-11"
               type="number"
               inputMode="numeric"
               min={1}
@@ -63,22 +69,21 @@ export function TrashSettingsCard() {
               aria-invalid={days === null}
               onChange={(event) => setDraft(event.target.value)}
             />
-            <FieldDescription>
-              Items in Trash longer than this are deleted permanently.
-            </FieldDescription>
-            {days === null ? <FieldError>Enter a whole number from 1 to 3650.</FieldError> : null}
-          </Field>
-          {update.isError ? (
-            <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-              {describeApiError(update.error)}
-            </p>
-          ) : null}
-          <div className="flex justify-end">
-            <Button disabled={update.isPending || days === null || days === saved} onClick={save}>
+            <Button
+              className="max-md:min-h-11"
+              disabled={update.isPending || days === null || days === saved}
+              onClick={save}
+            >
               {update.isPending ? "Saving…" : "Save Trash settings"}
             </Button>
           </div>
-        </>
+          {days === null ? (
+            <FieldError className="mt-1.5">Enter a whole number from 1 to 3650.</FieldError>
+          ) : null}
+          {update.isError ? (
+            <SystemAlert className="mt-1.5">{describeApiError(update.error)}</SystemAlert>
+          ) : null}
+        </SettingRow>
       )}
     </SystemSection>
   );

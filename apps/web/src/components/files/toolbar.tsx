@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
-import type { DragEvent } from "react";
+import type { DragEvent, ReactNode } from "react";
 import { Fragment, useLayoutEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -68,7 +68,6 @@ import { type BreadcrumbEntry, buildBreadcrumbs } from "@/lib/files/path-url";
 import type { BrowserSelection } from "@/lib/files/selection";
 import type { SortSpec } from "@/lib/files/sorting";
 import { toolbarVisibility } from "@/lib/files/toolbar-visibility";
-import { useListDesign } from "@/lib/files/use-list-design";
 import type { ViewMode } from "@/lib/files/view-mode";
 import { OFFICE_DOCUMENT_LABELS, type OfficeDocumentKind } from "@/lib/office/new-document";
 import { cn } from "@/lib/utils";
@@ -435,6 +434,8 @@ export interface FilesToolbarActionsProps {
   onUploadFolder: () => void;
   detailsOpen: boolean;
   onToggleDetails: () => void;
+  /** The chat's toolbar button, shown left of the details toggle (and of More on a phone). */
+  chatSlot?: ReactNode;
   /** The files and folders currently selected; shows an "N selected" pill when any. */
   selection: BrowserSelection;
   /** Whether the files folder is indexed, so "Show thumbnails" applies. Defaults to `true`. */
@@ -495,10 +496,11 @@ const GRID_SIZE_LABELS: Record<GridSize, string> = {
   large: "Large",
 };
 
-/** The view mode, sort key, and sort direction radio groups: the "View"
- * dropdown's content on desktop, and the "View" submenu's content inside
- * the mobile "More" overflow menu. The grid offers an icon size where the
- * list and tree offer a row density. */
+/** The "View" dropdown's content on desktop, and the "View" submenu's inside
+ * the mobile "More" overflow menu. In order: the view mode, the sort key and
+ * direction (each followed by its "default for all folders" actions), then
+ * how entries look: thumbnails, and a row density for the list and tree or an
+ * icon size for the grid. Which list design shows is a setting, not offered here. */
 function ViewSortMenuItems({
   thumbnailsAvailable,
   viewMode,
@@ -514,7 +516,6 @@ function ViewSortMenuItems({
   showThumbnails,
   onShowThumbnailsChange,
 }: ViewSortMenuItemsProps) {
-  const [listDesign, setListDesign] = useListDesign();
   return (
     <>
       {folderView && (
@@ -580,66 +581,6 @@ function ViewSortMenuItems({
       )}
       <DropdownMenuSeparator />
       <DropdownMenuGroup>
-        <DropdownMenuCheckboxItem
-          checked={listDesign === "beta"}
-          onCheckedChange={(checked) => setListDesign(checked ? "beta" : "classic")}
-          className="flex flex-col items-start gap-0.5"
-        >
-          <span>New file list (beta)</span>
-          <span className="font-normal text-muted-foreground text-xs">
-            Folders open in place, and checkboxes show after Select
-          </span>
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuGroup>
-      {thumbnailsAvailable && (
-        <>
-          <DropdownMenuSeparator />
-          <DropdownMenuGroup>
-            <DropdownMenuCheckboxItem
-              checked={showThumbnails}
-              onCheckedChange={(checked) => onShowThumbnailsChange(checked)}
-              className="flex flex-col items-start gap-0.5"
-            >
-              <span>Show thumbnails</span>
-              <span className="font-normal text-muted-foreground text-xs">
-                Preview images directly inside the list row
-              </span>
-            </DropdownMenuCheckboxItem>
-          </DropdownMenuGroup>
-        </>
-      )}
-      <DropdownMenuSeparator />
-      {viewMode === "grid" ? (
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Icon size</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={gridSize}
-            onValueChange={(next) => onGridSizeChange(next as GridSize)}
-          >
-            {GRID_SIZES.map((value) => (
-              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
-                {GRID_SIZE_LABELS[value]}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
-      ) : (
-        <DropdownMenuGroup>
-          <DropdownMenuLabel>Density</DropdownMenuLabel>
-          <DropdownMenuRadioGroup
-            value={density}
-            onValueChange={(next) => onDensityChange(next as ListDensity)}
-          >
-            {LIST_DENSITIES.map((value) => (
-              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
-                {DENSITY_LABELS[value]}
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuGroup>
-      )}
-      <DropdownMenuSeparator />
-      <DropdownMenuGroup>
         <DropdownMenuLabel>
           {folderSort?.pinned ? "Sort by · saved for this folder" : "Sort by"}
         </DropdownMenuLabel>
@@ -695,6 +636,53 @@ function ViewSortMenuItems({
           </DropdownMenuItem>
         </>
       )}
+      {thumbnailsAvailable && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuGroup>
+            <DropdownMenuCheckboxItem
+              checked={showThumbnails}
+              onCheckedChange={(checked) => onShowThumbnailsChange(checked)}
+              className="flex flex-col items-start gap-0.5"
+            >
+              <span>Show thumbnails</span>
+              <span className="font-normal text-muted-foreground text-xs">
+                Preview images directly inside the list row
+              </span>
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuGroup>
+        </>
+      )}
+      <DropdownMenuSeparator />
+      {viewMode === "grid" ? (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Icon size</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={gridSize}
+            onValueChange={(next) => onGridSizeChange(next as GridSize)}
+          >
+            {GRID_SIZES.map((value) => (
+              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
+                {GRID_SIZE_LABELS[value]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      ) : (
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>Density</DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={density}
+            onValueChange={(next) => onDensityChange(next as ListDensity)}
+          >
+            {LIST_DENSITIES.map((value) => (
+              <DropdownMenuRadioItem key={value} value={value} className="whitespace-nowrap">
+                {DENSITY_LABELS[value]}
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        </DropdownMenuGroup>
+      )}
     </>
   );
 }
@@ -724,6 +712,13 @@ function UploadMenuItems({ onUploadFiles, onUploadFolder }: UploadMenuItemsProps
 /** 44x44 minimum tap target for a toolbar trigger below `md`, without
  * affecting the desktop layout. */
 const MOBILE_TAP_TARGET = "max-md:size-11 max-md:justify-center max-md:px-0";
+
+/**
+ * A toolbar trigger's text, shown once the page header itself is 900px wide. The header is a
+ * size container (see `PageHeader`), so an open sidebar counts: the labels give way before the
+ * selection actions and the details toggle run out of room.
+ */
+const TOOLBAR_LABEL = "hidden @min-[900px]/header:inline";
 
 /** A toolbar trigger's icon: the `sm` button's 14px on desktop, 18px on a phone. */
 const TOOLBAR_ICON = "size-3.5 max-md:size-[18px]";
@@ -755,6 +750,7 @@ export function FilesToolbarActions({
   onUploadFolder,
   detailsOpen,
   onToggleDetails,
+  chatSlot,
   selection,
   indexed = true,
   onClearSelection,
@@ -782,10 +778,10 @@ export function FilesToolbarActions({
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button variant="ghost" size="sm" title="View" />}>
             <ViewIcon />
-            <span className="max-[899px]:hidden">View</span>
+            <span className={TOOLBAR_LABEL}>View</span>
             <ChevronDownIcon className="text-muted-foreground" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-48">
+          <DropdownMenuContent align="start" className="min-w-64">
             <ViewSortMenuItems
               thumbnailsAvailable={indexed}
               viewMode={viewMode}
@@ -818,7 +814,7 @@ export function FilesToolbarActions({
           }
         >
           <PlusIcon className={TOOLBAR_ICON} />
-          <span className="max-[899px]:hidden">New</span>
+          <span className={TOOLBAR_LABEL}>New</span>
           <ChevronDownIcon className="text-muted-foreground max-md:hidden" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-48">
@@ -874,7 +870,7 @@ export function FilesToolbarActions({
             }
           >
             <UploadIcon />
-            <span className="max-[899px]:hidden">Upload</span>
+            <span className={TOOLBAR_LABEL}>Upload</span>
             <ChevronDownIcon className="text-muted-foreground" />
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="min-w-48">
@@ -979,6 +975,8 @@ export function FilesToolbarActions({
           </Button>
         </div>
       )}
+
+      {chatSlot}
 
       {!inOverflow && (
         <Tooltip>

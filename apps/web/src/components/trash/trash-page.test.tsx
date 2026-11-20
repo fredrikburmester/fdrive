@@ -19,6 +19,10 @@ const report: TrashEntry = {
 
 const fixtures = vi.hoisted(() => ({
   entries: [] as TrashEntry[],
+  truncated: false,
+  loading: false,
+  error: null as Error | null,
+  refetch: vi.fn(),
   restore: vi.fn(),
   restorePending: false,
   restoreConflict: false,
@@ -55,15 +59,17 @@ vi.mock("@/lib/api/trash-settings-queries", () => ({
       fixtures.retentionDays === undefined ? undefined : { retentionDays: fixtures.retentionDays },
   }),
 }));
-vi.mock("@/components/files/empty-state", () => ({ EmptyState: () => null }));
-vi.mock("@/components/files/error-state", () => ({ ErrorState: () => null }));
 vi.mock("@/lib/trash/queries", () => ({
   isRestoreConflict: () => fixtures.restoreConflict,
   useTrash: () => ({
-    data: { entries: fixtures.entries, truncated: false },
-    isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
+    data:
+      fixtures.loading || fixtures.error !== null
+        ? undefined
+        : { entries: fixtures.entries, truncated: fixtures.truncated },
+    isLoading: fixtures.loading,
+    isError: fixtures.error !== null,
+    error: fixtures.error,
+    refetch: fixtures.refetch,
   }),
   useTrashRestore: () => ({ mutate: fixtures.restore, isPending: fixtures.restorePending }),
   useTrashPurge: () => ({ mutate: vi.fn(), isPending: false }),
@@ -94,9 +100,27 @@ function renderPage() {
   return render(<TrashPage />, { wrapper });
 }
 
+/**
+ * The page folds its columns on a phone through `useIsMobile`, which reads `window.matchMedia`
+ * (jsdom does not implement it) and decides from `window.innerWidth`.
+ */
+function stubViewport(width: number) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: width < 768,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+  Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
+}
+
 beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  stubViewport(1024);
   fixtures.entries = [report];
+  fixtures.truncated = false;
+  fixtures.loading = false;
+  fixtures.error = null;
   fixtures.restorePending = false;
   fixtures.restoreConflict = false;
   fixtures.retentionDays = 30;
@@ -104,29 +128,119 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  fixtures.refetch.mockClear();
   fixtures.restore.mockClear();
   fixtures.toastSuccess.mockClear();
   fixtures.toastError.mockClear();
   window.localStorage.clear();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it("says when Trash deletes what it holds, once that setting has loaded", () => {
   const view = renderPage();
-  expect(
-    screen.getByText(
-      "Files and folders you delete stay here until you restore them or delete them permanently. Items in Trash are deleted permanently after 30 days.",
-    ),
-  ).toBeTruthy();
+  expect(screen.getByText("Items in Trash are deleted permanently after 30 days.")).toBeTruthy();
   view.unmount();
 
   fixtures.retentionDays = undefined;
   renderPage();
-  expect(
-    screen.getByText(
-      "Files and folders you delete stay here until you restore them or delete them permanently.",
-    ),
-  ).toBeTruthy();
+  expect(screen.queryByText(/Items in Trash are deleted permanently/)).toBeNull();
+});
+
+it("lists each item as a row with its original folder, size and deletion date", () => {
+  fixtures.entries = [
+    report,
+    { ...report, id: "trash-3", name: "top.txt", originalPath: "/top.txt", size: 30 },
+  ];
+  renderPage();
+
+  expect(document.querySelector('[data-slot="trash-list"]')).not.toBeNull();
+  for (const column of ["Name", "Original folder", "Size", "Deleted"]) {
+    expect(screen.getByRole("columnheader", { name: column })).toBeDefined();
+  }
+  const row = screen.getByRole("row", { name: /report\.txt/ });
+  expect(row.textContent).toContain("/docs");
+  expect(row.textContent).toContain("12 B");
+  expect(screen.getByRole("row", { name: /top\.txt/ }).textContent).toContain("Home");
+  // The bar under the header sums up what Trash holds.
+  expect(screen.getByText("2 items")).toBeDefined();
+  expect(screen.getByText("42 B")).toBeDefined();
+});
+
+it("keeps the same rows in the tree view, which Trash has no folders to nest", () => {
+  window.localStorage.setItem("fdrive.view", JSON.stringify("tree"));
+  renderPage();
+  expect(document.querySelector('[data-slot="trash-tree"]')).not.toBeNull();
+  expect(screen.getByRole("checkbox", { name: "Select report.txt" })).toBeDefined();
+});
+
+it("selects every row from the header, counts the selection and marks the rows", () => {
+  renderPage();
+  const row = screen.getByRole("row", { name: /report\.txt/ });
+  expect(row.getAttribute("data-state")).toBeNull();
+  expect(screen.getByRole("button", { name: "Delete permanently" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
+  expect(screen.getByText("1 selected")).toBeDefined();
+  expect(row.getAttribute("data-state")).toBe("selected");
+  expect(screen.getByRole("button", { name: "Delete permanently" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+
+  fireEvent.click(screen.getByRole("checkbox", { name: "Deselect all" }));
+  expect(screen.getByText("1 item")).toBeDefined();
+  expect(row.getAttribute("data-state")).toBeNull();
+});
+
+it("folds the folder, size and date under the name on a phone", () => {
+  stubViewport(390);
+  renderPage();
+
+  expect(screen.getByRole("columnheader", { name: "Name" })).toBeDefined();
+  expect(screen.queryByRole("columnheader", { name: "Original folder" })).toBeNull();
+  expect(screen.queryByRole("columnheader", { name: "Size" })).toBeNull();
+  expect(screen.getByText("report.txt")).toBeDefined();
+  expect(screen.getByText(/^\/docs · 12 B · /)).toBeDefined();
+  expect(screen.getByRole("checkbox", { name: "Select report.txt" })).toBeDefined();
+});
+
+it("says Trash is empty, with nothing to act on", () => {
+  fixtures.entries = [];
+  renderPage();
+
+  expect(screen.getByText("Trash is empty")).toBeDefined();
+  expect(screen.getByText("0 items")).toBeDefined();
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.getByRole("button", { name: "Empty Trash" })).toHaveProperty("disabled", true);
+});
+
+it("shows placeholder rows while Trash loads", () => {
+  fixtures.loading = true;
+  renderPage();
+
+  expect(screen.getByRole("status").textContent).toBe("Loading Trash…");
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(screen.queryByText("Trash is empty")).toBeNull();
+});
+
+it("offers a retry when Trash fails to load", () => {
+  fixtures.error = new Error("offline");
+  renderPage();
+
+  expect(screen.getByText("Could not load Trash")).toBeDefined();
+  expect(screen.getByText("Could not load the trash.")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(fixtures.refetch).toHaveBeenCalledTimes(1);
+});
+
+it("says when the listing stops short of everything in Trash", () => {
+  fixtures.truncated = true;
+  renderPage();
+  expect(screen.getByText("Showing the first 1 items.")).toBeDefined();
 });
 
 function selectReport() {
@@ -138,8 +252,10 @@ it("uses the global grid default and restores the selected trash item", () => {
   renderPage();
 
   expect(document.querySelector('[data-slot="trash-grid"]')).not.toBeNull();
+  expect(screen.queryByRole("table")).toBeNull();
   fireEvent.click(screen.getByRole("checkbox", { name: "Select all" }));
   expect(screen.getByText("1 selected")).toBeDefined();
+  expect(screen.getByRole("checkbox", { name: "Deselect all" })).toBeDefined();
   selectReport();
   selectReport();
   const restore = screen.getByRole("button", { name: "Restore" });

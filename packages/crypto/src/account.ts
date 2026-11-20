@@ -121,7 +121,7 @@ export async function pairingCode(deviceRecipient: string, nonce: string): Promi
 }
 
 /**
- * The fingerprint Account > Encryption and the Mac app show for an account key, so a person
+ * The fingerprint Settings > Encryption and the Mac app show for an account key, so a person
  * can see that their Mac holds the same key as their browser.
  */
 export async function keyFingerprint(accountRecipient: string): Promise<string> {

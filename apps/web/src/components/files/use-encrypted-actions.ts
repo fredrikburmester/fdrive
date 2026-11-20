@@ -17,7 +17,7 @@ import { prepareEncryptedUploads } from "@/lib/encryption/upload";
 import { useUploadStore } from "@/lib/upload/store";
 
 /** Said whenever this browser has no key for an encrypted folder it is asked to use. */
-export const LOCKED_MESSAGE = "Unlock encryption in Account to use this encrypted folder.";
+export const LOCKED_MESSAGE = "Unlock encryption in Settings to use this encrypted folder.";
 
 function message(error: unknown, fallback: string): string {
   return error instanceof Error && error.message !== "" ? error.message : fallback;
@@ -179,7 +179,7 @@ export function useEncryptedActions(
   /** Makes a new encrypted folder named `name` here, with keys made in this browser. */
   async function createEncryptedFolder(name: string): Promise<string> {
     const identity = store.identity();
-    if (identity === null) throw new Error("Turn encryption on, or unlock it, in Account first.");
+    if (identity === null) throw new Error("Turn encryption on, or unlock it, in Settings first.");
     const { marker } = await createFolder(identity);
     const created = await apiClient.createEncryptedFolder({ path: joinPath(path, name), marker });
     await queryClient.invalidateQueries({ queryKey: queryKeys.fs.list(path) });

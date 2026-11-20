@@ -96,3 +96,35 @@ describe("FilesToolbarActions on a phone", () => {
     expect(screen.queryByRole("menuitem", { name: "Upload files" })).toBeNull();
   });
 });
+
+describe("FilesToolbarActions chat slot", () => {
+  it("puts the chat button just before the details toggle on desktop", () => {
+    viewport.mobile = false;
+    render(
+      <FilesToolbarActions {...toolbarProps({ chatSlot: <button type="button">Chat</button> })} />,
+    );
+
+    const chat = screen.getByRole("button", { name: "Chat" });
+    const details = screen.getByRole("button", { name: "Toggle details" });
+    expect(chat.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const upload = screen.getByTitle("Upload");
+    expect(upload.compareDocumentPosition(chat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("puts it just before More on a phone", () => {
+    viewport.mobile = true;
+    render(
+      <FilesToolbarActions {...toolbarProps({ chatSlot: <button type="button">Chat</button> })} />,
+    );
+
+    const chat = screen.getByRole("button", { name: "Chat" });
+    const more = screen.getByRole("button", { name: "More" });
+    expect(chat.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows nothing extra without one", () => {
+    viewport.mobile = false;
+    render(<FilesToolbarActions {...toolbarProps()} />);
+    expect(screen.queryByRole("button", { name: "Chat" })).toBeNull();
+  });
+});

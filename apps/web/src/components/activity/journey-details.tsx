@@ -2,11 +2,34 @@
 import { ActivityLineageResponse, ActivityRevisionsResponse } from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { cn } from "cn";
+import { ChevronRightIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { activityRequest } from "@/lib/activity/api";
 import { useMe } from "@/lib/api/auth-queries";
+
+/** A row inside a disclosure: the file list's hairline, indented to sit under the title. */
+const ROW = "border-border/60 border-t pr-3 pl-8.5";
+const NOTE = cn(ROW, "py-2 text-muted-foreground text-xs");
+
+/** One collapsed strip of a file's journey that opens into rows, like a group in a table. */
+function Disclosure({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="group min-w-0">
+      <summary className="flex h-9 cursor-pointer list-none items-center gap-2 px-3 font-medium text-muted-foreground text-xs hover:bg-muted/60 max-md:h-11 [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3.5 shrink-0 transition-transform group-open:rotate-90"
+        />
+        {title}
+      </summary>
+      {children}
+    </details>
+  );
+}
 
 export function JourneyDetails({ fileId }: { fileId: string }) {
   const { data: me } = useMe();
@@ -35,13 +58,13 @@ export function JourneyDetails({ fileId }: { fileId: string }) {
     getNextPageParam: (page) => page.nextCursor ?? undefined,
   });
   return (
-    <div className="grid min-w-0 gap-3 sm:grid-cols-2">
-      <details className="min-w-0 rounded-xl border px-4">
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-          Related files
-        </summary>
+    <div
+      data-slot="journey-details"
+      className="grid min-w-0 divide-border/60 border-border border-b max-md:divide-y md:grid-cols-2 md:divide-x"
+    >
+      <Disclosure title="Related files">
         {edges.isError && (
-          <p role="alert" className="py-3 text-sm">
+          <p role="alert" className={NOTE}>
             Could not load related files.
           </p>
         )}
@@ -52,41 +75,48 @@ export function JourneyDetails({ fileId }: { fileId: string }) {
             const path = outgoing ? edge.targetPath : edge.sourcePath;
             return (
               <Link
-                className="flex min-h-11 flex-wrap items-center gap-2 break-all py-2 text-sm underline"
+                className={cn(
+                  ROW,
+                  "flex min-h-9 flex-wrap items-center gap-x-2 break-all py-1.5 text-sm hover:bg-muted/60 max-md:min-h-11",
+                )}
                 key={edge.id}
                 href={
                   `/activity/files/${outgoing ? edge.targetFileId : edge.sourceFileId}` as Route
                 }
               >
                 {path ? baseName(path) : outgoing ? "Derived file" : "Source file"}
-                <span className="text-xs text-muted-foreground">
+                <span className="text-muted-foreground text-xs">
                   {edge.kind.replaceAll("_", " ")}
                 </span>
               </Link>
             );
           })}
         {edges.data?.pages.every((page) => !page.items.length) && (
-          <p className="pb-4 text-sm text-muted-foreground">No recorded copies or derived files.</p>
+          <p className={NOTE}>No recorded copies or derived files.</p>
         )}
         {edges.hasNextPage && (
-          <Button variant="ghost" className="min-h-11" onClick={() => void edges.fetchNextPage()}>
-            More related files
-          </Button>
+          <div className={ROW}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="max-md:min-h-11"
+              onClick={() => void edges.fetchNextPage()}
+            >
+              More related files
+            </Button>
+          </div>
         )}
-      </details>
-      <details className="min-w-0 rounded-xl border px-4">
-        <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium">
-          Revision records
-        </summary>
+      </Disclosure>
+      <Disclosure title="Revision records">
         {revisions.isError && (
-          <p role="alert" className="py-3 text-sm">
+          <p role="alert" className={NOTE}>
             Could not load revisions.
           </p>
         )}
         {revisions.data?.pages
           .flatMap((page) => page.items)
           .map((revision) => (
-            <div className="space-y-1 border-t py-3 text-xs" key={revision.id}>
+            <div className={cn(ROW, "space-y-0.5 py-1.5 text-xs")} key={revision.id}>
               <p>
                 {revision.size === null
                   ? "Size unavailable"
@@ -98,18 +128,21 @@ export function JourneyDetails({ fileId }: { fileId: string }) {
             </div>
           ))}
         {revisions.data?.pages.every((page) => !page.items.length) && (
-          <p className="pb-4 text-sm text-muted-foreground">No recorded revisions.</p>
+          <p className={NOTE}>No recorded revisions.</p>
         )}
         {revisions.hasNextPage && (
-          <Button
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => void revisions.fetchNextPage()}
-          >
-            More revisions
-          </Button>
+          <div className={ROW}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="max-md:min-h-11"
+              onClick={() => void revisions.fetchNextPage()}
+            >
+              More revisions
+            </Button>
+          </div>
         )}
-      </details>
+      </Disclosure>
     </div>
   );
 }

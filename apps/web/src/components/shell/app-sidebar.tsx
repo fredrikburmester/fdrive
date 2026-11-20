@@ -11,9 +11,9 @@ import {
   Monitor,
   Moon,
   PanelLeftIcon,
+  Settings,
   Sun,
   Trash2,
-  UserRound,
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
@@ -90,7 +90,8 @@ export function isTrashRoute(pathname: string | null): boolean {
 // routes only model as `/files/${string}`, not the bare path.
 const FILES_ROUTE = "/files" as unknown as Route;
 const TRASH_ROUTE = "/trash" as Route;
-const ACCOUNT_ROUTE = "/account" as Route;
+// Settings keeps the `/account` URL it had while it was called Account.
+const SETTINGS_ROUTE = "/account" as Route;
 const STORAGE_ROUTE = "/storage" as Route;
 
 export function AppSidebar() {
@@ -243,9 +244,9 @@ export function AppSidebar() {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem render={<Link href={ACCOUNT_ROUTE} />}>
-                <UserRound />
-                Account
+              <DropdownMenuItem render={<Link href={SETTINGS_ROUTE} />}>
+                <Settings />
+                Settings
               </DropdownMenuItem>
               <DropdownMenuItem render={<Link href={STORAGE_ROUTE} />}>
                 <HardDrive />

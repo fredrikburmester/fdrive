@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { listing } from "./support/regions.js";
 import { shareHeicFixture, shareImageFixture } from "./support/share-fixture.js";
 import { uniqueName } from "./support/unique.js";
 import { fileInputLocator } from "./support/upload.js";
@@ -13,7 +14,8 @@ test("an image file's grid tile shows a thumbnail that loads", async ({ page }) 
     mimeType: "image/png",
     buffer: shareImageFixture(),
   });
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
+  // The upload becomes the selection, so the details panel names the file too.
+  await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
   // The browser harness has no thumbnail-generating indexer; provide the
   // uploaded image as this tile's thumbnail while exercising its real UI request.
@@ -46,22 +48,24 @@ test("a HEIC file's grid tile shows a thumbnail that loads", async ({ page }) =>
   const path = await createViewFolder(page);
 
   const name = `${uniqueName("grid-thumb")}.heic`;
-  await fileInputLocator(page).setInputFiles({
-    name,
-    mimeType: "image/heic",
-    buffer: shareHeicFixture(),
-  });
-  await expect(page.getByText(name, { exact: true })).toBeVisible();
-
+  // Before the upload: once selected, the details panel asks for a HEIC's thumbnail as well.
   await page.route("**/api/v1/thumb?**", async (route) => {
     if (new URL(route.request().url()).searchParams.get("path") === `${path}/${name}`) {
       await route.fulfill({ status: 200, contentType: "image/png", body: shareImageFixture() });
     } else await route.continue();
   });
+  // Also before the upload: the panel's request can be the only one the browser makes, with the
+  // grid tile then served the same image from its cache.
   const thumbResponse = page.waitForResponse((response) => {
     const url = new URL(response.url());
     return url.pathname.endsWith("/thumb") && url.searchParams.get("path") === `${path}/${name}`;
   });
+  await fileInputLocator(page).setInputFiles({
+    name,
+    mimeType: "image/heic",
+    buffer: shareHeicFixture(),
+  });
+  await expect(listing(page).getByText(name, { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: "View", exact: true }).click();
   await page.getByRole("menuitemradio", { name: "Grid" }).click();

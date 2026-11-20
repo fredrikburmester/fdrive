@@ -19,7 +19,7 @@ vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@/components/shell/page-header", () => ({ useShellMe: () => ({ data: mocks.me }) }));
 vi.mock("@/lib/account/queries", () => ({ useChangePassword: () => mocks.change }));
 
-const { PasswordCard } = await import("./password-card");
+const { PasswordSection } = await import("./password-section");
 
 function type(label: string, value: string) {
   fireEvent.change(screen.getByLabelText(label), { target: { value } });
@@ -32,23 +32,45 @@ afterEach(() => {
   mocks.change = { mutate: vi.fn(), isPending: false, isError: false, error: null };
 });
 
-describe("PasswordCard", () => {
+describe("PasswordSection", () => {
   it("stays hidden while the account loads", () => {
-    const { container } = render(<PasswordCard />);
+    const { container } = render(<PasswordSection />);
     expect(container.textContent).toBe("");
   });
 
   it("names the signed-in login", () => {
     mocks.me = makeMe({ identity: makeIdentity({ id: "two", username: "bob" }) });
-    render(<PasswordCard />);
+    render(<PasswordSection />);
 
+    expect(screen.getByRole("heading", { level: 2, name: "Password" })).toBeTruthy();
     expect(screen.getByText(/The password bob signs in with/)).toBeTruthy();
+  });
+
+  it("says in one line what each field is for", () => {
+    mocks.me = makeMe();
+    render(<PasswordSection />);
+
+    expect(screen.getByText("The one you sign in with now, to confirm it is you.")).toBeTruthy();
+    expect(screen.getByText("At least 8 characters.")).toBeTruthy();
+    expect(screen.getByText("The new password once more, to catch a typo.")).toBeTruthy();
+  });
+
+  it("says so while the change is sent, and keeps the fields still", () => {
+    mocks.me = makeMe();
+    mocks.change.isPending = true;
+    render(<PasswordSection />);
+
+    const submit = screen.getByRole("button", { name: "Changing…" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    for (const label of ["Current password", "New password", "Confirm new password"]) {
+      expect((screen.getByLabelText(label) as HTMLInputElement).disabled).toBe(true);
+    }
   });
 
   it("changes the local login's password, then clears the form", () => {
     mocks.me = makeMe();
     mocks.change.mutate.mockImplementation((_input, options) => options.onSuccess());
-    render(<PasswordCard />);
+    render(<PasswordSection />);
 
     expect(screen.getByText(/The password ada signs in with/)).toBeTruthy();
     const submit = screen.getByRole("button", { name: "Change password" }) as HTMLButtonElement;
@@ -73,7 +95,7 @@ describe("PasswordCard", () => {
 
   it("explains a new password the API would refuse and a repeat that differs", () => {
     mocks.me = makeMe();
-    render(<PasswordCard />);
+    render(<PasswordSection />);
 
     type("Current password", "old-secret");
     type("New password", "short");
@@ -94,7 +116,7 @@ describe("PasswordCard", () => {
       "the current password is not right",
       401,
     );
-    render(<PasswordCard />);
+    render(<PasswordSection />);
 
     expect(screen.getByText("The current password is not right.")).toBeTruthy();
   });

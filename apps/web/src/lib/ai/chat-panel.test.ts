@@ -8,6 +8,7 @@ import {
   CHAT_WIDTH_KEY,
   clampChatWidth,
   DEFAULT_CHAT_WIDTH,
+  isChatShortcut,
   MAX_CHAT_WIDTH,
   MIN_CHAT_WIDTH,
   readChatOpen,
@@ -18,6 +19,7 @@ import {
   useChatPanelOpen,
   useChatPanelStore,
   useChatPanelWidth,
+  useChatShortcut,
   useCurrentChatId,
 } from "./chat-panel";
 
@@ -25,6 +27,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   useChatPanelStore.getState().clearChips();
+  useChatPanelStore.setState({ focusPending: false });
 });
 
 describe("preferences", () => {
@@ -107,6 +110,56 @@ describe("preferences", () => {
     expect(renderToString(createElement(Probe))).toBe(
       `<span>false-${DEFAULT_CHAT_WIDTH}-null</span>`,
     );
+  });
+});
+
+describe("opening", () => {
+  it("asks the message box to take focus when the person opens the panel, and not after it closes", () => {
+    expect(useChatPanelStore.getState().focusPending).toBe(false);
+    setChatPanelOpen(true);
+    expect(useChatPanelStore.getState().focusPending).toBe(true);
+    setChatPanelOpen(false);
+    expect(useChatPanelStore.getState().focusPending).toBe(false);
+    addToChat(["/x"]);
+    expect(useChatPanelStore.getState().focusPending).toBe(true);
+  });
+
+  it("knows Cmd+Shift+K and Ctrl+Shift+K, in either case, and nothing else", () => {
+    const keys = { key: "k", shiftKey: true, metaKey: false, ctrlKey: false };
+    expect(isChatShortcut({ ...keys, metaKey: true })).toBe(true);
+    expect(isChatShortcut({ ...keys, key: "K", ctrlKey: true })).toBe(true);
+    expect(isChatShortcut(keys)).toBe(false);
+    expect(isChatShortcut({ ...keys, metaKey: true, shiftKey: false })).toBe(false);
+    expect(isChatShortcut({ ...keys, key: "j", metaKey: true })).toBe(false);
+  });
+
+  it("opens and closes the panel from the keyboard, only while the shortcut is enabled", () => {
+    function press(init: KeyboardEventInit): KeyboardEvent {
+      const event = new KeyboardEvent("keydown", { cancelable: true, ...init });
+      act(() => {
+        window.dispatchEvent(event);
+      });
+      return event;
+    }
+    const shortcut = renderHook(({ enabled }: { enabled: boolean }) => useChatShortcut(enabled), {
+      initialProps: { enabled: false },
+    });
+    expect(press({ key: "k", shiftKey: true, metaKey: true }).defaultPrevented).toBe(false);
+    expect(localStorage.getItem(CHAT_OPEN_KEY)).toBeNull();
+
+    shortcut.rerender({ enabled: true });
+    // Search's own Cmd+K is left alone.
+    expect(press({ key: "k", metaKey: true }).defaultPrevented).toBe(false);
+    expect(localStorage.getItem(CHAT_OPEN_KEY)).toBeNull();
+    expect(press({ key: "K", shiftKey: true, ctrlKey: true }).defaultPrevented).toBe(true);
+    expect(readChatOpen(localStorage)).toBe(true);
+    expect(useChatPanelStore.getState().focusPending).toBe(true);
+    press({ key: "k", shiftKey: true, metaKey: true });
+    expect(readChatOpen(localStorage)).toBe(false);
+
+    shortcut.unmount();
+    press({ key: "k", shiftKey: true, metaKey: true });
+    expect(readChatOpen(localStorage)).toBe(false);
   });
 });
 

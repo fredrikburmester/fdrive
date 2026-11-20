@@ -9,8 +9,8 @@ import {
   passwordKeyFor,
 } from "@fdrive/crypto";
 import { useQuery } from "@tanstack/react-query";
-import { CheckIcon, CopyIcon, DownloadIcon } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { CheckIcon, CopyIcon, DownloadIcon, LockKeyhole } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import {
   describeEncryptionError,
@@ -22,6 +22,18 @@ import {
 } from "@/components/encryption/unlock-form";
 import { useShellMe } from "@/components/shell/page-header";
 import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageEmpty,
+  PageSection,
+  SettingActions,
+  SettingRow,
+} from "@/components/shell/page-layout";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -32,8 +44,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { FieldError, FieldGroup, FieldSeparator } from "@/components/ui/field";
+import { FieldError, FieldGroup } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatShortDate } from "@/lib/account/format";
 import { describeApiError } from "@/lib/api/errors";
@@ -50,15 +62,29 @@ type EnabledStatus = Extract<EncryptionStatus, { enabled: true }>;
 
 const RECOVERY_FILE = "fdrive-encryption-recovery-key.txt";
 
+const INTRO = "Folders only your own devices can open.";
+const SIGN_IN_HINT = "The password you sign in with, to confirm it is you.";
+const NEW_PASSWORD_HINT = `At least ${MIN_ENCRYPTION_PASSWORD_LENGTH} characters, and not your sign-in password.`;
+const CONFIRM_HINT = "The same password once more, to catch a typo.";
+
 /**
- * Account page card: turns encrypted folders on, unlocks them on this
+ * Settings > Encryption: turns encrypted folders on, unlocks them on this
  * browser, and manages the encryption password, recovery key and paired
- * Macs. Hidden until the account has loaded, and where the installation
+ * Macs. Hidden until the account has loaded; says so where the installation
  * has no encrypted folders.
  */
-export function EncryptionCard() {
+export function EncryptionSection() {
   const { data: me } = useShellMe();
-  if (me === undefined || !me.encryptedFolders) return null;
+  if (me === undefined) return null;
+  if (!me.encryptedFolders) {
+    return (
+      <PageEmpty
+        icon={LockKeyhole}
+        title="Encrypted folders are not available"
+        description="This fdrive server does not offer them."
+      />
+    );
+  }
   return <EncryptionPanel key={me.identity.id} username={me.identity.username} />;
 }
 
@@ -68,48 +94,45 @@ function EncryptionPanel({ username }: { username: string }) {
   // Keeps the setup steps on screen while they turn encryption on and unlock.
   const [settingUp, setSettingUp] = useState(false);
 
-  let description: string;
-  let body: ReactNode;
   if (status.data === undefined) {
-    description = "Folders only your own devices can open.";
-    body = status.isError ? (
-      <div className="flex items-center justify-between gap-2">
-        <p role="alert" className="text-sm text-destructive">
-          {describeApiError(status.error)}
-        </p>
-        <Button type="button" variant="outline" size="sm" onClick={() => void status.refetch()}>
-          Try again
-        </Button>
-      </div>
-    ) : (
-      <Skeleton className="h-24 w-full" />
-    );
-  } else if (!status.data.enabled || settingUp) {
-    description = "Folders only your own devices can open.";
-    body = <SetupFlow username={username} onActive={setSettingUp} />;
-  } else if (keyState.status === "unlocked") {
-    description = "Encryption is on, and this browser holds your key.";
-    body = <UnlockedView status={status.data} username={username} />;
-  } else {
-    description =
-      "Encryption is on. Enter your encryption password to open encrypted folders here.";
-    body = (
-      <FieldGroup>
-        <UnlockForm />
-        <FieldSeparator />
-        <ResetSection username={username} />
-      </FieldGroup>
+    return (
+      <PageSection title="Encryption" description={INTRO} padded>
+        {status.isError ? (
+          <div className="flex flex-wrap items-center gap-3">
+            <p role="alert" className="text-sm text-destructive">
+              {describeApiError(status.error)}
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={() => void status.refetch()}>
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <Skeleton className="h-24 w-full max-w-xl" />
+        )}
+      </PageSection>
     );
   }
-
+  if (!status.data.enabled || settingUp) {
+    return (
+      <PageSection title="Encryption" description={INTRO}>
+        <SetupFlow username={username} onActive={setSettingUp} />
+      </PageSection>
+    );
+  }
+  if (keyState.status === "unlocked") {
+    return <UnlockedView status={status.data} username={username} />;
+  }
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <CardTitle>Encryption</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>{body}</CardContent>
-    </Card>
+    <>
+      <PageSection
+        title="Encryption"
+        description="Encryption is on. Enter your encryption password to open encrypted folders here."
+        padded
+      >
+        <UnlockForm className="max-w-md" />
+      </PageSection>
+      <ResetSection username={username} />
+    </>
   );
 }
 
@@ -117,6 +140,46 @@ function EncryptionPanel({ username }: { username: string }) {
 function UsernameHint({ username }: { username: string }) {
   return (
     <input type="text" name="username" autoComplete="username" value={username} readOnly hidden />
+  );
+}
+
+interface PasswordRowProps {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+  readonly disabled: boolean;
+  readonly error?: string | null;
+  readonly autoComplete?: string;
+}
+
+/** One password as a settings row: its label and one-line description beside the field. */
+function PasswordRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  disabled,
+  error = null,
+  autoComplete = "off",
+}: PasswordRowProps) {
+  return (
+    <SettingRow label={label} description={description} htmlFor={id}>
+      <Input
+        id={id}
+        type="password"
+        autoComplete={autoComplete}
+        maxLength={1024}
+        className="max-w-sm"
+        value={value}
+        disabled={disabled}
+        aria-invalid={error !== null}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {error === null ? null : <FieldError className="mt-1.5">{error}</FieldError>}
+    </SettingRow>
   );
 }
 
@@ -175,8 +238,8 @@ function SetupFlow({
   return (
     <form onSubmit={(event) => void create(event)}>
       <UsernameHint username={username} />
-      <FieldGroup>
-        <div className="space-y-2 text-sm text-muted-foreground">
+      <div className="border-border/60 border-b px-3 py-2.5">
+        <div className="max-w-3xl space-y-2 text-muted-foreground text-sm">
           <p>
             Names and contents in an encrypted folder are encrypted in this browser and on your Mac
             before they upload, so the server and its administrators cannot open them. If you lose
@@ -187,39 +250,40 @@ function SetupFlow({
             password. The Mac app cannot be changed that way.
           </p>
         </div>
-        <PasswordInput
-          id="encryption-new-password"
-          label="Encryption password"
-          description={`At least ${MIN_ENCRYPTION_PASSWORD_LENGTH} characters, and not your sign-in password.`}
-          value={password}
-          onChange={setPassword}
-          disabled={creating}
-          error={errors.password}
-        />
-        <PasswordInput
-          id="encryption-confirm-password"
-          label="Confirm encryption password"
-          value={confirm}
-          onChange={setConfirm}
-          disabled={creating}
-          error={errors.confirm}
-        />
-        <PasswordInput
-          id="encryption-sign-in-password"
-          label="Sign-in password"
-          description="The password you sign in with, to confirm it is you."
-          autoComplete="current-password"
-          value={signInPassword}
-          onChange={setSignInPassword}
-          disabled={creating}
-        />
+      </div>
+      <PasswordRow
+        id="encryption-new-password"
+        label="Encryption password"
+        description={NEW_PASSWORD_HINT}
+        value={password}
+        onChange={setPassword}
+        disabled={creating}
+        error={errors.password}
+      />
+      <PasswordRow
+        id="encryption-confirm-password"
+        label="Confirm encryption password"
+        description={CONFIRM_HINT}
+        value={confirm}
+        onChange={setConfirm}
+        disabled={creating}
+        error={errors.confirm}
+      />
+      <PasswordRow
+        id="encryption-sign-in-password"
+        label="Sign-in password"
+        description={SIGN_IN_HINT}
+        autoComplete="current-password"
+        value={signInPassword}
+        onChange={setSignInPassword}
+        disabled={creating}
+      />
+      <SettingActions>
+        <Button type="submit" disabled={!errors.valid || creating} aria-busy={creating}>
+          {creating ? "Creating keys…" : "Continue"}
+        </Button>
         {error === null ? null : <FieldError>{error}</FieldError>}
-        <div className="flex justify-end">
-          <Button type="submit" disabled={!errors.valid || creating} aria-busy={creating}>
-            {creating ? "Creating keys…" : "Continue"}
-          </Button>
-        </div>
-      </FieldGroup>
+      </SettingActions>
     </form>
   );
 }
@@ -229,7 +293,7 @@ function recoveryFileText(username: string, identity: string): string {
     "# fdrive encryption recovery key",
     `# For: ${username}`,
     `# Created: ${new Date().toISOString().slice(0, 10)}`,
-    "# With it you can set a new encryption password in Account > Encryption.",
+    "# With it you can set a new encryption password in Settings > Encryption.",
     "# Keep it private and away from this computer.",
     identity,
     "",
@@ -321,9 +385,9 @@ function SaveRecoveryKey({
   }
 
   return (
-    <form onSubmit={(event) => void finish(event)}>
+    <form onSubmit={(event) => void finish(event)} className="p-3">
       <UsernameHint username={username} />
-      <FieldGroup>
+      <FieldGroup className="max-w-xl">
         <p className="text-sm text-muted-foreground">
           Save your recovery key somewhere safe. If you forget your encryption password, it is the
           only way back into your encrypted folders.
@@ -366,7 +430,7 @@ function SaveRecoveryKey({
           <PasswordInput
             id="encryption-retry-sign-in-password"
             label="Sign-in password"
-            description="The password you sign in with, to confirm it is you."
+            description={SIGN_IN_HINT}
             autoComplete="current-password"
             value={signInPassword}
             onChange={(value) => {
@@ -391,26 +455,6 @@ function SaveRecoveryKey({
   );
 }
 
-function Section({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children?: ReactNode;
-}) {
-  return (
-    <section className="space-y-3">
-      <div className="space-y-1">
-        <h3 className="text-sm font-medium">{title}</h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
-      </div>
-      {children}
-    </section>
-  );
-}
-
 function UnlockedView({ status, username }: { status: EnabledStatus; username: string }) {
   const fingerprint = useQuery({
     queryKey: ["encryption", "fingerprint", status.recipient],
@@ -418,31 +462,32 @@ function UnlockedView({ status, username }: { status: EnabledStatus; username: s
     staleTime: Number.POSITIVE_INFINITY,
   });
   return (
-    <FieldGroup>
-      <Section
-        title="Key fingerprint"
-        description="The Mac app shows the same fingerprint once it holds your key."
+    <>
+      <PageSection
+        title="Encryption"
+        description="Encryption is on, and this browser holds your key."
       >
-        <p className="font-mono text-sm tracking-wider" data-slot="key-fingerprint">
-          {fingerprint.data ?? ""}
-        </p>
-      </Section>
-      <FieldSeparator />
+        <SettingRow
+          label="Key fingerprint"
+          description="The Mac app shows the same fingerprint once it holds your key."
+        >
+          <p className="font-mono text-sm tracking-wider" data-slot="key-fingerprint">
+            {fingerprint.data ?? ""}
+          </p>
+        </SettingRow>
+        <SettingRow
+          label="Lock this browser"
+          description="Forgets your key here until you enter your encryption password again."
+        >
+          <Button type="button" variant="outline" onClick={() => void keyStore.lock()}>
+            Lock this browser
+          </Button>
+        </SettingRow>
+      </PageSection>
       <ChangePasswordSection username={username} />
-      <FieldSeparator />
       <DevicesSection devices={status.devices} />
-      <FieldSeparator />
-      <Section
-        title="Lock this browser"
-        description="Forgets your key here until you enter your encryption password again."
-      >
-        <Button type="button" variant="outline" onClick={() => void keyStore.lock()}>
-          Lock this browser
-        </Button>
-      </Section>
-      <FieldSeparator />
       <ResetSection username={username} />
-    </FieldGroup>
+    </>
   );
 }
 
@@ -476,48 +521,47 @@ function ChangePasswordSection({ username }: { username: string }) {
   }
 
   return (
-    <Section
+    <PageSection
       title="Change encryption password"
       description="Your encrypted folders and paired Macs keep working as before."
     >
       <form onSubmit={(event) => void submit(event)}>
         <UsernameHint username={username} />
-        <FieldGroup>
-          <PasswordInput
-            id="encryption-change-password"
-            label="New encryption password"
-            description={`At least ${MIN_ENCRYPTION_PASSWORD_LENGTH} characters, and not your sign-in password.`}
-            value={password}
-            onChange={setPassword}
-            disabled={busy}
-            error={errors.password}
-          />
-          <PasswordInput
-            id="encryption-change-confirm"
-            label="Confirm new encryption password"
-            value={confirm}
-            onChange={setConfirm}
-            disabled={busy}
-            error={errors.confirm}
-          />
-          <PasswordInput
-            id="encryption-change-sign-in"
-            label="Sign-in password"
-            description="The password you sign in with, to confirm it is you."
-            autoComplete="current-password"
-            value={signInPassword}
-            onChange={setSignInPassword}
-            disabled={busy}
-          />
+        <PasswordRow
+          id="encryption-change-password"
+          label="New encryption password"
+          description={NEW_PASSWORD_HINT}
+          value={password}
+          onChange={setPassword}
+          disabled={busy}
+          error={errors.password}
+        />
+        <PasswordRow
+          id="encryption-change-confirm"
+          label="Confirm new encryption password"
+          description={CONFIRM_HINT}
+          value={confirm}
+          onChange={setConfirm}
+          disabled={busy}
+          error={errors.confirm}
+        />
+        <PasswordRow
+          id="encryption-change-sign-in"
+          label="Sign-in password"
+          description={SIGN_IN_HINT}
+          autoComplete="current-password"
+          value={signInPassword}
+          onChange={setSignInPassword}
+          disabled={busy}
+        />
+        <SettingActions>
+          <Button type="submit" disabled={!errors.valid || busy} aria-busy={busy}>
+            {busy ? "Changing…" : "Change encryption password"}
+          </Button>
           {error === null ? null : <FieldError>{error}</FieldError>}
-          <div className="flex justify-end">
-            <Button type="submit" disabled={!errors.valid || busy} aria-busy={busy}>
-              {busy ? "Changing…" : "Change encryption password"}
-            </Button>
-          </div>
-        </FieldGroup>
+        </SettingActions>
       </form>
-    </Section>
+    </PageSection>
   );
 }
 
@@ -526,31 +570,40 @@ function DevicesSection({ devices }: { devices: readonly EncryptionDevice[] }) {
   const [target, setTarget] = useState<EncryptionDevice | null>(null);
 
   return (
-    <Section title="Paired Macs" description="Macs that hold a copy of your key.">
+    <PageSection title="Paired Macs" description="Macs that hold a copy of your key.">
       {devices.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No Mac holds your key.</p>
+        <p className="px-3 py-2.5 text-muted-foreground text-sm">No Mac holds your key.</p>
       ) : (
-        <ul className="divide-y rounded-lg border">
-          {devices.map((device) => (
-            <li key={device.id} className="flex items-center justify-between gap-3 px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium">{device.name}</p>
-                <p className="text-xs text-muted-foreground">
-                  Paired {formatShortDate(device.createdAt)}
-                </p>
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-label={`Remove ${device.name}`}
-                onClick={() => setTarget(device)}
-              >
-                Remove
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <DataTable>
+          <DataTableHeader>
+            <DataTableRow>
+              <DataTableHead>Name</DataTableHead>
+              <DataTableHead>Paired</DataTableHead>
+              <DataTableHead className="text-right">Actions</DataTableHead>
+            </DataTableRow>
+          </DataTableHeader>
+          <DataTableBody>
+            {devices.map((device) => (
+              <DataTableRow key={device.id}>
+                <DataTableCell className="font-medium">{device.name}</DataTableCell>
+                <DataTableCell className="text-muted-foreground tabular-nums">
+                  {formatShortDate(device.createdAt)}
+                </DataTableCell>
+                <DataTableCell className="text-right">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    aria-label={`Remove ${device.name}`}
+                    onClick={() => setTarget(device)}
+                  >
+                    Remove
+                  </Button>
+                </DataTableCell>
+              </DataTableRow>
+            ))}
+          </DataTableBody>
+        </DataTable>
       )}
       <AlertDialog
         open={target !== null}
@@ -582,7 +635,7 @@ function DevicesSection({ devices }: { devices: readonly EncryptionDevice[] }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </PageSection>
   );
 }
 
@@ -614,15 +667,15 @@ function ResetSection({ username }: { username: string }) {
   }
 
   return (
-    <Section
-      title="Reset encryption"
-      description="Deletes your keys. Every encrypted folder becomes unreadable for good."
-    >
-      <div>
+    <PageSection title="Reset">
+      <SettingRow
+        label="Reset encryption"
+        description="Deletes your keys. Every encrypted folder becomes unreadable for good."
+      >
         <Button type="button" variant="destructive" onClick={() => setOpen(true)}>
           Reset encryption
         </Button>
-      </div>
+      </SettingRow>
       <AlertDialog open={open} onOpenChange={close}>
         <AlertDialogContent>
           <form onSubmit={submit} className="contents">
@@ -637,7 +690,7 @@ function ResetSection({ username }: { username: string }) {
             <PasswordInput
               id="encryption-reset-sign-in"
               label="Sign-in password"
-              description="The password you sign in with, to confirm it is you."
+              description={SIGN_IN_HINT}
               autoComplete="current-password"
               value={signInPassword}
               onChange={setSignInPassword}
@@ -657,6 +710,6 @@ function ResetSection({ username }: { username: string }) {
           </form>
         </AlertDialogContent>
       </AlertDialog>
-    </Section>
+    </PageSection>
   );
 }

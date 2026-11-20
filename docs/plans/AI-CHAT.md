@@ -155,16 +155,18 @@ deltas, the OpenAI-compatible and Mistral adapters add `stream: true` parsing.
 
 ### UI
 
-- **Placement.** A bubble in the live activity dock's bottom-right corner, on folder pages
-  only, opening a floating panel above it (width remembered as `fdrive.chat.width`, dragged
-  by its left edge); uploads, jobs and Organize stack above the panel. It is mounted in the
+- **Placement.** A sparkle button in the files toolbar, left of the details toggle, on folder
+  pages only, opening an overlay under the page header at the top right (width remembered as
+  `fdrive.chat.width`, dragged by its left edge). The overlay is as tall as its content, from
+  just the composer for a new chat up to 36rem, and ends above the live activity dock, where
+  uploads, jobs and Organize stay. It is mounted in the
   shell layout, not inside the file browser, so moving between folders keeps it and its
   scroll position, and it comes back open on the next folder page. Below the `md` breakpoint
   the panel is a full-height sheet. Open state and current chat id are `fdrive.chat.open` and
   `fdrive.chat.current` in localStorage, read through the `useSyncExternalStore` preference
   hooks so every tab agrees; the store hydrates the transcript from the server on mount.
-- **Opening.** The bubble (message icon, tooltip "Chat with your files", items dragged from
-  the listing can be dropped on it), a keyboard shortcut next to the search one, the selection bar's **Add to chat** (opens the panel with the selection
+- **Opening.** The toolbar button (sparkle icon, tooltip "Chat with your files", items dragged
+  from the listing can be dropped on it), a keyboard shortcut next to the search one, the selection bar's **Add to chat** (opens the panel with the selection
   referenced) and the row context menu's **Add to chat**. Shown only while AI is available.
 - **Drop to reference.** The whole panel is a drop target for `application/x-fdrive-paths`
   (`readDraggedPaths`), with a highlighted "Drop to add to chat" state while an internal drag
@@ -181,8 +183,8 @@ deltas, the OpenAI-compatible and Mistral adapters add `stream: true` parsing.
   `components/ai-elements/`): `conversation` (stick-to-bottom scrolling and the scroll
   button), `message` with `MessageResponse` (streaming markdown through `streamdown`, which
   replaces `react-markdown` in the panel), `tool` (activity lines with input, output and
-  state), `prompt-input` (the composer), `suggestion` (starter prompts for a fresh chat) and
-  `loader`. The `ai` package comes along for its types only; nothing uses the AI SDK's
+  state), `prompt-input` (the composer) and `loader`. A fresh chat has no empty state or
+  starter prompts; the composer's placeholder carries the hint. The `ai` package comes along for its types only; nothing uses the AI SDK's
   transport or `useChat`. The code, math and mermaid extras (`shiki`, `katex`) are not
   installed. The project's shadcn style is Base UI (`base-nova`), so each installed
   component is checked against our `components/ui` primitives and adjusted the way the
@@ -195,8 +197,8 @@ deltas, the OpenAI-compatible and Mistral adapters add `stream: true` parsing.
   edits with new-file/replace toggle and file name. Stop while a turn runs, Retry after a
   failed turn, and the same failure copy as Organize (provider errors, session ended,
   refusal, cut off).
-- **Activity corner.** With the panel closed, a running turn or pending cards widen the bubble
-  into an Organize-style pill ("Answering…", "Waiting for you"), leading back to the panel.
+- **Closed state.** With the panel closed, the toolbar button shows a spinner while a turn runs
+  and a dot while cards wait ("Answering…", "Waiting for you" in its tooltip).
 - Organize stays as it is; its sheet is unchanged.
 
 ### Contracts and routes
@@ -227,7 +229,7 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
    the assistant's continuation after them needs the live conversation.
 3. **Chat panel.** Done in the web app (`apps/web/src/components/ai/chat/`, preferences and
    hooks in `apps/web/src/lib/ai/chat*.ts`). The spike kept `conversation`, `message`, `tool`,
-   `prompt-input` and `suggestion` from AI Elements, each trimmed to what fdrive uses (no AI
+   `prompt-input` and, at first, `suggestion` from AI Elements, each trimmed to what fdrive uses (no AI
    SDK types, no OS attachments, no code/math/mermaid plugins), see the notes in
    [PITFALLS](../PITFALLS.md); the `loader` item does not exist in the registry, and the resize
    handle is a small pointer handler rather than the `resizable` primitive. Originally: install
@@ -240,7 +242,8 @@ Each step is one PR with the AGENTS.md checks; the earlier ones do not change wh
    navigate to another folder and page with the panel open, reload and find the chat again,
    summarize, duplicate check, trash, move and rewrite; a real dev app check. The panel was
    later moved from a docked right column into the activity dock as a bubble, which also
-   ended the selection bar overflowing beside the docked column. Open from the browser check:
+   ended the selection bar overflowing beside the docked column, and then from the bubble to
+   a toolbar button with an overlay under it, without the starter prompts. Open from the browser check:
    deleting a chat has no confirm step.
 4. **Streaming.** SSE route and client, deltas in the transcript, OpenAI-compatible and Mistral
    streaming, reconnect and cancel behavior in browser checks.

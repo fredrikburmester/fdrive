@@ -238,17 +238,18 @@ describe("BetaFileList", () => {
     expect(onScrollConsumed).toHaveBeenCalledWith(2);
   });
 
-  it("renders a 24px thumbnail img for image files when showThumbnails is true", () => {
+  it("renders a 40px rounded thumbnail img for image files when showThumbnails is true", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: true });
 
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
-    expect(img?.className).toContain("size-6");
+    expect(img?.className).toContain("size-10");
+    expect(img?.className).toContain("rounded-md");
     expect(img?.getAttribute("src")).toContain("pic.png");
   });
 
-  it("falls back to FileIcon in a matching 24px container when an image thumbnail fails to load", () => {
+  it("falls back to FileIcon in a matching 40px container when an image thumbnail fails to load", () => {
     const entries = [makeEntry("broken.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: true });
 
@@ -259,19 +260,59 @@ describe("BetaFileList", () => {
     }
 
     expect(container.querySelector("img")).toBeNull();
-    const iconContainer = container.querySelector(".size-6");
+    const iconContainer = container.querySelector(".size-10");
     expect(iconContainer).not.toBeNull();
     expect(iconContainer?.querySelector("svg")).not.toBeNull();
   });
 
-  it("renders a matching 24px fallback container for non-image entries when showThumbnails is true", () => {
+  it("renders a matching 40px fallback container for non-image entries when showThumbnails is true", () => {
     const entries = [makeEntry("notes.txt", { ext: ".txt", mime: "text/plain" })];
     const { container } = renderList({ entries, showThumbnails: true });
 
     expect(container.querySelector("img")).toBeNull();
-    const iconContainer = container.querySelector(".size-6");
+    const iconContainer = container.querySelector(".size-10");
     expect(iconContainer).not.toBeNull();
     expect(iconContainer?.querySelector("svg")).not.toBeNull();
+  });
+
+  describe("row density", () => {
+    const entries = [
+      makeEntry("pic.png", { ext: ".png", mime: "image/png" }),
+      makeEntry("notes.txt", { ext: ".txt", mime: "text/plain" }),
+    ];
+    const rowHeights = (container: HTMLElement) =>
+      new Set(
+        [...container.querySelectorAll<HTMLElement>("[data-path]")].map((row) => row.style.height),
+      );
+
+    it("fills a 64px comfortable row with a large icon, a lighter line and a larger name", () => {
+      const { container, getByText } = renderList({ entries });
+
+      expect(rowHeights(container)).toEqual(new Set(["64px"]));
+      const icon = container.querySelector('[data-path="/notes.txt"] svg[data-icon-kind="text"]');
+      expect(icon?.getAttribute("class")).toContain("size-7");
+      expect(icon?.getAttribute("stroke-width")).toBe("1.5");
+      expect(icon?.parentElement?.parentElement?.className).toContain("size-10");
+      expect(getByText("notes.txt").className).toContain("text-[15px]");
+    });
+
+    it("keeps the earlier 36px row, 24px icon column and name size when compact", () => {
+      const { container, getByText } = renderList({
+        entries,
+        density: "compact",
+        showThumbnails: true,
+      });
+
+      expect(rowHeights(container)).toEqual(new Set(["36px"]));
+      const img = container.querySelector("img");
+      expect(img?.className).toContain("size-6");
+      expect(img?.className).toContain("rounded-xs");
+      const icon = container.querySelector('[data-path="/notes.txt"] svg[data-icon-kind="text"]');
+      expect(icon?.getAttribute("class")).toContain("size-[18px]");
+      expect(icon?.getAttribute("stroke-width")).toBe("2");
+      expect(icon?.parentElement?.parentElement?.className).toContain("size-6");
+      expect(getByText("notes.txt").className).not.toContain("text-[15px]");
+    });
   });
 
   it("says who shares each folder in Shared with me and what this login may do there", () => {
@@ -328,12 +369,12 @@ describe("BetaFileList", () => {
     expect((await findAllByRole("menuitem")).length).toBeGreaterThan(0);
   });
 
-  it("keeps the colored kind icon in the 24px column when showThumbnails is false", () => {
+  it("keeps the colored kind icon in the icon column when showThumbnails is false", () => {
     const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
     const { container } = renderList({ entries, showThumbnails: false });
 
     expect(container.querySelector("img")).toBeNull();
-    const icon = container.querySelector('.size-6 svg[data-icon-kind="image"]');
+    const icon = container.querySelector('.size-10 svg[data-icon-kind="image"]');
     expect(icon?.getAttribute("class")).toContain("text-tag-purple");
   });
 
@@ -354,7 +395,7 @@ describe("BetaFileList", () => {
 
       const chevron = getByRole("button", { name: "Expand Photos" });
       expect(chevron.getAttribute("aria-expanded")).toBe("false");
-      // It shares the icon's 24px column instead of adding a column of its own.
+      // It shares the icon's column instead of adding a column of its own.
       expect(chevron.parentElement?.querySelector('svg[data-icon-kind="folder"]')).not.toBeNull();
       expect(queryByRole("button", { name: "Expand notes.txt" })).toBeNull();
 
@@ -403,6 +444,40 @@ describe("BetaFileList", () => {
         container.querySelectorAll(`[data-path="${path}"] [data-slot="tree-guide"]`).length;
 
       expect([guides("/a"), guides("/a/b"), guides("/a/b/c.txt")]).toEqual([0, 1, 2]);
+    });
+
+    it("keeps each guide under its folder's icon, and each child under its folder's name, at both densities", () => {
+      const entries = [
+        makeEntry("a", { kind: "dir" }),
+        makeEntry("b", { path: "/a/b", kind: "dir" }),
+        makeEntry("c.txt", { path: "/a/b/c.txt" }),
+      ];
+      const treeProps = {
+        entries,
+        treeDepths: new Map([
+          ["/a", 0],
+          ["/a/b", 1],
+          ["/a/b/c.txt", 2],
+        ]),
+        treeExpanded: new Set(["/a", "/a/b"]),
+      };
+      const layout = (container: HTMLElement) => {
+        const row = container.querySelector('[data-path="/a/b/c.txt"]');
+        const guides = [...(row?.querySelectorAll<HTMLElement>('[data-slot="tree-guide"]') ?? [])];
+        return {
+          guides: guides.map((guide) => guide.style.left),
+          indent: guides[0]?.parentElement?.style.paddingLeft,
+        };
+      };
+
+      // A 40px icon column and a 12px gap: lines at each column's middle, 52px per level.
+      const comfortable = renderList(treeProps);
+      expect(layout(comfortable.container)).toEqual({ guides: ["20px", "72px"], indent: "104px" });
+      cleanup();
+
+      // A 24px icon column and a 10px gap, as before: 34px per level.
+      const compact = renderList({ ...treeProps, density: "compact" });
+      expect(layout(compact.container)).toEqual({ guides: ["12px", "46px"], indent: "68px" });
     });
 
     it("on a touch screen, gives the chevron a column of its own and keeps More visible", () => {
@@ -514,7 +589,7 @@ describe("BetaFileList", () => {
       expect(getByText("1 item")).toBeTruthy();
     });
 
-    it("gives rows two-line height and a 44px floor at compact density", () => {
+    it("gives rows two-line height, 68px by default and 56px at compact density", () => {
       const { container, rerender } = renderList();
       const heights = () =>
         new Set(
@@ -522,7 +597,7 @@ describe("BetaFileList", () => {
             (row) => row.style.height,
           ),
         );
-      expect(heights()).toEqual(new Set(["56px"]));
+      expect(heights()).toEqual(new Set(["68px"]));
 
       rerender(
         <FileList
@@ -539,7 +614,7 @@ describe("BetaFileList", () => {
           density="compact"
         />,
       );
-      expect(heights()).toEqual(new Set(["44px"]));
+      expect(heights()).toEqual(new Set(["56px"]));
     });
 
     it("marks folders with a trailing chevron, except in tree view where they already have one", () => {
@@ -574,10 +649,14 @@ describe("BetaFileList", () => {
       expect(getByText(/ · alice · Can view$/)).toBeTruthy();
     });
 
-    it("shows a 32px thumbnail next to the two lines", () => {
+    it("shows a 40px thumbnail next to the two lines, and 32px when compact", () => {
       const entries = [makeEntry("pic.png", { ext: ".png", mime: "image/png" })];
       const { container } = renderList({ entries, showThumbnails: true });
-      expect(container.querySelector("img")?.className).toContain("size-8");
+      expect(container.querySelector("img")?.className).toContain("size-10");
+      cleanup();
+
+      const compact = renderList({ entries, showThumbnails: true, density: "compact" });
+      expect(compact.container.querySelector("img")?.className).toContain("size-8");
     });
 
     it("keeps a symbolic link's name and date readable", () => {

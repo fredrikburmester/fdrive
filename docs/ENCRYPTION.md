@@ -43,7 +43,7 @@ the Swift tests write to `v1-swift.json`. Constants and API schemas are in
 ## Keys
 
 - **Account key**: an age identity per login, made in the browser when encryption is turned on
-  (Account > Encryption). `app.encryption_keys` keeps its recipient and two age files of it: one
+  (Settings > Encryption). `app.encryption_keys` keeps its recipient and two age files of it: one
   to the encryption password (age's scrypt recipient, work factor 18) and one to the recovery key,
   a second identity the person downloads and pastes back before setup finishes.
 - **Encryption password**: separate from the sign-in password, at least 12 characters, and the

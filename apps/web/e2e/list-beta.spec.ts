@@ -106,7 +106,7 @@ test("Select shows the beta list's checkbox column, and rows click as usual", as
   await expect(docsRow).toHaveAttribute("data-selected", "true");
 });
 
-test("the View menu switches between the classic and the beta list, and it sticks", async ({
+test("the File list setting picks the list design, and the View menu does not offer it", async ({
   page,
 }) => {
   await createViewFolder(page, true);
@@ -115,17 +115,54 @@ test("the View menu switches between the classic and the beta list, and it stick
   await expect(selectAll).toBeVisible();
   await expect(selectToggle).toHaveCount(0);
 
-  await page.getByRole("button", { name: "View", exact: true }).click();
-  await page.getByRole("menuitemcheckbox", { name: /New file list/ }).click();
-  await page.keyboard.press("Escape");
+  // The setting's own page is another spec's; here only what it stores matters.
+  await page.evaluate(() => localStorage.setItem("fdrive.list.design", '"beta"'));
+  await page.reload();
   await expect(selectToggle).toBeVisible();
   await expect(selectAll).toHaveCount(0);
 
-  await page.reload();
-  await expect(selectToggle).toBeVisible();
-
   await page.getByRole("button", { name: "View", exact: true }).click();
-  await page.getByRole("menuitemcheckbox", { name: /New file list/ }).click();
+  await expect(page.getByRole("menuitemradio", { name: "Tree" })).toBeVisible();
+  await expect(page.getByRole("menuitemcheckbox", { name: /New file list/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
+
+  await page.evaluate(() => localStorage.setItem("fdrive.list.design", '"classic"'));
+  await page.reload();
   await expect(selectAll).toBeVisible();
+  await expect(selectToggle).toHaveCount(0);
+});
+
+test("a highlight click in the beta list shows that file in the details panel", async ({
+  page,
+}) => {
+  await useBetaList(page);
+  await page.addInitScript(() => localStorage.setItem("fdrive.list.rowClick", '"highlight"'));
+  const path = await createViewFolder(page, true);
+  const docsRow = listing(page).locator(`[data-path="${path}/docs"]`);
+  const photoRow = listing(page).locator(`[data-path="${path}/photo.jpg"]`);
+  const panel = page.getByRole("complementary", { name: "Info" });
+  await expect(photoRow).toBeVisible();
+  await expect(panel.getByText("No selection", { exact: true })).toBeVisible();
+
+  // The row is marked, not selected, and the panel still describes it.
+  await photoRow.getByText("photo.jpg", { exact: true }).click();
+  await expect(photoRow).toHaveAttribute("data-focused", "true");
+  await expect(photoRow).toHaveAttribute("data-selected", "false");
+  await expect(panel.getByText("photo.jpg", { exact: true })).toBeVisible();
+
+  // A file inside a folder opened in place does the same.
+  await docsRow.hover();
+  await docsRow.getByRole("button", { name: "Expand docs" }).click();
+  const readme = listing(page).locator(`[data-path="${path}/docs/readme.md"]`);
+  await readme.getByText("readme.md", { exact: true }).click();
+  await expect(panel.getByText("readme.md", { exact: true })).toBeVisible();
+
+  // An earlier selection does not keep the panel: the file just clicked shows.
+  await listing(page).getByRole("button", { name: "Select", exact: true }).click();
+  await listing(page).getByRole("checkbox", { name: "Select photo.jpg" }).check();
+  await expect(photoRow).toHaveAttribute("data-selected", "true");
+  await expect(panel.getByText("photo.jpg", { exact: true })).toBeVisible();
+  await readme.getByText("readme.md", { exact: true }).click();
+  await expect(photoRow).toHaveAttribute("data-selected", "true");
+  await expect(panel.getByText("readme.md", { exact: true })).toBeVisible();
 });

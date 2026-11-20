@@ -52,7 +52,7 @@ vi.mock("@fdrive/crypto", async (original) => {
   };
 });
 
-const { EncryptionCard } = await import("./encryption-card");
+const { EncryptionSection } = await import("./encryption-section");
 
 const PASSWORD = "correct horse battery";
 let keys: crypto.NewAccountKeys;
@@ -98,7 +98,7 @@ function wrapper({ children }: { children: ReactNode }) {
 }
 
 function mount() {
-  return render(<EncryptionCard />, { wrapper });
+  return render(<EncryptionSection />, { wrapper });
 }
 
 function type(label: string, value: string) {
@@ -110,14 +110,17 @@ async function unlockedWith(status: Extract<EncryptionStatus, { enabled: true }>
   await keyStore.unlocked(keys.identity);
 }
 
-describe("EncryptionCard", () => {
-  it("stays hidden while the account loads and where encrypted folders are off", () => {
+describe("EncryptionSection", () => {
+  it("stays hidden while the account loads, and says so where encrypted folders are off", () => {
     mocks.me = undefined;
     const { container, rerender } = mount();
     expect(container.textContent).toBe("");
     mocks.me = makeMe({ encryptedFolders: false });
-    rerender(<EncryptionCard />);
-    expect(container.textContent).toBe("");
+    rerender(<EncryptionSection />);
+    expect(screen.getByText("Encrypted folders are not available")).toBeDefined();
+    expect(screen.getByText("This fdrive server does not offer them.")).toBeDefined();
+    expect(screen.queryByLabelText("Encryption password")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reset encryption" })).toBeNull();
   });
 
   it("shows a placeholder while the status loads, and a retry when it fails", () => {
@@ -130,7 +133,7 @@ describe("EncryptionCard", () => {
       isError: true,
       error: new ApiClientError("internal", "boom", 500),
     };
-    rerender(<EncryptionCard />);
+    rerender(<EncryptionSection />);
     expect(screen.getByRole("alert").textContent).toBe(
       "Something went wrong on the server. Please try again.",
     );
@@ -151,10 +154,18 @@ describe("EncryptionCard", () => {
     mocks.enable.mockResolvedValue(enabled);
     mount();
 
+    expect(screen.getByRole("heading", { level: 2, name: "Encryption" })).toBeDefined();
+    expect(screen.getByText("Folders only your own devices can open.")).toBeDefined();
     expect(screen.getByText(/the server and its administrators cannot open them/)).toBeDefined();
     expect(
       screen.getByText(/A server that has been taken over could change this web app/),
     ).toBeDefined();
+    // Every field says in one line what it is for.
+    expect(
+      screen.getByText("At least 12 characters, and not your sign-in password."),
+    ).toBeDefined();
+    expect(screen.getByText("The same password once more, to catch a typo.")).toBeDefined();
+    expect(screen.getByText("The password you sign in with, to confirm it is you.")).toBeDefined();
     const next = screen.getByRole("button", { name: "Continue" }) as HTMLButtonElement;
     type("Encryption password", "short");
     expect(screen.getByText("Use at least 12 characters.")).toBeDefined();
@@ -178,6 +189,7 @@ describe("EncryptionCard", () => {
     expect(click).toHaveBeenCalledOnce();
     const file = (await created.mock.calls[0]?.[0].text()) ?? "";
     expect(file.startsWith("# fdrive encryption recovery key\n# For: ada\n")).toBe(true);
+    expect(file).toContain("in Settings > Encryption.");
     expect(file.endsWith(`\n${recoveryIdentity}\n`)).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Copy" }));
@@ -287,6 +299,7 @@ describe("EncryptionCard", () => {
     expect(
       screen.getByText(/Enter your encryption password to open encrypted folders here/),
     ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Reset encryption" })).toBeDefined();
     type("Encryption password", PASSWORD);
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     await waitFor(() => expect(keyStore.get().status).toBe("unlocked"));
@@ -306,10 +319,13 @@ describe("EncryptionCard", () => {
     });
     mount();
 
+    expect(screen.getByText("Encryption is on, and this browser holds your key.")).toBeDefined();
     const fingerprint = await crypto.keyFingerprint(keys.recipient);
     expect(await screen.findByText(fingerprint)).toBeDefined();
-    expect(screen.getByText("Ada's MacBook")).toBeDefined();
-    expect(screen.getByText("Paired 2026-11-02")).toBeDefined();
+    const row = screen.getByRole("row", { name: /Ada's MacBook/ });
+    expect(within(row).getByText("Ada's MacBook")).toBeDefined();
+    expect(within(row).getByText("2026-11-02")).toBeDefined();
+    expect(screen.getByRole("columnheader", { name: "Paired" })).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Ada's MacBook" }));
     const dialog = await screen.findByRole("alertdialog");
@@ -330,7 +346,9 @@ describe("EncryptionCard", () => {
   it("says when no Mac holds the key", async () => {
     await unlockedWith(enabled);
     mount();
+    expect(screen.getByRole("heading", { level: 2, name: "Paired Macs" })).toBeDefined();
     expect(screen.getByText("No Mac holds your key.")).toBeDefined();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("changes the encryption password without sending it", async () => {
@@ -392,7 +410,7 @@ describe("EncryptionCard", () => {
       isError: true,
       error: new ApiClientError("unauthorized", "x", 401),
     };
-    view.rerender(<EncryptionCard />);
+    view.rerender(<EncryptionSection />);
     expect(within(dialog).getByText("That sign-in password is not right.")).toBeDefined();
 
     const options = mocks.reset.mutate.mock.calls[0]?.[1] as { onSuccess: () => void };
@@ -413,7 +431,7 @@ describe("EncryptionCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset encryption" }));
     dialog = await screen.findByRole("alertdialog");
     mocks.reset = { ...mocks.reset, isPending: true };
-    view.rerender(<EncryptionCard />);
+    view.rerender(<EncryptionSection />);
     expect(within(dialog).getByRole("button", { name: "Resetting…" })).toBeDefined();
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.getByRole("alertdialog")).toBeDefined();

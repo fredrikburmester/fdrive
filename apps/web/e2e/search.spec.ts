@@ -27,6 +27,29 @@ test("Cmd+K opens the panel and a filename query lists readme.md under Files", a
   await expect(dialog.getByText("/docs/readme.md").first()).toBeVisible();
 });
 
+test("the header search button shows only while browsing files; Cmd+K opens search anywhere", async ({
+  page,
+}) => {
+  await page.goto("/files/docs");
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toBeVisible();
+
+  // Trash has no header search: it would look through files, not through Trash.
+  await page.goto("/trash");
+  await expect(page.getByRole("heading", { name: "Trash", exact: true })).toBeVisible();
+  // The count arrives with the listing, so the page (and its shortcut listener) has hydrated.
+  await expect(page.getByText(/^\d+ items?$/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
+
+  await page.keyboard.press("Control+k");
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER).fill("readme");
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page).toHaveURL(/\/trash$/);
+});
+
 test("a content query for a word in the readme shows a highlighted content match", async ({
   page,
 }) => {
@@ -530,6 +553,16 @@ test("a saved search reopens from the sidebar with its filter and is removed fro
     "aria-pressed",
     "true",
   );
+  await expect(dialog.getByText("readme.md").first()).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+
+  // A page without the header search button still opens a saved search from the sidebar.
+  await page.goto("/shares");
+  await expect(saved).toBeVisible();
+  await expect(page.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
+  await saved.click();
+  await expect(page.getByPlaceholder(SEARCH_INPUT_PLACEHOLDER)).toHaveValue("readme");
   await expect(dialog.getByText("readme.md").first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();

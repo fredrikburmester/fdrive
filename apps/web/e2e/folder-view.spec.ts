@@ -109,7 +109,7 @@ test("rename carries subtree pins, and account reset removes them", async ({ pag
   ).toBe(true);
   await page.goto(`/files${renamed}/child`);
   await expectMode(page, "Tree");
-  await page.goto("/account");
+  await page.goto("/account/browsing");
   await page.getByRole("button", { name: "Reset all folder views", exact: true }).click();
   await expect(
     page.getByText("All folders now use the default view and sort.", { exact: true }),
@@ -188,7 +188,7 @@ test("favorites and tags follow the global default without inheriting a folder p
       (await page.request.put("/api/v1/fs/tags", { data: { path, tagIds: [tag.id] } })).ok(),
     ).toBe(true);
   }
-  await page.goto("/account");
+  await page.goto("/account/browsing");
   await page
     .getByRole("group", { name: "Default view", exact: true })
     .getByRole("button", { name: "Grid", exact: true })
@@ -198,7 +198,7 @@ test("favorites and tags follow the global default without inheriting a folder p
   await page.goto(`/tags/${tag.id}`);
   await expect(page.locator('[data-slot="file-grid"]')).toBeVisible();
   await expect(page.getByRole("button", { name: "View", exact: true })).toHaveCount(0);
-  await page.goto("/account");
+  await page.goto("/account/browsing");
   await page
     .getByRole("group", { name: "Default view", exact: true })
     .getByRole("button", { name: "Tree", exact: true })

@@ -14,6 +14,7 @@ vi.mock("@/lib/api/public-url-queries", () => ({
   useUpdatePublicUrl: () => mocks.update(),
 }));
 const { PublicUrlCard, PublicUrlReview } = await import("./public-url-card");
+const { SystemCardSurface } = await import("./system-section");
 beforeEach(() => {
   mocks.query.mockReturnValue({ data: { revision: 2, url: null }, refetch: mocks.refetch });
   mocks.update.mockReturnValue({
@@ -88,6 +89,61 @@ it("preserves errors and lets the owner reload the saved address", () => {
   fireEvent.click(screen.getByRole("button", { name: "Reload saved address" }));
   expect(mocks.reset).toHaveBeenCalledOnce();
   expect(mocks.refetch).toHaveBeenCalledOnce();
+});
+
+it("is a flat row on System > General, with the field and its Save side by side", () => {
+  const { container } = render(<PublicUrlCard />);
+
+  const row = container.querySelector('[data-slot="setting-row"]') as HTMLElement;
+  expect(row.contains(field())).toBe(true);
+  expect(row.contains(screen.getByRole("button", { name: "Save server address" }))).toBe(true);
+  expect(container.querySelector('[data-slot="card"]')).toBeNull();
+  expect(screen.getByText(/Behind an HTTPS reverse proxy/)).toBeTruthy();
+});
+
+it("stays a card in the setup walkthrough, through loading, a bad address and a failed read", () => {
+  const next = vi.fn();
+  const view = render(
+    <SystemCardSurface>
+      <PublicUrlCard onContinue={next} />
+    </SystemCardSurface>,
+  );
+  expect(view.container.querySelector('[data-slot="card"]')).not.toBeNull();
+  expect(view.container.querySelector('[data-slot="setting-row"]')).toBeNull();
+  expect(screen.getByText(/Behind an HTTPS reverse proxy/)).toBeTruthy();
+  fireEvent.change(field(), { target: { value: "https://drive.example/files" } });
+  expect(screen.getByRole("alert").textContent).toContain("without a path");
+  expect(save().disabled).toBe(true);
+  view.unmount();
+
+  mocks.query.mockReturnValue({ data: undefined, refetch: mocks.refetch });
+  const loading = render(
+    <SystemCardSurface>
+      <PublicUrlCard onContinue={next} />
+    </SystemCardSurface>,
+  );
+  expect(screen.getByRole("status").textContent).toBe("Loading server address…");
+  loading.unmount();
+
+  mocks.query.mockReturnValue({
+    isError: true,
+    error: new Error("offline"),
+    refetch: mocks.refetch,
+  });
+  render(
+    <SystemCardSurface>
+      <PublicUrlCard onContinue={next} />
+    </SystemCardSurface>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Continue without changing the address" }));
+  expect(next).toHaveBeenCalledOnce();
+});
+
+it("says it is loading on the page too", () => {
+  mocks.query.mockReturnValue({ data: undefined, refetch: mocks.refetch });
+  render(<PublicUrlCard />);
+
+  expect(screen.getByRole("status").textContent).toBe("Loading server address…");
 });
 
 it("reviews the saved address", () => {

@@ -22,6 +22,7 @@ import {
   useState,
 } from "react";
 import { toast } from "sonner";
+import { ChatToggle } from "@/components/ai/chat/chat-toggle";
 import { OrganizeActivity } from "@/components/ai/organize-activity";
 import { OrganizeSheet } from "@/components/ai/organize-sheet";
 import { NewFileDialog } from "@/components/editor/new-file-dialog";
@@ -59,7 +60,6 @@ import {
 } from "@/lib/files/download";
 import { buildDownloadDeps } from "@/lib/files/download-deps";
 import { useFolderView } from "@/lib/files/folder-view-queries";
-import { readInspectorOpen, writeInspectorOpen } from "@/lib/files/inspector-visibility";
 import { keyToAction } from "@/lib/files/keyboard";
 import { isLink } from "@/lib/files/links";
 import {
@@ -90,6 +90,7 @@ import { resolveRowClick } from "@/lib/files/row-click";
 import {
   contextEntries,
   EMPTY_SELECTION,
+  inspectedEntries,
   type SelectionAction,
   type SelectionState,
   selectionOf,
@@ -114,6 +115,7 @@ import {
 } from "@/lib/files/type-ahead";
 import { latestTrashIds, offerUndo, undoLatest } from "@/lib/files/undo";
 import { useGridSize } from "@/lib/files/use-grid-size";
+import { useInspectorOpen } from "@/lib/files/use-inspector-open";
 import { useListDensity } from "@/lib/files/use-list-density";
 import { useRowClickAction } from "@/lib/files/use-row-click";
 import {
@@ -321,6 +323,15 @@ export function FileBrowser({
     onSelectionChange?.(selectedEntries);
   }, [selectedEntries, onSelectionChange]);
 
+  // The row a "highlight" click last marked, which the details panel shows even while an
+  // earlier selection remains: a click on a file always puts that file in the panel.
+  const [highlightedPath, setHighlightedPath] = useState<string | null>(null);
+  // What the details panel describes: the selection or the highlighted row.
+  const detailsEntries = useMemo(
+    () => inspectedEntries(displayEntries, selection, highlightedPath),
+    [displayEntries, selection, highlightedPath],
+  );
+
   const mkdir = useMkdir();
   const rename = useRename();
   const moveMany = useMoveMany();
@@ -358,15 +369,7 @@ export function FileBrowser({
   // never show at once.
   const compressDialogState =
     destinationPicker?.mode === "compressDestination" ? null : compressState;
-  const [detailsOpen, setDetailsOpenState] = useState(false);
-  useEffect(() => {
-    setDetailsOpenState(readInspectorOpen(window.localStorage));
-  }, []);
-
-  function setDetailsOpen(open: boolean) {
-    setDetailsOpenState(open);
-    writeInspectorOpen(window.localStorage, open);
-  }
+  const [detailsOpen, setDetailsOpen] = useInspectorOpen();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<DirectoryInputElement | null>(null);
@@ -527,6 +530,19 @@ export function FileBrowser({
     );
   }
 
+  /**
+   * Opening the panel on one file is the explicit Info action history records as "Viewed info".
+   * A panel that is simply open, as it is by default, records nothing while the person clicks
+   * through a folder.
+   */
+  function handleToggleDetails() {
+    const only = detailsEntries.length === 1 ? detailsEntries[0] : undefined;
+    if (!detailsOpen && only !== undefined) {
+      void activityGesture("file.inspect", only.path)().catch(() => undefined);
+    }
+    setDetailsOpen(!detailsOpen);
+  }
+
   function handleEntryClick(entry: FsEntry, modifiers: ClickModifierKeys) {
     const intent = resolveRowClick(rowClickAction, modifiers);
     if (intent.kind === "open") {
@@ -534,9 +550,11 @@ export function FileBrowser({
       return;
     }
     if (intent.kind === "focus") {
+      setHighlightedPath(entry.path);
       dispatchSelection({ type: "focus", path: entry.path });
       return;
     }
+    setHighlightedPath(null);
     dispatchSelection({ type: "click", path: entry.path, modifiers: intent.modifiers });
   }
 
@@ -1150,7 +1168,8 @@ export function FileBrowser({
             onUploadFiles={handleUploadFiles}
             onUploadFolder={handleUploadFolder}
             detailsOpen={detailsOpen}
-            onToggleDetails={() => setDetailsOpen(!detailsOpen)}
+            onToggleDetails={handleToggleDetails}
+            chatSlot={<ChatToggle />}
             selection={selectionOf(selectedEntries)}
             indexed={thumbnailsHere}
             onClearSelection={() => dispatchSelection({ type: "clear" })}
@@ -1327,7 +1346,7 @@ export function FileBrowser({
         </div>
         {detailsOpen && (
           <Inspector
-            entries={selectedEntries}
+            entries={detailsEntries}
             onClose={() => setDetailsOpen(false)}
             indexed={thumbnailsHere}
           />

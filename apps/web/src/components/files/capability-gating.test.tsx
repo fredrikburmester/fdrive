@@ -126,6 +126,47 @@ it("toolbar offers icon size in grid view and density in list view", async () =>
   expect(screen.queryByText("Icon size")).toBeNull();
 });
 
+it("toolbar lists sorting right under the view mode, before thumbnails and density", async () => {
+  const pin = {
+    pinned: false,
+    disabled: false,
+    error: false,
+    retry: vi.fn(),
+    useDefault: vi.fn(),
+    makeDefault: vi.fn(),
+  };
+  render(<FilesToolbarActions {...toolbarProps({ folderView: pin, folderSort: pin })} />);
+
+  fireEvent.click(screen.getByTitle("View"));
+  const menu = (await screen.findByRole("menuitemradio", { name: /Tree/ })).closest(
+    '[role="menu"]',
+  );
+  const text = menu?.textContent ?? "";
+  const positions = [
+    "Tree",
+    "Use default view",
+    "Sort by",
+    "Descending",
+    "Use default sort",
+    "Show thumbnails",
+    "Density",
+    "Compact",
+  ].map((label) => text.indexOf(label));
+  expect(positions.every((position) => position >= 0)).toBe(true);
+  expect(positions).toEqual([...positions].sort((left, right) => left - right));
+});
+
+it("toolbar leaves the file list design to Settings, not the View menu", async () => {
+  render(<FilesToolbarActions {...toolbarProps()} />);
+
+  fireEvent.click(screen.getByTitle("View"));
+  await screen.findByRole("menuitemradio", { name: /Tree/ });
+  expect(screen.queryByText(/New file list/)).toBeNull();
+  expect(screen.getAllByRole("menuitemcheckbox").map((item) => item.textContent)).toEqual([
+    expect.stringContaining("Show thumbnails"),
+  ]);
+});
+
 it("offers Organize in the menu and selection bar only when AI is set up", async () => {
   const onAction = vi.fn();
   render(

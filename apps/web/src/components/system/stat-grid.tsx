@@ -15,14 +15,24 @@ export interface StatGridProps {
   className?: string;
 }
 
-/** The row of `StatCard` counts every System page opens with. */
+/**
+ * The counts a System page reports, as a dense grid of cells divided by
+ * hairlines. It belongs inside a `SystemSection`, edge to edge like a row.
+ */
 export function StatGrid({ stats, columns, className }: StatGridProps) {
   const resolved = columns ?? (Math.min(Math.max(stats.length, 2), 5) as 2 | 3 | 4 | 5);
   return (
-    <div className={cn("grid gap-3", COLUMN_CLASSES[resolved], className)}>
+    <dl
+      data-slot="stat-grid"
+      className={cn(
+        "grid overflow-hidden border-border/60 border-b last:border-b-0",
+        COLUMN_CLASSES[resolved],
+        className,
+      )}
+    >
       {stats.map((stat) => (
         <StatCard key={stat.label} {...stat} />
       ))}
-    </div>
+    </dl>
   );
 }

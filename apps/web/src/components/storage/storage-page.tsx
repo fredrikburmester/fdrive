@@ -8,11 +8,13 @@ import type {
 } from "@fdrive/contracts";
 import { baseName, extensionOf, mimeFromExtension, parentPath } from "@fdrive/core";
 import { useQueryClient } from "@tanstack/react-query";
+import { cn } from "cn";
 import {
   FileIcon as FileGenericIcon,
   FileTextIcon,
   FilmIcon,
   FolderOpenIcon,
+  HardDriveIcon,
   ImageIcon,
   type LucideIcon,
   MusicIcon,
@@ -20,12 +22,24 @@ import {
 } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { DeleteDialog } from "@/components/files/delete-dialog";
 import { FileIcon } from "@/components/files/file-icon";
 import { PageHeader } from "@/components/shell/page-header";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableGroupRow,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageBar,
+  PageBody,
+  PageEmpty,
+  PageSection,
+} from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -44,55 +58,60 @@ const KINDS: Readonly<Record<StorageKind, { label: string; Icon: LucideIcon }>> 
   other: { label: "Other", Icon: FileGenericIcon },
 };
 
-/** Used space against the limit, when there is one, and how it splits by kind. */
-function UsageCard({ usage }: { usage: StorageUsageResponse }) {
+/**
+ * The folder column where the section is narrow (a phone, or a small window beside the
+ * sidebar): kept in the table at no width instead of removed, so a group row's span covers the
+ * same four columns at every size.
+ */
+const FOLDER_COLUMN = "@max-xl:invisible @max-xl:w-0 @max-xl:px-0";
+
+/** A usage line: as tall as a file row, with a hairline under it. */
+const USAGE_ROW = "flex min-h-9 items-center gap-3 border-border/60 border-b px-3 text-sm";
+
+/** How the used space splits by kind, and how much of the limit it takes when there is one. */
+function UsageSection({ usage }: { usage: StorageUsageResponse }) {
   const { formatBytes } = useFormatters();
   const { used, limit } = usage;
-  const summary =
-    limit === null
-      ? `${formatBytes(used)} used`
-      : `${formatBytes(used)} of ${formatBytes(limit)} used`;
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <CardTitle>Storage</CardTitle>
-        <CardDescription>
-          {usage.indexed
-            ? summary
-            : "Storage use comes from the search index, which does not cover your files yet."}
-        </CardDescription>
-      </CardHeader>
-      {usage.indexed ? (
-        <CardContent className="flex flex-col gap-4">
-          {limit === null ? null : (
-            <Progress value={Math.min(100, (used / limit) * 100)} aria-label="Storage used" />
-          )}
-          <ul className="flex flex-col gap-2.5">
-            {usage.kinds.map(({ kind, bytes }) => {
-              const { label, Icon } = KINDS[kind];
-              return (
-                <li key={kind} className="flex items-center gap-3 text-sm">
-                  <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span className="w-24 shrink-0">{label}</span>
-                  <Progress
-                    className="flex-1"
-                    value={used === 0 ? 0 : (bytes / used) * 100}
-                    aria-label={`${label} share`}
-                  />
-                  <span className="w-20 shrink-0 text-right tabular-nums text-muted-foreground">
-                    {formatBytes(bytes)}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-          <p className="text-xs text-muted-foreground">
-            Counted from the search index, Trash included, so recent changes can take a moment to
-            show and the limit is approximate.
-          </p>
-        </CardContent>
-      ) : null}
-    </Card>
+    <PageSection title="Usage" description="What your folder holds, by kind of file.">
+      <ul>
+        {limit === null ? null : (
+          <li className={USAGE_ROW}>
+            <HardDriveIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="w-24 shrink-0">Limit</span>
+            <Progress
+              className="flex-1"
+              value={Math.min(100, (used / limit) * 100)}
+              aria-label="Storage used"
+            />
+            <span className="w-20 shrink-0 text-right text-muted-foreground tabular-nums">
+              {formatBytes(limit)}
+            </span>
+          </li>
+        )}
+        {usage.kinds.map(({ kind, bytes }) => {
+          const { label, Icon } = KINDS[kind];
+          return (
+            <li key={kind} className={USAGE_ROW}>
+              <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <span className="w-24 shrink-0">{label}</span>
+              <Progress
+                className="flex-1"
+                value={used === 0 ? 0 : (bytes / used) * 100}
+                aria-label={`${label} share`}
+              />
+              <span className="w-20 shrink-0 text-right text-muted-foreground tabular-nums">
+                {formatBytes(bytes)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="px-3 py-2.5 text-muted-foreground text-xs">
+        Counted from the search index, Trash included, so recent changes can take a moment to show
+        and the limit is approximate.
+      </p>
+    </PageSection>
   );
 }
 
@@ -103,53 +122,93 @@ interface FileRowProps {
   readonly onRemove?: (path: string) => void;
 }
 
-/** One file the page lists: where it is, its size, a way to it and, for a duplicate, out. */
+/**
+ * One file the page lists: its name, the folder it is in, its size, a way to it and, for a
+ * duplicate, out. A narrow page has no room for the folder column, so there the folder sits
+ * under the name.
+ */
 function FileRow({ path, size, onRemove }: FileRowProps) {
   const { formatBytes } = useFormatters();
   const name = baseName(path);
   const ext = extensionOf(name);
+  const folder = parentPath(path);
   return (
-    <li className="flex min-w-0 items-center gap-3 py-2 text-sm">
-      <FileIcon kind="file" ext={ext} mime={mimeFromExtension(ext)} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium">{name}</span>
-        <span className="truncate text-xs text-muted-foreground">{parentPath(path)}</span>
-      </div>
-      <span className="shrink-0 tabular-nums text-muted-foreground">{formatBytes(size)}</span>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              nativeButton={false}
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`Reveal ${name} in folder`}
-              render={<Link href={revealHref(path) as Route} />}
-            />
-          }
-        >
-          <FolderOpenIcon />
-        </TooltipTrigger>
-        <TooltipContent>Reveal in folder</TooltipContent>
-      </Tooltip>
-      {onRemove === undefined ? null : (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Move ${name} to Trash`}
-                onClick={() => onRemove(path)}
-              />
-            }
-          >
-            <Trash2Icon />
-          </TooltipTrigger>
-          <TooltipContent>Move to Trash</TooltipContent>
-        </Tooltip>
-      )}
-    </li>
+    <DataTableRow data-slot="storage-file">
+      <DataTableCell className="whitespace-normal">
+        <div className="flex min-w-0 items-center gap-2">
+          <FileIcon kind="file" ext={ext} mime={mimeFromExtension(ext)} />
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate">{name}</span>
+            <span className="truncate text-muted-foreground text-xs @xl:hidden">{folder}</span>
+          </div>
+        </div>
+      </DataTableCell>
+      <DataTableCell className={cn("truncate text-muted-foreground", FOLDER_COLUMN)}>
+        {folder}
+      </DataTableCell>
+      <DataTableCell className="text-right text-muted-foreground text-xs tabular-nums">
+        {formatBytes(size)}
+      </DataTableCell>
+      <DataTableCell>
+        <div className="flex items-center justify-end gap-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  nativeButton={false}
+                  variant="ghost"
+                  size="icon-sm"
+                  className="max-md:size-11"
+                  aria-label={`Reveal ${name} in folder`}
+                  render={<Link href={revealHref(path) as Route} />}
+                />
+              }
+            >
+              <FolderOpenIcon />
+            </TooltipTrigger>
+            <TooltipContent>Reveal in folder</TooltipContent>
+          </Tooltip>
+          {onRemove === undefined ? null : (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="max-md:size-11"
+                    aria-label={`Move ${name} to Trash`}
+                    onClick={() => onRemove(path)}
+                  />
+                }
+              >
+                <Trash2Icon />
+              </TooltipTrigger>
+              <TooltipContent>Move to Trash</TooltipContent>
+            </Tooltip>
+          )}
+        </div>
+      </DataTableCell>
+    </DataTableRow>
+  );
+}
+
+/**
+ * The columns `FileRow` fills, lined up in both of the page's tables. On a phone the last one
+ * is as wide as the row's buttons: one to reveal a file, and a second where a copy can also go
+ * to Trash.
+ */
+function FileTableHeader({ removable = false }: { removable?: boolean }) {
+  return (
+    <DataTableHeader>
+      <DataTableRow>
+        <DataTableHead>Name</DataTableHead>
+        <DataTableHead className={cn("w-2/5", FOLDER_COLUMN)}>Folder</DataTableHead>
+        <DataTableHead className="w-24 text-right">Size</DataTableHead>
+        <DataTableHead className={cn("w-20", removable ? "max-md:w-28" : "max-md:w-16")}>
+          <span className="sr-only">Actions</span>
+        </DataTableHead>
+      </DataTableRow>
+    </DataTableHeader>
   );
 }
 
@@ -172,7 +231,7 @@ function entryAt(path: string): FsEntry {
  * Groups of identical files, each copy with a way to it and to Trash. A copy
  * removed here leaves at once, before the index catches up.
  */
-function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicates[] }) {
+function DuplicatesSection({ groups: indexed }: { groups: readonly StorageDuplicates[] }) {
   const { formatBytes } = useFormatters();
   const queryClient = useQueryClient();
   const remove = useDelete();
@@ -195,31 +254,32 @@ function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicate
   }
 
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <CardTitle>Duplicates</CardTitle>
-        <CardDescription>
-          {groups.length === 0
-            ? "No identical files in your folder."
-            : "Identical files in your folder, most wasted space first."}
-        </CardDescription>
-      </CardHeader>
+    <PageSection
+      data-section="duplicates"
+      title="Duplicates"
+      description={
+        groups.length === 0
+          ? "No identical files in your folder."
+          : "Identical files in your folder, most wasted space first."
+      }
+    >
       {groups.length === 0 ? null : (
-        <CardContent className="flex flex-col gap-5">
-          {groups.map((group) => (
-            <section key={group.paths.join("\n")} className="flex flex-col gap-1">
-              <h3 className="text-xs text-muted-foreground">
-                {group.paths.length} copies, {formatBytes(group.size * (group.paths.length - 1))}{" "}
-                wasted
-              </h3>
-              <ul className="flex flex-col divide-y">
+        <DataTable className="table-fixed">
+          <FileTableHeader removable />
+          <DataTableBody>
+            {groups.map((group) => (
+              <Fragment key={group.paths.join("\n")}>
+                <DataTableGroupRow colSpan={4}>
+                  {group.paths.length} copies, {formatBytes(group.size * (group.paths.length - 1))}{" "}
+                  wasted
+                </DataTableGroupRow>
                 {group.paths.map((path) => (
                   <FileRow key={path} path={path} size={group.size} onRemove={setRemoving} />
                 ))}
-              </ul>
-            </section>
-          ))}
-        </CardContent>
+              </Fragment>
+            ))}
+          </DataTableBody>
+        </DataTable>
       )}
       <DeleteDialog
         entries={removing === null ? [] : [entryAt(removing)]}
@@ -229,45 +289,73 @@ function DuplicatesCard({ groups: indexed }: { groups: readonly StorageDuplicate
         }}
         onConfirm={confirm}
       />
-    </Card>
+    </PageSection>
   );
 }
 
 /**
  * `/storage`: how much the signed-in login's own folder holds, by kind and
  * against its storage limit, its largest files and its duplicates, all from
- * the index.
+ * the index. Laid out like the file list: a bar with the total, then flat
+ * sections of rows across the whole width.
  */
 export function StoragePage() {
+  const { formatBytes } = useFormatters();
   const { data, isLoading, isError, error } = useStorageUsage();
   return (
     <>
-      <PageHeader breadcrumbs={<span className="text-sm font-medium">Storage</span>} />
-      <div className="flex flex-1 flex-col items-center gap-4 p-6">
-        {isLoading ? <Skeleton className="h-64 w-full max-w-2xl" /> : null}
+      <PageHeader breadcrumbs={<h1 className="truncate font-medium text-sm">Storage</h1>} />
+      <PageBody>
+        <PageBar>
+          {data?.indexed === true ? (
+            <span className="text-foreground">
+              {data.limit === null
+                ? `${formatBytes(data.used)} used`
+                : `${formatBytes(data.used)} of ${formatBytes(data.limit)} used`}
+            </span>
+          ) : null}
+          <p>What your own folder holds.</p>
+        </PageBar>
+        {isLoading ? (
+          <div className="flex flex-col gap-2 px-3 py-2.5">
+            <Skeleton className="h-5 w-full" />
+            <Skeleton className="h-5 w-full" />
+            <Skeleton className="h-5 w-2/3" />
+          </div>
+        ) : null}
         {isError ? (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="px-3 py-2.5 text-destructive text-sm">
             {describeApiError(error)}
           </p>
         ) : null}
-        {data === undefined ? null : <UsageCard usage={data} />}
-        {data?.indexed === true && data.largest.length > 0 ? (
-          <Card className="w-full max-w-2xl">
-            <CardHeader>
-              <CardTitle>Largest files</CardTitle>
-              <CardDescription>Your biggest files outside Trash, largest first.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="flex flex-col divide-y">
-                {data.largest.map((file) => (
-                  <FileRow key={file.path} path={file.path} size={file.size} />
-                ))}
-              </ul>
-            </CardContent>
-          </Card>
-        ) : null}
-        {data?.indexed === true ? <DuplicatesCard groups={data.duplicates} /> : null}
-      </div>
+        {data === undefined ? null : data.indexed ? (
+          <>
+            <UsageSection usage={data} />
+            {data.largest.length > 0 ? (
+              <PageSection
+                title="Largest files"
+                description="Your biggest files outside Trash, largest first."
+              >
+                <DataTable className="table-fixed">
+                  <FileTableHeader />
+                  <DataTableBody>
+                    {data.largest.map((file) => (
+                      <FileRow key={file.path} path={file.path} size={file.size} />
+                    ))}
+                  </DataTableBody>
+                </DataTable>
+              </PageSection>
+            ) : null}
+            <DuplicatesSection groups={data.duplicates} />
+          </>
+        ) : (
+          <PageEmpty
+            icon={HardDriveIcon}
+            title="No storage numbers yet"
+            description="Storage use comes from the search index, which does not cover your files yet."
+          />
+        )}
+      </PageBody>
     </>
   );
 }

@@ -6,7 +6,6 @@ import { AlertCircle, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Sheet,
   SheetContent,
@@ -39,31 +38,33 @@ export function ProcessingFailures({
     refetchInterval: 5000,
   });
   return (
-    <Card id="processing-failures" className="scroll-mt-6">
-      <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
-        <div className="min-w-0 space-y-1">
-          <p className="flex items-center gap-2 text-sm font-medium">
-            {summary.data?.openCount ? <AlertCircle className="size-4 text-destructive" /> : null}
-            {summary.isError
-              ? "Failure history unavailable"
-              : summary.isPending
-                ? "Loading failure history…"
-                : `${summary.data.openCount.toLocaleString()} unresolved file${summary.data.openCount === 1 ? "" : "s"}`}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Failure details survive restarts. Resolved history is kept for up to 30 days.
-          </p>
-        </div>
-        <Button variant="outline" onClick={() => setOpen(true)}>
-          View failures
-        </Button>
-      </CardContent>
+    <div
+      id="processing-failures"
+      data-slot="processing-failures"
+      className="flex scroll-mt-14 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-border border-b px-3 py-2"
+    >
+      <div className="min-w-0">
+        <p className="flex items-center gap-2 font-medium text-sm">
+          {summary.data?.openCount ? <AlertCircle className="size-4 text-destructive" /> : null}
+          {summary.isError
+            ? "Failure history unavailable"
+            : summary.isPending
+              ? "Loading failure history…"
+              : `${summary.data.openCount.toLocaleString()} unresolved file${summary.data.openCount === 1 ? "" : "s"}`}
+        </p>
+        <p className="text-muted-foreground text-xs">
+          Failure details survive restarts. Resolved history is kept for up to 30 days.
+        </p>
+      </div>
+      <Button variant="outline" size="sm" className="max-md:min-h-11" onClick={() => setOpen(true)}>
+        View failures
+      </Button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
           {open ? <FailureList feature={feature} retryEnabled={retryEnabled} /> : null}
         </SheetContent>
       </Sheet>
-    </Card>
+    </div>
   );
 }
 

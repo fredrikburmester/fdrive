@@ -128,7 +128,7 @@ export function DesktopConnect({
                 {request.data.supportsWrites
                   ? "Write access lets this Mac change files where the storage supports safe writes. "
                   : "Read access only. This Mac cannot change your remote files. "}
-                Connections expire after one year and can be revoked from Account → API tokens.
+                Connections expire after one year and can be revoked from Settings → API tokens.
               </p>
               {delivery === "unlocked" && (
                 <p className="text-sm text-muted-foreground">

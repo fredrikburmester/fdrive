@@ -3,6 +3,15 @@
 import type { IndexerSettingsValue } from "@fdrive/contracts";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  SettingRow,
+} from "@/components/shell/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,14 +24,6 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { describeApiError } from "@/lib/api/errors";
 import {
   useClearIndex,
@@ -48,7 +49,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemLine, SystemSection } from "./system-section";
 
 interface SettingsDraft {
   scanIntervalSeconds: string;
@@ -166,12 +167,18 @@ export function IndexerPage() {
           <Button
             type="button"
             variant="outline"
+            size="sm"
             disabled={unavailable || busy}
             onClick={() => setClearOpen(true)}
           >
             Clear index
           </Button>
-          <Button type="button" onClick={() => setReindexOpen(true)} disabled={unavailable || busy}>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => setReindexOpen(true)}
+            disabled={unavailable || busy}
+          >
             Reindex
           </Button>
           <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
@@ -180,74 +187,77 @@ export function IndexerPage() {
       }
     >
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <SystemLine>Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection
-            title="Status"
-            description={
-              data.configured
-                ? "The indexer's internal API and its file watcher."
-                : "Not configured: set FDRIVE_INDEXER_URL."
-            }
-            contentClassName="flex-row flex-wrap items-center gap-3"
-          >
-            {status !== null ? <StatusBadge status={status} /> : null}
-            {data.health !== undefined ? (
-              <Badge variant={data.health.watcher ? "secondary" : "outline"}>
-                Watcher {data.health.watcher ? "on" : "off"}
-              </Badge>
+          <SystemSection title="Status">
+            <SettingRow
+              label="Indexer"
+              description={
+                data.configured
+                  ? "The indexer's internal API and its file watcher."
+                  : "Not configured: set FDRIVE_INDEXER_URL."
+              }
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                {status !== null ? <StatusBadge status={status} /> : null}
+                {data.health !== undefined ? (
+                  <Badge variant={data.health.watcher ? "secondary" : "outline"}>
+                    Watcher {data.health.watcher ? "on" : "off"}
+                  </Badge>
+                ) : null}
+              </div>
+            </SettingRow>
+            {lastScan !== null ? (
+              <SettingRow label="Last scan">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
+                  <span>
+                    started {formatRelativeTime(new Date(lastScan.startedAt), new Date())}
+                  </span>
+                  <span>
+                    {lastScan.filesSeen} seen · {lastScan.filesChanged} changed ·{" "}
+                    {lastScan.filesDeleted} deleted · {lastScan.errors} errors
+                  </span>
+                </div>
+              </SettingRow>
             ) : null}
+            <MaintenanceProgress title="Index clear" job={stats?.indexClear} />
           </SystemSection>
 
-          <StatGrid
-            stats={[
-              { label: "Files", value: totalFiles.toLocaleString() },
-              { label: "With text", value: withText.toLocaleString() },
-              { label: "Chunks", value: (stats?.chunks ?? 0).toLocaleString() },
-              { label: "Embedded", value: (stats?.chunksEmbedded ?? 0).toLocaleString() },
-              { label: "Queue depth", value: (stats?.queueDepth ?? 0).toLocaleString() },
-            ]}
-          />
-
-          <MaintenanceProgress title="Index clear" job={stats?.indexClear} />
+          <SystemSection title="Index">
+            <StatGrid
+              stats={[
+                { label: "Files", value: totalFiles.toLocaleString() },
+                { label: "With text", value: withText.toLocaleString() },
+                { label: "Chunks", value: (stats?.chunks ?? 0).toLocaleString() },
+                { label: "Embedded", value: (stats?.chunksEmbedded ?? 0).toLocaleString() },
+                { label: "Queue depth", value: (stats?.queueDepth ?? 0).toLocaleString() },
+              ]}
+            />
+          </SystemSection>
 
           {Object.keys(counts).length > 0 ? (
             <SystemSection title="Counts by status">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Files</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <DataTable>
+                <DataTableHeader>
+                  <DataTableRow>
+                    <DataTableHead>Status</DataTableHead>
+                    <DataTableHead className="text-right">Files</DataTableHead>
+                  </DataTableRow>
+                </DataTableHeader>
+                <DataTableBody>
                   {Object.entries(counts).map(([status_, count]) => (
-                    <TableRow key={status_}>
-                      <TableCell>{status_}</TableCell>
-                      <TableCell className="text-right tabular-nums">
+                    <DataTableRow key={status_}>
+                      <DataTableCell>{status_}</DataTableCell>
+                      <DataTableCell className="text-right text-muted-foreground tabular-nums">
                         {count.toLocaleString()}
-                      </TableCell>
-                    </TableRow>
+                      </DataTableCell>
+                    </DataTableRow>
                   ))}
-                </TableBody>
-              </Table>
-            </SystemSection>
-          ) : null}
-
-          {lastScan !== null ? (
-            <SystemSection title="Last scan">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-                <span className="text-muted-foreground">
-                  started {formatRelativeTime(new Date(lastScan.startedAt), new Date())}
-                </span>
-                <span className="text-muted-foreground">
-                  {lastScan.filesSeen} seen · {lastScan.filesChanged} changed ·{" "}
-                  {lastScan.filesDeleted} deleted · {lastScan.errors} errors
-                </span>
-              </div>
+                </DataTableBody>
+              </DataTable>
             </SystemSection>
           ) : null}
         </>

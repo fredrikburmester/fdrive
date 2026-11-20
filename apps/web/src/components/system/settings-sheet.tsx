@@ -33,7 +33,7 @@ export function SystemSettingsButton({
   disabled?: boolean;
 }) {
   return (
-    <Button type="button" variant="outline" disabled={disabled} onClick={onClick}>
+    <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={onClick}>
       <Settings2 />
       Settings
     </Button>

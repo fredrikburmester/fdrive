@@ -8,6 +8,7 @@ import {
 } from "@fdrive/contracts";
 import { useState } from "react";
 import { toast } from "sonner";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
@@ -37,7 +38,7 @@ import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemLine, SystemNote, SystemSection } from "./system-section";
 
 const PROVIDER_ITEMS = AiProviderSchema.options.map((value) => ({
   value,
@@ -112,26 +113,16 @@ export function AiSystemPage() {
       {query.isError ? (
         <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : saved === undefined || status === null ? (
-        <p role="status">Loading AI settings…</p>
+        <SystemLine role="status">Loading AI settings…</SystemLine>
       ) : (
         <>
           <SystemSection
             title="Status"
-            description={
-              status.tone === "on"
-                ? saved.organize && saved.chat
-                  ? "Organize and Chat are available to everyone signed in."
-                  : saved.organize
-                    ? "Organize is available to everyone signed in. Chat is off."
-                    : "Chat is available to everyone signed in. Organize is off."
-                : status.tone === "off"
-                  ? "Organize and Chat are off. Turn them on in Settings."
-                  : "Organize and Chat stay hidden until an API key is saved."
-            }
             actions={
               <Button
                 variant="outline"
                 size="sm"
+                className="max-md:min-h-11"
                 disabled={
                   test.isPending || (!aiProviderHasBaseUrl(saved.provider) && !saved.hasApiKey)
                 }
@@ -141,55 +132,69 @@ export function AiSystemPage() {
               </Button>
             }
           >
-            <Badge variant={TONE_VARIANT[status.tone]} className="self-start">
-              {status.label}
-            </Badge>
-            {test.data ? (
-              <p
-                role={test.data.ok ? "status" : "alert"}
-                className={test.data.ok ? "text-sm" : "text-sm text-destructive"}
-              >
-                {test.data.message}
-              </p>
-            ) : null}
-            {test.isError ? (
-              <p role="alert" className="text-sm text-destructive">
-                {describeApiError(test.error)}
-              </p>
-            ) : null}
+            <SettingRow
+              label="Organize and Chat"
+              description={
+                status.tone === "on"
+                  ? saved.organize && saved.chat
+                    ? "Organize and Chat are available to everyone signed in."
+                    : saved.organize
+                      ? "Organize is available to everyone signed in. Chat is off."
+                      : "Chat is available to everyone signed in. Organize is off."
+                  : status.tone === "off"
+                    ? "Organize and Chat are off. Turn them on in Settings."
+                    : "Organize and Chat stay hidden until an API key is saved."
+              }
+            >
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <Badge variant={TONE_VARIANT[status.tone]}>{status.label}</Badge>
+                {test.data ? (
+                  <p
+                    role={test.data.ok ? "status" : "alert"}
+                    className={test.data.ok ? undefined : "text-destructive"}
+                  >
+                    {test.data.message}
+                  </p>
+                ) : null}
+                {test.isError ? <SystemAlert>{describeApiError(test.error)}</SystemAlert> : null}
+              </div>
+            </SettingRow>
           </SystemSection>
 
-          <StatGrid
-            columns={3}
-            stats={[
-              { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
-              { label: "Model", value: saved.model },
-              { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
-              { label: "Organize", value: saved.organize ? "On" : "Off" },
-              { label: "Chat", value: saved.chat ? "On" : "Off" },
-            ]}
-          />
+          <SystemSection title="Configuration">
+            <StatGrid
+              stats={[
+                { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
+                { label: "Model", value: saved.model },
+                { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
+                { label: "Organize", value: saved.organize ? "On" : "Off" },
+                { label: "Chat", value: saved.chat ? "On" : "Off" },
+              ]}
+            />
+          </SystemSection>
 
           <SystemSection
             title="What is sent"
             description={`When someone organizes files, fdrive sends ${providerLabel(saved.provider)} only what it needs to suggest places.`}
           >
-            <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              <li>Paths, sizes and dates of the selected items.</li>
-              <li>
-                Names of folders and files anywhere in the drive that the assistant browses or finds
-                by search, with sizes and dates for the folders it opens.
-              </li>
-              <li>
-                Up to 1,500 characters of already-extracted text for each selected file, unless the
-                person turns off file contents for that run.
-              </li>
-              <li>
-                Each person chooses in the Organize sheet whether file contents and the names of
-                other files are shared. Files themselves are never uploaded, and nothing moves until
-                the person approves.
-              </li>
-            </ul>
+            <SystemNote>
+              <ul className="list-disc space-y-1 pl-5">
+                <li>Paths, sizes and dates of the selected items.</li>
+                <li>
+                  Names of folders and files anywhere in the drive that the assistant browses or
+                  finds by search, with sizes and dates for the folders it opens.
+                </li>
+                <li>
+                  Up to 1,500 characters of already-extracted text for each selected file, unless
+                  the person turns off file contents for that run.
+                </li>
+                <li>
+                  Each person chooses in the Organize sheet whether file contents and the names of
+                  other files are shared. Files themselves are never uploaded, and nothing moves
+                  until the person approves.
+                </li>
+              </ul>
+            </SystemNote>
           </SystemSection>
         </>
       )}
