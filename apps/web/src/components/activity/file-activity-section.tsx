@@ -37,11 +37,16 @@ function ActivityItem({ event }: { event: PersonalActivityEvent }) {
           {activityLabels[event.action]}
           {event.count > 1 ? ` ${event.count} times` : ""}
         </span>
-        <time dateTime={event.sortAt} className="shrink-0 text-xs text-muted-foreground">
+        <time
+          dateTime={event.sortAt}
+          className="shrink-0 text-muted-foreground text-xs tabular-nums"
+        >
           {formatDate(new Date(event.sortAt))}
         </time>
       </div>
-      {from && <p className="break-all text-xs text-muted-foreground">From {from}</p>}
+      {from && (
+        <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">From {from}</p>
+      )}
       {outcome && (
         <p
           className={cn(
@@ -59,9 +64,10 @@ function ActivityItem({ event }: { event: PersonalActivityEvent }) {
 }
 
 /**
- * The Inspector's "Activity" section: the latest recorded history of one
+ * The details panel's "Activity" block: the latest recorded history of one
  * entry, newest first, live while the panel is open. "See all" opens the
- * full journey with related files, revisions and export.
+ * full journey with related files, revisions and export. It is a block like the panel's others:
+ * a hairline, then a small muted heading over its rows.
  */
 export function FileActivitySection({ path }: { path: string }) {
   const file = useActivityFileAt(path);
@@ -73,15 +79,15 @@ export function FileActivitySection({ path }: { path: string }) {
 
   let body: ReactNode;
   if (file.isError || history.isError) {
-    body = <p className="text-sm text-muted-foreground">Could not load activity.</p>;
+    body = <p className="text-muted-foreground text-sm">Could not load activity.</p>;
   } else if (file.isPending || (fileId && history.isPending)) {
     body = (
-      <p role="status" className="text-sm text-muted-foreground">
+      <p role="status" className="text-muted-foreground text-sm">
         Loading activity…
       </p>
     );
   } else if (!events.length) {
-    body = <p className="text-sm text-muted-foreground">No recorded activity yet.</p>;
+    body = <p className="text-muted-foreground text-sm">No recorded activity yet.</p>;
   } else {
     body = (
       <ol className="flex flex-col gap-2.5">
@@ -95,13 +101,13 @@ export function FileActivitySection({ path }: { path: string }) {
   return (
     <section aria-label="Activity" className="flex flex-col gap-3 pt-1">
       <Separator />
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">Activity</span>
+      <div className="flex min-h-6 items-center justify-between">
+        <h3 className="font-medium text-muted-foreground text-xs">Activity</h3>
         {fileId && (
           <Button
             variant="ghost"
             size="sm"
-            className="-mr-2 h-7 px-2 text-xs"
+            className="-mr-2 h-6 px-2 text-xs"
             render={<Link href={`/activity/files/${fileId}` as Route} />}
             nativeButton={false}
           >
@@ -114,7 +120,7 @@ export function FileActivitySection({ path }: { path: string }) {
         <Button
           variant="ghost"
           size="sm"
-          className="self-start px-2 text-xs"
+          className="-ml-2 self-start px-2 text-xs"
           disabled={history.isFetchingNextPage}
           onClick={() => void history.fetchNextPage()}
         >

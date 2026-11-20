@@ -1,15 +1,15 @@
 "use client";
 
 import type { FsEntry, OfficeStatusResponse, ReceivedGrant, Tag } from "@fdrive/contracts";
-import { type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
+import { DEFAULT_LIST_DENSITY, type ListDensity, ROW_HEIGHTS } from "@/lib/files/density";
 import type { ScrollRequest } from "@/lib/files/reveal";
 import { useListDesign } from "@/lib/files/use-list-design";
 import { BetaFileList } from "./beta-file-list";
 import { ClassicFileList } from "./classic-file-list";
 import type { RowContextAction } from "./file-context-menu";
 
-/** The row height at the default ("comfortable") density. */
-export const FILE_ROW_HEIGHT = ROW_HEIGHTS.comfortable;
+/** The row height at the default ("standard") density. */
+export const FILE_ROW_HEIGHT = ROW_HEIGHTS[DEFAULT_LIST_DENSITY];
 
 export interface ClickModifierKeys {
   shift: boolean;
@@ -78,7 +78,7 @@ export interface FileListProps {
   onScrollConsumed?: (token: number) => void;
   /** Whether to show image thumbnails in place of generic file icons. Defaults to false. */
   showThumbnails?: boolean;
-  /** Row height preset (see `listRowHeight`). Defaults to "comfortable". */
+  /** Row height preset (see `listRowHeight`). Defaults to "standard". */
   density?: ListDensity;
 }
 

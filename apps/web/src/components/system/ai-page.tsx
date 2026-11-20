@@ -8,24 +8,18 @@ import {
 } from "@fdrive/contracts";
 import { useState } from "react";
 import { toast } from "sonner";
-import { SettingRow } from "@/components/shell/page-layout";
-import { Badge } from "@/components/ui/badge";
+import { SettingActions, SettingRow } from "@/components/shell/page-layout";
+import { ChoiceRow } from "@/components/shell/setting-controls";
+import { StatusBadge, type StatusTone } from "@/components/shell/status";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { providerLabel } from "@/lib/ai/organize";
 import { useSystemAi, useTestSystemAi, useUpdateSystemAi } from "@/lib/ai/queries";
 import {
   AI_PROVIDER_LABELS,
   type AiDraft,
+  type AiStatusTone,
   aiStatus,
   draftFrom,
   isDirty,
@@ -34,18 +28,23 @@ import {
   withProvider,
 } from "@/lib/ai/settings-draft";
 import { describeApiError } from "@/lib/api/errors";
-import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
-import { StatGrid } from "./stat-grid";
+import { SettingsFormActions } from "./settings-form";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemAlert, SystemLine, SystemNote, SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
-const PROVIDER_ITEMS = AiProviderSchema.options.map((value) => ({
-  value,
-  label: AI_PROVIDER_LABELS[value],
-}));
+/** The providers as the segments name them; the header badge spells the saved one out. */
+const PROVIDER_SEGMENTS: Record<AiProvider, string> = {
+  anthropic: "Anthropic",
+  mistral: "Mistral",
+  openai_compatible: "OpenAI-compatible",
+};
 
-const TONE_VARIANT = { on: "default", off: "outline", incomplete: "destructive" } as const;
+const STATUS_TONES: Record<AiStatusTone, StatusTone> = {
+  on: "success",
+  off: "off",
+  incomplete: "warning",
+};
 
 /** How the model and key fields read for each provider. */
 const PROVIDER_FIELDS: Record<
@@ -69,17 +68,24 @@ const PROVIDER_FIELDS: Record<
   },
 };
 
-/** Admin page: `System > AI`, where the provider behind Organize is chosen. */
+/** Inputs and buttons in a row are 44px tall on a phone. */
+const TOUCH = "max-md:min-h-11";
+
+/**
+ * Admin page: `System > AI`, where the provider behind Organize and Chat is chosen. The
+ * settings are the sheet's own rows and stay on screen while both are off, since this is where
+ * they are turned on. Everything saves together: Organize and Chat need the key beside them.
+ */
 export function AiSystemPage() {
   const query = useSystemAi();
   const update = useUpdateSystemAi();
   const test = useTestSystemAi();
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState<AiDraft | null>(null);
   const saved = query.data?.configuration;
   const values = draft ?? (saved ? draftFrom(saved) : null);
   const result = values && saved ? requestFrom(values, saved) : null;
   const status = saved ? aiStatus(saved) : null;
+  const dirty = values !== null && saved !== undefined && isDirty(values, saved);
 
   function change(patch: Partial<AiDraft>) {
     if (values) setDraft({ ...values, ...patch });
@@ -91,7 +97,6 @@ export function AiSystemPage() {
       onSuccess: () => {
         setDraft(null);
         test.reset();
-        setSettingsOpen(false);
         toast.success("AI settings saved.");
       },
       onError: (error) => toast.error(describeApiError(error)),
@@ -103,75 +108,166 @@ export function AiSystemPage() {
       title="AI"
       description="Organizes files and chats about them, using Claude, Mistral or a model you host."
       lastUpdated={query.dataUpdatedAt > 0 ? new Date(query.dataUpdatedAt) : null}
-      actions={
-        <SystemSettingsButton
-          onClick={() => setSettingsOpen(true)}
-          disabled={saved === undefined}
-        />
+      badges={
+        saved !== undefined && status !== null ? (
+          <>
+            <StatusBadge tone={STATUS_TONES[status.tone]}>{status.label}</StatusBadge>
+            <StatusBadge>{AI_PROVIDER_LABELS[saved.provider]}</StatusBadge>
+          </>
+        ) : null
       }
     >
       {query.isError ? (
         <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
-      ) : saved === undefined || status === null ? (
+      ) : saved === undefined || values === null || status === null ? (
         <SystemLine role="status">Loading AI settings…</SystemLine>
       ) : (
         <>
-          <SystemSection
-            title="Status"
-            actions={
-              <Button
-                variant="outline"
-                size="sm"
-                className="max-md:min-h-11"
-                disabled={
-                  test.isPending || (!aiProviderHasBaseUrl(saved.provider) && !saved.hasApiKey)
-                }
-                onClick={() => test.mutate()}
-              >
-                {test.isPending ? "Checking…" : "Check connection"}
-              </Button>
-            }
-          >
+          <div data-slot="ai-settings">
             <SettingRow
-              label="Organize and Chat"
-              description={
-                status.tone === "on"
-                  ? saved.organize && saved.chat
-                    ? "Organize and Chat are available to everyone signed in."
-                    : saved.organize
-                      ? "Organize is available to everyone signed in. Chat is off."
-                      : "Chat is available to everyone signed in. Organize is off."
-                  : status.tone === "off"
-                    ? "Organize and Chat are off. Turn them on in Settings."
-                    : "Organize and Chat stay hidden until an API key is saved."
-              }
+              label="Organize"
+              htmlFor="ai-organize"
+              description="Suggests where selected files belong, for everyone signed in. Nothing moves until the person approves."
+              align="end"
             >
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                <Badge variant={TONE_VARIANT[status.tone]}>{status.label}</Badge>
-                {test.data ? (
-                  <p
+              <Switch
+                id="ai-organize"
+                checked={values.organize}
+                disabled={update.isPending}
+                onCheckedChange={(organize) => change({ organize })}
+              />
+            </SettingRow>
+            <SettingRow
+              label="Chat"
+              htmlFor="ai-chat"
+              description="Lets people chat about their files in a panel and approve the changes it proposes."
+              align="end"
+            >
+              <Switch
+                id="ai-chat"
+                checked={values.chat}
+                disabled={update.isPending}
+                onCheckedChange={(chat) => change({ chat })}
+              />
+            </SettingRow>
+            <ChoiceRow
+              label="Provider"
+              hint="Claude gives the best suggestions; a server like Ollama keeps everything on your network."
+              value={values.provider}
+              options={AiProviderSchema.options}
+              labels={PROVIDER_SEGMENTS}
+              onChange={(provider) => setDraft(withProvider(values, provider))}
+            />
+            {aiProviderHasBaseUrl(values.provider) ? (
+              <SettingRow
+                label="Base URL"
+                htmlFor="ai-base-url"
+                description="The server's API root, reachable from the fdrive API container."
+              >
+                <Input
+                  id="ai-base-url"
+                  className={TOUCH}
+                  value={values.baseUrl}
+                  disabled={update.isPending}
+                  placeholder="http://ollama:11434/v1"
+                  onChange={(event) => change({ baseUrl: event.target.value })}
+                />
+              </SettingRow>
+            ) : null}
+            <SettingRow
+              label="Model"
+              htmlFor="ai-model"
+              description={PROVIDER_FIELDS[values.provider].modelDescription}
+            >
+              <Input
+                id="ai-model"
+                className={TOUCH}
+                value={values.model}
+                disabled={update.isPending}
+                placeholder={PROVIDER_FIELDS[values.provider].modelPlaceholder}
+                onChange={(event) => change({ model: event.target.value })}
+              />
+            </SettingRow>
+            <ApiKeyRow
+              values={values}
+              hasSavedKey={saved.hasApiKey}
+              keyDropped={keyWillBeDropped(values, saved)}
+              needed={status.tone === "incomplete"}
+              disabled={update.isPending}
+              onChange={change}
+            />
+            <SettingActions>
+              {result !== null && !result.ok ? (
+                <ul className="mr-auto min-w-0 flex-[1_1_16rem] text-destructive text-sm">
+                  {result.errors.map((message) => (
+                    <li key={message}>{message}</li>
+                  ))}
+                </ul>
+              ) : null}
+              <div className="flex flex-none items-center gap-2">
+                <SettingsFormActions
+                  dirty={dirty}
+                  invalid={result === null || !result.ok}
+                  pending={update.isPending}
+                  onSave={handleSave}
+                  onReset={() => setDraft(null)}
+                />
+              </div>
+            </SettingActions>
+          </div>
+
+          <div data-slot="ai-connection">
+            <SettingRow
+              label="Connection"
+              description={
+                test.data !== undefined ? (
+                  <span
                     role={test.data.ok ? "status" : "alert"}
-                    className={test.data.ok ? undefined : "text-destructive"}
+                    className={
+                      test.data.ok
+                        ? "[overflow-wrap:anywhere]"
+                        : "text-destructive [overflow-wrap:anywhere]"
+                    }
                   >
                     {test.data.message}
-                  </p>
+                  </span>
+                ) : test.isError ? (
+                  <span role="alert" className="text-destructive [overflow-wrap:anywhere]">
+                    {describeApiError(test.error)}
+                  </span>
+                ) : dirty ? (
+                  "Save your changes to test them."
+                ) : !aiProviderHasBaseUrl(saved.provider) && !saved.hasApiKey ? (
+                  "Save an API key to test the connection."
+                ) : (
+                  `Sends one short request to ${providerLabel(saved.provider)} with the saved settings.`
+                )
+              }
+              align="end"
+            >
+              <div className="flex flex-wrap items-center gap-2.5">
+                {test.data !== undefined ? (
+                  <StatusBadge tone={test.data.ok ? "success" : "danger"}>
+                    {test.data.ok ? "Reachable" : "Failed"}
+                  </StatusBadge>
+                ) : test.isError ? (
+                  <StatusBadge tone="danger">Failed</StatusBadge>
                 ) : null}
-                {test.isError ? <SystemAlert>{describeApiError(test.error)}</SystemAlert> : null}
+                <Button
+                  variant="outline"
+                  className={TOUCH}
+                  disabled={
+                    test.isPending ||
+                    dirty ||
+                    (!aiProviderHasBaseUrl(saved.provider) && !saved.hasApiKey)
+                  }
+                  onClick={() => test.mutate()}
+                >
+                  {test.isPending ? "Testing…" : "Test connection"}
+                </Button>
               </div>
             </SettingRow>
-          </SystemSection>
-
-          <SystemSection title="Configuration">
-            <StatGrid
-              stats={[
-                { label: "Provider", value: AI_PROVIDER_LABELS[saved.provider] },
-                { label: "Model", value: saved.model },
-                { label: "API key", value: saved.hasApiKey ? "Saved" : "None" },
-                { label: "Organize", value: saved.organize ? "On" : "Off" },
-                { label: "Chat", value: saved.chat ? "On" : "Off" },
-              ]}
-            />
-          </SystemSection>
+          </div>
 
           <SystemSection
             title="What is sent"
@@ -198,162 +294,72 @@ export function AiSystemPage() {
           </SystemSection>
         </>
       )}
-
-      <SettingsSheet
-        title="AI settings"
-        description="The provider, model and key Organize and Chat use."
-        open={settingsOpen}
-        onOpenChange={(open) => {
-          setSettingsOpen(open);
-          if (!open) setDraft(null);
-        }}
-        dirty={values !== null && saved !== undefined && isDirty(values, saved)}
-        invalid={result === null || !result.ok}
-        pending={update.isPending}
-        onSave={handleSave}
-        onReset={() => setDraft(null)}
-        validationMessages={result !== null && !result.ok ? result.errors : []}
-      >
-        {values !== null && saved !== undefined ? (
-          <AiSettingsFields
-            values={values}
-            hasSavedKey={saved.hasApiKey}
-            keyDropped={keyWillBeDropped(values, saved)}
-            disabled={update.isPending}
-            onChange={change}
-            onProviderChange={(provider) => setDraft(withProvider(values, provider))}
-          />
-        ) : null}
-      </SettingsSheet>
     </SystemPage>
   );
 }
 
-function AiSettingsFields({
+/**
+ * The API key is never shown again once saved, so its row says whether one is saved, takes a
+ * new one, and offers to remove the saved one.
+ */
+function ApiKeyRow({
   values,
   hasSavedKey,
   keyDropped,
+  needed,
   disabled,
   onChange,
-  onProviderChange,
 }: {
   values: AiDraft;
   hasSavedKey: boolean;
+  /** Saving would drop the saved key: the provider or its address changed. */
   keyDropped: boolean;
+  /** Organize or Chat is on with no key saved, so neither is offered to anyone. */
+  needed: boolean;
   disabled: boolean;
   onChange: (patch: Partial<AiDraft>) => void;
-  onProviderChange: (provider: AiProvider) => void;
 }) {
-  const fields = PROVIDER_FIELDS[values.provider];
-  const keyPlaceholder =
-    hasSavedKey && !values.clearKey && !keyDropped
-      ? "Saved. Enter a new key to replace it"
-      : fields.keyPlaceholder;
+  const kept = hasSavedKey && !values.clearKey && !keyDropped;
   return (
-    <>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="ai-organize">Organize</FieldLabel>
-        <Switch
-          id="ai-organize"
-          checked={values.organize}
-          disabled={disabled}
-          onCheckedChange={(organize) => onChange({ organize })}
-        />
-      </Field>
-      <FieldDescription>
-        Suggests where selected files belong, for everyone signed in.
-      </FieldDescription>
-      <Field orientation="horizontal">
-        <FieldLabel htmlFor="ai-chat">Chat</FieldLabel>
-        <Switch
-          id="ai-chat"
-          checked={values.chat}
-          disabled={disabled}
-          onCheckedChange={(chat) => onChange({ chat })}
-        />
-      </Field>
-      <FieldDescription>
-        Lets people chat about their files in a panel and approve the changes it proposes.
-      </FieldDescription>
-      <Field>
-        <FieldLabel htmlFor="ai-provider">Provider</FieldLabel>
-        <Select
-          items={PROVIDER_ITEMS}
-          value={values.provider}
-          onValueChange={(value) => {
-            if (value !== null) onProviderChange(value);
-          }}
-        >
-          <SelectTrigger id="ai-provider" disabled={disabled}>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {PROVIDER_ITEMS.map((item) => (
-              <SelectItem key={item.value} value={item.value}>
-                {item.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <FieldDescription>
-          Claude gives the best suggestions; a server like Ollama keeps everything on your network.
-        </FieldDescription>
-      </Field>
-      {aiProviderHasBaseUrl(values.provider) ? (
-        <Field>
-          <FieldLabel htmlFor="ai-base-url">Base URL</FieldLabel>
-          <Input
-            id="ai-base-url"
-            value={values.baseUrl}
-            disabled={disabled}
-            placeholder="http://ollama:11434/v1"
-            onChange={(event) => onChange({ baseUrl: event.target.value })}
-          />
-          <FieldDescription>
-            The server's API root, reachable from the fdrive API container.
-          </FieldDescription>
-        </Field>
-      ) : null}
-      <Field>
-        <FieldLabel htmlFor="ai-model">Model</FieldLabel>
-        <Input
-          id="ai-model"
-          value={values.model}
-          disabled={disabled}
-          placeholder={fields.modelPlaceholder}
-          onChange={(event) => onChange({ model: event.target.value })}
-        />
-        <FieldDescription>{fields.modelDescription}</FieldDescription>
-      </Field>
-      <Field>
-        <FieldLabel htmlFor="ai-api-key">API key</FieldLabel>
+    <SettingRow
+      label="API key"
+      htmlFor="ai-api-key"
+      description={
+        keyDropped
+          ? "Changing the provider or base URL removes the saved key."
+          : values.clearKey
+            ? "The saved key is removed when you save."
+            : needed
+              ? "Organize and Chat stay hidden until an API key is saved."
+              : "Stored encrypted and never shown again."
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        {kept ? <StatusBadge>Saved</StatusBadge> : null}
         <Input
           id="ai-api-key"
           type="password"
           autoComplete="off"
+          className={`min-w-0 flex-1 basis-56 ${TOUCH}`}
           value={values.apiKey}
           disabled={disabled}
-          placeholder={keyPlaceholder}
+          placeholder={
+            kept ? "Enter a new key to replace it" : PROVIDER_FIELDS[values.provider].keyPlaceholder
+          }
           onChange={(event) => onChange({ apiKey: event.target.value, clearKey: false })}
         />
-        <FieldDescription>
-          {keyDropped
-            ? "Changing the provider or base URL removes the saved key."
-            : "Stored encrypted and never shown again."}
-        </FieldDescription>
         {hasSavedKey && !keyDropped && values.apiKey === "" ? (
           <Button
             type="button"
-            variant="link"
-            size="sm"
-            className="self-start px-0"
+            variant="outline"
+            className={TOUCH}
             disabled={disabled}
             onClick={() => onChange({ clearKey: !values.clearKey })}
           >
-            {values.clearKey ? "Keep the saved key" : "Remove the saved key"}
+            {values.clearKey ? "Keep key" : "Remove key"}
           </Button>
         ) : null}
-      </Field>
-    </>
+      </div>
+    </SettingRow>
   );
 }

@@ -12,17 +12,17 @@ import {
   Folder,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { FileActivitySection } from "@/components/activity/file-activity-section";
 import { EntryMetadataSection } from "@/components/metadata/entry-metadata-section";
-import { Badge } from "@/components/ui/badge";
+import { Code, FactList } from "@/components/shell/sheet-data";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetClose, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useFolderSize, usePhotoDetails } from "@/lib/inspector/queries";
 import { apiClient } from "@/lib/preview/deps";
-import { describeEntry, describePhoto } from "@/lib/preview/describe";
+import { type DescribeRow, describeEntry, describePhoto } from "@/lib/preview/describe";
 import { isHeicExt } from "@/lib/preview/heic";
 import { previewKindFor } from "@/lib/preview/kind";
 import { isRawExt } from "@/lib/preview/raw";
@@ -81,7 +81,62 @@ function iconFor(entry: FsEntry) {
   return ICON_BY_PREVIEW_KIND[previewKindFor(entry)];
 }
 
-function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean }) {
+/**
+ * The panel around what is shown: a header like a sheet's (the title in full, so a long name
+ * wraps, one quiet line under it, and the close button at the far end), then the content, which
+ * scrolls under the header.
+ */
+function PanelFrame({
+  title,
+  detail,
+  close,
+  children,
+}: {
+  title: string;
+  detail: string;
+  close: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <>
+      <header data-slot="inspector-header" className="flex items-start gap-2 px-4 pt-4 pb-3">
+        <div className="min-w-0 flex-1">
+          <h2 className="font-semibold text-[17px] leading-[22px] tracking-[-0.01em] [overflow-wrap:anywhere]">
+            {title}
+          </h2>
+          <p className="mt-1 text-muted-foreground text-xs">{detail}</p>
+        </div>
+        {close}
+      </header>
+      <ScrollArea className="min-h-0 flex-1">{children}</ScrollArea>
+    </>
+  );
+}
+
+/** A block of the panel: a hairline, then a small muted heading over its content. */
+function PanelBlock({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 pt-1">
+      <Separator />
+      <h3 className="font-medium text-muted-foreground text-xs">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function rowValue(rows: readonly DescribeRow[], label: string): string {
+  return rows.find((row) => row.label === label)?.value ?? "";
+}
+
+function SingleEntryPanel({
+  entry,
+  indexed,
+  close,
+}: {
+  entry: FsEntry;
+  indexed: boolean;
+  close: ReactNode;
+}) {
   const { prefs } = useFormatters();
   const isDir = entry.kind === "dir";
   const kind = previewKindFor(entry);
@@ -114,79 +169,98 @@ function SingleEntryBody({ entry, indexed }: { entry: FsEntry; indexed: boolean 
     isHeicExt(entry.ext) || isRawExt(entry.ext)
       ? apiClient.thumbUrl(entry.path, 256)
       : apiClient.downloadUrl(entry.path, { inline: true });
+  // The line under the name: the kind, and the size once it is known. A folder's is known only
+  // when the index has counted it, which is when the note shows.
+  const kindName = rowValue(rows, "Kind");
+  const detail = isDir && note === null ? kindName : `${kindName} · ${rowValue(rows, "Size")}`;
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <div className="flex flex-col items-center gap-3 py-2">
-        {kind === "image" && !imageFailed ? (
-          // biome-ignore lint/performance/noImgElement: thumbnail loads arbitrary API-served bytes, not a static asset next/image can optimize
-          <img
-            src={imageSrc}
-            alt={entry.name}
-            onError={() => setImageFailed(true)}
-            className="max-h-40 max-w-full rounded-lg object-contain ring-1 ring-border"
+    <PanelFrame title={entry.name} detail={detail} close={close}>
+      <div className="flex flex-col gap-4 px-4 pb-4">
+        <div className="flex justify-center py-2">
+          {kind === "image" && !imageFailed ? (
+            // biome-ignore lint/performance/noImgElement: thumbnail loads arbitrary API-served bytes, not a static asset next/image can optimize
+            <img
+              src={imageSrc}
+              alt={entry.name}
+              onError={() => setImageFailed(true)}
+              className="max-h-40 max-w-full rounded-lg object-contain ring-1 ring-border"
+            />
+          ) : (
+            <Icon className="size-16 text-muted-foreground" strokeWidth={1.25} />
+          )}
+        </div>
+        <PanelBlock title="Details">
+          <FactList
+            className="grid-cols-[minmax(5.5rem,auto)_minmax(0,1fr)] gap-x-3 gap-y-2"
+            facts={[...rows, ...photoRows].map((row) => ({
+              label: row.label,
+              value: row.label === "Location" ? <Code>{row.value}</Code> : row.value,
+            }))}
           />
-        ) : (
-          <Icon className="size-16 text-muted-foreground" strokeWidth={1.25} />
-        )}
-        <p className="max-w-full break-all text-center text-sm font-medium">{entry.name}</p>
+          {note !== null && <p className="text-muted-foreground text-xs">{note}</p>}
+        </PanelBlock>
+        <EntryMetadataSection entries={[entry]} />
+        <FileActivitySection path={entry.path} />
       </div>
-      <Separator />
-      <dl className="flex flex-col gap-2 text-sm">
-        {[...rows, ...photoRows].map((row) => (
-          <div key={row.label} className="flex items-baseline justify-between gap-4">
-            <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
-            <dd className="truncate text-right">{row.value}</dd>
-          </div>
-        ))}
-      </dl>
-      {note !== null && <p className="text-xs text-muted-foreground">{note}</p>}
-      <EntryMetadataSection entries={[entry]} />
-      <FileActivitySection path={entry.path} />
-    </div>
+    </PanelFrame>
   );
 }
 
-function MultiEntryBody({ entries }: { entries: readonly FsEntry[] }) {
+function MultiEntryPanel({ entries, close }: { entries: readonly FsEntry[]; close: ReactNode }) {
   const { formatBytes } = useFormatters();
   const summary = summarizeSelection(entries);
 
   return (
-    <div className="flex flex-col">
-      <div className="flex flex-col items-center gap-3 p-4 py-10">
-        <Badge variant="secondary" className="text-sm">
-          {summary.count} items selected
-        </Badge>
-        <p className="text-sm text-muted-foreground">{formatBytes(summary.totalSize)} total</p>
-      </div>
+    <PanelFrame
+      title={`${summary.count} items selected`}
+      detail={`${formatBytes(summary.totalSize)} total`}
+      close={close}
+    >
       <div className="px-4 pb-4">
         <EntryMetadataSection entries={entries} />
       </div>
-    </div>
+    </PanelFrame>
   );
 }
 
-function InspectorBody({ entries, indexed }: { entries: readonly FsEntry[]; indexed: boolean }) {
+/** The panel for whatever is selected: nothing, one entry, or several. */
+function InspectorPanel({
+  entries,
+  indexed,
+  close,
+}: {
+  entries: readonly FsEntry[];
+  indexed: boolean;
+  close: ReactNode;
+}) {
   if (entries.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
-        No selection
-      </div>
+      <PanelFrame
+        title="No selection"
+        detail="Select a file or folder to see its details."
+        close={close}
+      />
     );
   }
 
   const single = entries.length === 1 ? entries.at(0) : undefined;
   if (single !== undefined) {
-    return <SingleEntryBody key={single.path} entry={single} indexed={indexed} />;
+    return <SingleEntryPanel key={single.path} entry={single} indexed={indexed} close={close} />;
   }
 
-  return <MultiEntryBody entries={entries} />;
+  return <MultiEntryPanel entries={entries} close={close} />;
 }
+
+/** The close button's look, wide or narrow: a round ghost icon button at the header's end. */
+const CLOSE_BUTTON = "-mt-0.5 -mr-1.5 shrink-0 rounded-full text-muted-foreground";
 
 /**
  * The trailing details panel: a fixed 320px aside on wide screens, a
- * shadcn `Sheet` on narrow ones. Shows a single entry's icon/thumbnail and
- * `describeEntry` rows, or a count-and-size summary for several. The file
+ * shadcn `Sheet` on narrow ones. It takes the detail sheet's look (docs/DESIGN.md) at the file
+ * browser's compact size: `panel` ground, a hairline on its left, the name as its title, and
+ * blocks divided by hairlines under small muted headings. Shows a single entry's
+ * icon/thumbnail and `describeEntry` rows, or a count-and-size summary for several. The file
  * browser passes its selection or, with none, the highlighted row
  * (`inspectedEntries`). Showing a file here records nothing: the panel is open by default, so
  * the file browser records "Viewed info" only when the person opens it on a file.
@@ -196,16 +270,25 @@ export function Inspector({ entries, onClose, indexed = true }: InspectorProps) 
 
   if (isWide) {
     return (
-      <aside aria-label="Info" className="flex h-full w-80 shrink-0 flex-col border-l bg-card">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <span className="text-sm font-medium">Info</span>
-          <Button variant="ghost" size="icon-sm" onClick={onClose} aria-label="Close info">
-            <X />
-          </Button>
-        </div>
-        <ScrollArea className="flex-1">
-          <InspectorBody entries={entries} indexed={indexed} />
-        </ScrollArea>
+      <aside
+        aria-label="Info"
+        className="flex h-full w-80 shrink-0 flex-col border-border border-l bg-panel"
+      >
+        <InspectorPanel
+          entries={entries}
+          indexed={indexed}
+          close={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={CLOSE_BUTTON}
+              onClick={onClose}
+              aria-label="Close info"
+            >
+              <X />
+            </Button>
+          }
+        />
       </aside>
     );
   }
@@ -219,13 +302,27 @@ export function Inspector({ entries, onClose, indexed = true }: InspectorProps) 
         }
       }}
     >
-      <SheetContent side="right" className="flex w-80 flex-col gap-0 p-0">
-        <SheetHeader className="border-b p-4">
-          <SheetTitle>Info</SheetTitle>
-        </SheetHeader>
-        <ScrollArea className="flex-1">
-          <InspectorBody entries={entries} indexed={indexed} />
-        </ScrollArea>
+      <SheetContent side="right" showCloseButton={false} className="flex w-80 flex-col gap-0 p-0">
+        {/* The dialog keeps its name; the header under it names what is shown. */}
+        <SheetTitle className="sr-only">Info</SheetTitle>
+        <InspectorPanel
+          entries={entries}
+          indexed={indexed}
+          close={
+            <SheetClose
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className={`${CLOSE_BUTTON} max-md:size-11`}
+                />
+              }
+            >
+              <X />
+              <span className="sr-only">Close</span>
+            </SheetClose>
+          }
+        />
       </SheetContent>
     </Sheet>
   );

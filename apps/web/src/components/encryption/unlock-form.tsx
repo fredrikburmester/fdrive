@@ -180,7 +180,6 @@ export function RecoveryKeyField({
         <Button
           type="button"
           variant="outline"
-          size="sm"
           disabled={disabled}
           onClick={() => fileInput.current?.click()}
         >
@@ -293,7 +292,13 @@ function PasswordUnlock({
           error={error}
         />
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button type="button" variant="link" className="px-0" disabled={busy} onClick={onForgot}>
+          <Button
+            type="button"
+            variant="link"
+            className="px-0 sheet:px-0"
+            disabled={busy}
+            onClick={onForgot}
+          >
             Forgot encryption password
           </Button>
           <Button type="submit" disabled={password.length === 0 || busy} aria-busy={busy}>
@@ -408,7 +413,13 @@ function RecoveryUnlock({
         />
         {error === null ? null : <FieldError>{error}</FieldError>}
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <Button type="button" variant="link" className="px-0" disabled={busy} onClick={onBack}>
+          <Button
+            type="button"
+            variant="link"
+            className="px-0 sheet:px-0"
+            disabled={busy}
+            onClick={onBack}
+          >
             Use encryption password
           </Button>
           <Button type="submit" disabled={!ready || busy} aria-busy={busy}>

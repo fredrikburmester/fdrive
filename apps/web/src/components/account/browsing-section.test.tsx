@@ -25,6 +25,22 @@ function pressed(group: string, name: string) {
   return option(group, name).getAttribute("aria-pressed");
 }
 
+it("is a sheet titled Browsing, with the folder views as a block of their own", () => {
+  render(<BrowsingSection />);
+
+  const sheet = screen.getByRole("region", { name: "Browsing" });
+  expect(within(sheet).getByRole("heading", { level: 1, name: "Browsing" })).toBeDefined();
+  expect(
+    within(sheet).getByText("How listings respond to clicks, and the view a folder opens in."),
+  ).toBeDefined();
+  const folderViews = within(sheet).getByRole("heading", { level: 2, name: "Folder views" });
+  const block = folderViews.closest('[data-slot="page-section"]') as HTMLElement;
+  expect(within(block).getByRole("group", { name: "Default view" })).toBeDefined();
+  expect(within(block).getByRole("button", { name: "Reset all folder views" })).toBeDefined();
+  expect(within(block).queryByRole("group", { name: "Row click" })).toBeNull();
+  expect(within(sheet).getByRole("group", { name: "Row click" })).toBeDefined();
+});
+
 it("defaults to Select and persists the chosen row-click action", () => {
   render(<BrowsingSection />);
   expect(pressed("Row click", "Select")).toBe("true");
@@ -86,6 +102,10 @@ it("resets every saved folder view, and says so while it runs", () => {
   expect(screen.getByText(/Remove every saved view and sort/)).toBeDefined();
   const reset = screen.getByRole("button", { name: "Reset all folder views" }) as HTMLButtonElement;
   expect(reset.disabled).toBe(false);
+  // One button with a size of its own, at the far end of its row.
+  const control = reset.closest('[data-slot="setting-control"]') as HTMLElement;
+  expect(control.classList.contains("flex-none")).toBe(true);
+  expect(within(control).getAllByRole("button")).toHaveLength(1);
 
   fireEvent.click(reset);
   expect(mocks.reset.mutate).toHaveBeenCalledTimes(1);

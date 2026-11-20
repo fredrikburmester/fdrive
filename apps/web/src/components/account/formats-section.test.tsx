@@ -18,7 +18,11 @@ function pressed(group: string, name: string) {
 
 it("starts with binary sizes, relative dates and a 24-hour clock", () => {
   render(<FormatsSection />);
-  expect(screen.getByRole("heading", { level: 2, name: "Formats" })).toBeDefined();
+  // The section is its own sheet, and its name is the page's heading.
+  const sheet = screen.getByRole("region", { name: "Formats" });
+  expect(within(sheet).getByRole("heading", { level: 1, name: "Formats" })).toBeDefined();
+  expect(within(sheet).getByText("How sizes, dates and times read in this browser.")).toBeDefined();
+  expect(within(sheet).getAllByRole("group")).toHaveLength(3);
   expect(pressed("Sizes", "Binary")).toBe("true");
   expect(pressed("Dates", "Relative")).toBe("true");
   expect(pressed("Time", "24-hour")).toBe("true");

@@ -1,14 +1,14 @@
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge as Badge, type StatusTone } from "@/components/shell/status";
 import { type SidecarStatus, sidecarStatusLabel } from "@/lib/system/status";
 
-const VARIANT_BY_STATUS: Record<SidecarStatus, "default" | "destructive" | "outline"> = {
-  ok: "default",
-  loading: "outline",
-  unreachable: "destructive",
-  not_configured: "outline",
+const TONE_BY_STATUS: Record<SidecarStatus, StatusTone> = {
+  ok: "success",
+  loading: "warning",
+  unreachable: "danger",
+  not_configured: "off",
 };
 
-/** Renders processing readiness, including model loading, as a coloured badge. */
+/** A sidecar's readiness as a status badge: Reachable, Loading, Unreachable or Not configured. */
 export function StatusBadge({ status }: { status: SidecarStatus }) {
-  return <Badge variant={VARIANT_BY_STATUS[status]}>{sidecarStatusLabel(status)}</Badge>;
+  return <Badge tone={TONE_BY_STATUS[status]}>{sidecarStatusLabel(status)}</Badge>;
 }

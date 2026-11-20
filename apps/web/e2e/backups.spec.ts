@@ -1,10 +1,24 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { Client } from "pg";
 import { type RunningEnvironment, startEnvironment } from "./support/environment.js";
 import { getFreePort } from "./support/ports.js";
+
+/** The sheet's tabs, in order. Everything but its header and footer sits on one of them. */
+const TABS = ["Overview", "Destinations", "History", "Recovery"] as const;
+
+function tab(page: Page, name: (typeof TABS)[number]) {
+  return page
+    .getByRole("group", { name: "Backup sections" })
+    .getByRole("button", { name, exact: true });
+}
+
+/** The status badges under the sheet's title. */
+function badges(page: Page) {
+  return page.locator('[data-slot="detail-sheet-badges"]');
+}
 
 test.describe("installation backups", () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -63,9 +77,14 @@ test.describe("installation backups", () => {
       ).ok(),
     ).toBe(true);
     await page.goto(`${environment.webBaseUrl}/system/backups`);
+    // Locked until the owner's password is confirmed: the header says so and holds the one action.
+    await expect(badges(page).getByText("Locked", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Back up now", exact: true })).toBeDisabled();
     await page.getByLabel("Current password").fill("alice-password");
     await page.getByRole("button", { name: "Unlock backups" }).click();
-    await expect(page.getByText("Backup controls unlocked.")).toBeVisible();
+    await expect(badges(page).getByText("Unlocked", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Current password")).toHaveCount(0);
+    await tab(page, "Recovery").click();
     const keyDownload = page.waitForEvent("download");
     await page.getByRole("button", { name: "Create and download recovery key" }).click();
     const downloaded = await keyDownload;
@@ -75,9 +94,10 @@ test.describe("installation backups", () => {
     expect(kit).toContain("AGE-SECRET-KEY-");
     await page.getByLabel("Paste the saved recovery key to confirm").fill(kit);
     await page.getByRole("button", { name: "Confirm saved key" }).click();
-    await expect(page.getByText("Recovery key confirmed", { exact: true })).toBeVisible();
+    await expect(page.getByText("Confirmed", { exact: true })).toBeVisible();
     // Configuration ZIPs are gone.
     await expect(page.getByText("Additional configuration files")).toHaveCount(0);
+    await tab(page, "History").click();
     await page.getByRole("button", { name: "Prepare local download" }).click();
     const download = page.getByRole("button", { name: "Download backup" }).first();
     await expect(download).toBeVisible({ timeout: 30_000 });
@@ -89,17 +109,25 @@ test.describe("installation backups", () => {
     expect((await readFile(archivePath)).subarray(0, 22).toString()).toContain(
       "age-encryption.org",
     );
-    await page.getByRole("button", { name: "Verify bytes" }).first().click();
+    // Everything else a backup offers is in the menu at the end of its row.
+    await page
+      .getByRole("button", { name: /^Actions for the backup from / })
+      .first()
+      .click();
+    await page.getByRole("menuitem", { name: "Verify bytes" }).click();
     await expect(page.getByText(/Bytes verified/).first()).toBeVisible({ timeout: 20_000 });
     // A destination is a bucket: the form asks for one and offers no folder in the files folder.
+    await tab(page, "Destinations").click();
     await page.getByRole("button", { name: "Add destination" }).click();
     await expect(page.getByLabel("S3 endpoint")).toBeVisible();
     await expect(page.getByLabel("Destination type")).toHaveCount(0);
     await expect(page.getByLabel("Private backup directory")).toHaveCount(0);
     await page.getByLabel("Secret access key").scrollIntoViewIfNeeded();
     await page.screenshot({ path: test.info().outputPath("backups-destination-form.png") });
-    await page.getByRole("button", { name: "Add destination" }).click();
+    // The form takes the tab over until it is saved or cancelled.
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByLabel("S3 endpoint")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Add destination" })).toBeVisible();
     await page.getByRole("button", { name: "Back up now", exact: true }).click();
     // Both backups complete; daily retention keeps only the newer local archive.
     await expect
@@ -115,7 +143,10 @@ test.describe("installation backups", () => {
       .toBe(2);
     // Health: a size estimate runs through the worker, and an owner-recorded rehearsal report
     // replaces the monthly reminder.
+    await tab(page, "Overview").click();
     await expect(page.getByText(/Restore rehearsal due/)).toBeVisible();
+    await expect(badges(page).getByText("Needs attention", { exact: true })).toBeVisible();
+    await tab(page, "Destinations").click();
     await page.getByRole("button", { name: "Estimate backup size" }).click();
     await expect(page.getByText(/^Estimated /)).toBeVisible({ timeout: 60_000 });
     const backups = (await (
@@ -123,6 +154,7 @@ test.describe("installation backups", () => {
     ).json()) as { installationId: string; runs: { id: string; state: string }[] };
     const completed = backups.runs.find((run) => run.state === "complete");
     if (!completed) throw Error("Expected a complete run for the rehearsal report");
+    await tab(page, "Recovery").click();
     await page.getByLabel("Rehearsal report (.json)").setInputFiles({
       name: "rehearsal.json",
       mimeType: "application/json",
@@ -139,25 +171,32 @@ test.describe("installation backups", () => {
       ),
     });
     await expect(page.getByText(/Last successful rehearsal/)).toBeVisible();
+    await expect(badges(page).getByText("Last rehearsal passed", { exact: true })).toBeVisible();
+    await tab(page, "Overview").click();
     await expect(page.getByText(/Restore rehearsal due/)).toHaveCount(0);
+    await expect(badges(page).getByText("Healthy", { exact: true })).toBeVisible();
     for (const width of [320, 390, 768, 1280])
       for (const colorScheme of ["light", "dark"] as const) {
         await page.setViewportSize({ width, height: 1000 });
         await page.emulateMedia({ colorScheme });
         await expect(page.getByRole("heading", { name: "Backups", exact: true })).toBeVisible();
-        expect(
-          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-        ).toBe(true);
-        expect(
-          await page
-            .locator("main [data-slot=page-section]")
-            .evaluateAll(
-              (sections) =>
-                sections.length > 0 &&
-                sections.every((section) => section.scrollWidth <= section.clientWidth + 1),
-            ),
-        ).toBe(true);
+        for (const name of TABS) {
+          await tab(page, name).click();
+          expect(
+            await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+          ).toBe(true);
+          expect(
+            await page
+              .locator("main [data-slot=page-section]")
+              .evaluateAll(
+                (sections) =>
+                  sections.length > 0 &&
+                  sections.every((section) => section.scrollWidth <= section.clientWidth + 1),
+              ),
+          ).toBe(true);
+        }
       }
+    await tab(page, "Overview").click();
     await page.screenshot({
       path: test.info().outputPath("backups-desktop-dark.png"),
       fullPage: true,
@@ -168,23 +207,27 @@ test.describe("installation backups", () => {
       path: test.info().outputPath("backups-mobile-light.png"),
       fullPage: true,
     });
-    await expect
-      .poll(() =>
-        page.locator("main [data-slot=button]").evaluateAll((buttons) =>
-          buttons
-            .filter(
-              (button) =>
-                button.getBoundingClientRect().height > 0 &&
-                button.getBoundingClientRect().height < 43.99,
-            )
-            .map((button) => ({
-              text: button.textContent,
-              height: button.getBoundingClientRect().height,
-              classes: button.className,
-            })),
-        ),
-      )
-      .toEqual([]);
+    for (const name of TABS) {
+      await tab(page, name).click();
+      await expect
+        .poll(() =>
+          page.locator("main [data-slot=button]").evaluateAll((buttons) =>
+            buttons
+              .filter(
+                (button) =>
+                  button.getBoundingClientRect().height > 0 &&
+                  button.getBoundingClientRect().height < 43.99,
+              )
+              .map((button) => ({
+                text: button.textContent,
+                height: button.getBoundingClientRect().height,
+                classes: button.className,
+              })),
+          ),
+        )
+        .toEqual([]);
+    }
+    await tab(page, "History").click();
     await page.getByRole("button", { name: "Download backup" }).last().scrollIntoViewIfNeeded();
     await page.screenshot({
       path: test.info().outputPath("backups-mobile-history.png"),

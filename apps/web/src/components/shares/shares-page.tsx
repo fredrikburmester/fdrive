@@ -1,9 +1,11 @@
 "use client";
 
-import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { Check, Copy, LinkIcon, LockIcon, Pencil, Trash2, TriangleAlertIcon } from "lucide-react";
+import type { ManagedShare } from "@fdrive/contracts";
+import { cn } from "cn";
+import { Check, Copy, LinkIcon, LockIcon, Trash2, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { SharedWithPeopleSection } from "@/components/grants/shared-with-people-section";
+import { SheetDock } from "@/components/shell/list-sheet";
 import { PageHeader } from "@/components/shell/page-header";
 import {
   DataTable,
@@ -17,6 +19,8 @@ import {
   PageEmpty,
 } from "@/components/shell/page-layout";
 import { RowsSkeleton, RowText, TruncatedCell } from "@/components/shell/page-rows";
+import { StatusBadge } from "@/components/shell/status";
+import { CHOSEN_NAME, SHEET_ROW, useSheetRow } from "@/components/shell/use-sheet-row";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -28,19 +32,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { activityGesture } from "@/lib/activity/gestures";
 import { describeApiError } from "@/lib/api/errors";
 import { formatDate } from "@/lib/format";
 import { useShareManagement } from "@/lib/shares/management";
-import { publicShareHref } from "@/lib/shares/paths";
 import { PRESENTATION_LABEL } from "@/lib/shares/presentation-label";
 import { shareAccessLabel, shareItemLabel, shareUsage } from "@/lib/shares/status";
 import { useFormatters } from "@/lib/use-format-preferences";
-import { ShareDialog } from "./share-dialog";
+import { copyShareLink, shareExpired } from "./share-link";
+import { ShareSheet } from "./share-sheet";
+
+const NO_SHARES: readonly ManagedShare[] = [];
 
 /** "1 link" or "N links". */
 function linkCountLabel(count: number): string {
@@ -58,7 +62,7 @@ function ShareName({ share }: { share: ManagedShare }) {
       {share.hasPassword && (
         <span
           title="Password protected"
-          className="flex shrink-0 items-center gap-1 text-muted-foreground text-xs"
+          className="flex shrink-0 items-center gap-1 font-normal text-muted-foreground text-xs"
         >
           <LockIcon className="size-3" aria-hidden="true" />
           <span className="sr-only @3xl:not-sr-only">Password protected</span>
@@ -68,34 +72,32 @@ function ShareName({ share }: { share: ManagedShare }) {
   );
 }
 
+/**
+ * The login's public links as rows, and under them the folders it shares with people. Choosing
+ * a link opens its sheet beside the rows: its address, what it shares and its settings.
+ */
 export function SharesPage() {
   const management = useShareManagement();
   const mobile = useIsMobile();
   const { prefs } = useFormatters();
-  const [editing, setEditing] = useState<{ share: ManagedShare; entries: FsEntry[] } | null>(null);
   const [revoking, setRevoking] = useState<ManagedShare | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
-  async function edit(share: ManagedShare) {
-    setError(null);
-    try {
-      setEditing({ share, entries: await management.entries(share.paths) });
-    } catch {
-      setError("Could not load the shared files. Refresh and try again.");
-    }
-  }
+  const items = management.query.data?.items;
+  // A listing that failed shows no rows, so it has no row to keep a sheet open for.
+  const sheet = useSheetRow(management.query.isError ? NO_SHARES : (items ?? NO_SHARES));
   async function copy(share: ManagedShare) {
-    const report = activityGesture("share.copy_link", share.paths[0] ?? "/", share.id);
     try {
-      await navigator.clipboard.writeText(
-        new URL(publicShareHref(share.id), window.location.origin).href,
-      );
+      await copyShareLink(share);
       setCopied(share.id);
-      void report().catch(() => undefined);
     } catch {
       setError("Could not copy the link.");
     }
+  }
+  function askToRevoke(share: ManagedShare) {
+    setError(null);
+    setRevoking(share);
   }
   async function revoke() {
     if (!revoking) return;
@@ -119,8 +121,7 @@ export function SharesPage() {
       title: date.toLocaleString(),
     };
   }
-  const items = management.query.data?.items;
-  /** A row's three actions; on a phone each is a larger tap target. */
+  /** A row's own actions, beside choosing it; on a phone each is a larger tap target. */
   function actions(share: ManagedShare) {
     const size = mobile ? "icon-lg" : "icon-sm";
     return (
@@ -128,6 +129,7 @@ export function SharesPage() {
         <Button
           size={size}
           variant="ghost"
+          className="max-md:size-11"
           aria-label={`Copy link for ${share.name}`}
           onClick={() => void copy(share)}
         >
@@ -141,153 +143,163 @@ export function SharesPage() {
         <Button
           size={size}
           variant="ghost"
-          aria-label={`Edit ${share.name}`}
-          onClick={() => void edit(share)}
-        >
-          <Pencil />
-        </Button>
-        <Button
-          size={size}
-          variant="ghost"
+          className="max-md:size-11"
           aria-label={`Revoke ${share.name}`}
-          onClick={() => {
-            setError(null);
-            setRevoking(share);
-          }}
+          onClick={() => askToRevoke(share)}
         >
           <Trash2 />
         </Button>
       </div>
     );
   }
+  const chosen = sheet.chosen;
   return (
     <>
       <PageHeader breadcrumbs={<h1 className="truncate font-medium text-sm">Shares</h1>} />
-      {/* `PageBody` is a size container: the table drops its least important columns when narrow. */}
-      <PageBody>
-        <PageBar>
-          {items !== undefined && (
-            <span className="text-foreground">{linkCountLabel(items.length)}</span>
-          )}
-          <span>Select files or a folder in Files and choose Share to create a link.</span>
-        </PageBar>
-        {(error || management.query.isError) && (
-          <div className="border-border/60 border-b p-3">
-            <Alert variant="destructive">
-              <TriangleAlertIcon />
-              {error ? (
-                <AlertTitle>{error}</AlertTitle>
-              ) : (
-                <>
-                  <AlertTitle>Could not load share links</AlertTitle>
-                  <AlertDescription>{describeApiError(management.query.error)}</AlertDescription>
-                </>
-              )}
-            </Alert>
-          </div>
-        )}
-        {management.query.isPending ? (
-          <RowsSkeleton label="Loading links…" rows={3} />
-        ) : management.query.isError ? null : items === undefined || items.length === 0 ? (
-          // Not a flex container: the people section follows, so the empty state stays compact.
-          <div>
-            <PageEmpty
-              icon={LinkIcon}
-              title="No share links yet"
-              description="Select files or a folder in Files and choose Share to create one."
+      <SheetDock
+        sheet={
+          chosen !== null ? (
+            <ShareSheet
+              key={chosen.id}
+              share={chosen}
+              onRevoke={() => askToRevoke(chosen)}
+              {...sheet.sheetProps}
             />
-          </div>
-        ) : (
-          <DataTable className="table-fixed">
-            <DataTableHeader>
-              <DataTableRow>
-                <DataTableHead>Name</DataTableHead>
-                {!mobile && (
+          ) : null
+        }
+      >
+        {/*
+         * `PageBody` is a size container: the table drops its least important columns when narrow,
+         * as it is beside an open sheet, which shows them all.
+         */}
+        <PageBody>
+          <PageBar>
+            {items !== undefined && (
+              <span className="text-foreground">{linkCountLabel(items.length)}</span>
+            )}
+            <span>Select files or a folder in Files and choose Share to create a link.</span>
+          </PageBar>
+          {(error || management.query.isError) && (
+            <div className="border-border/60 border-b p-3">
+              <Alert variant="destructive">
+                <TriangleAlertIcon />
+                {error ? (
+                  <AlertTitle>{error}</AlertTitle>
+                ) : (
                   <>
-                    <DataTableHead className="hidden w-[20%] @2xl:table-cell">Item</DataTableHead>
-                    <DataTableHead className="w-24">Access</DataTableHead>
-                    <DataTableHead className="hidden w-28 @4xl:table-cell">Shown as</DataTableHead>
-                    <DataTableHead className="hidden w-40 @3xl:table-cell">Usage</DataTableHead>
-                    <DataTableHead className="w-32">Expires</DataTableHead>
+                    <AlertTitle>Could not load share links</AlertTitle>
+                    <AlertDescription>{describeApiError(management.query.error)}</AlertDescription>
                   </>
                 )}
-                <DataTableHead
-                  className={mobile ? "w-[8.5rem] text-right" : "w-[6.5rem] text-right"}
-                >
-                  Actions
-                </DataTableHead>
-              </DataTableRow>
-            </DataTableHeader>
-            <DataTableBody>
-              {items.map((share) => {
-                const expires = expiry(share);
-                return (
-                  <DataTableRow key={share.id} className={mobile ? "h-14" : undefined}>
-                    {mobile ? (
-                      <DataTableCell>
-                        <RowText
-                          name={share.name}
-                          detail={[
-                            shareAccessLabel(share.scope),
-                            share.hasPassword ? "Password protected" : null,
-                            shareItemLabel(share.paths),
-                            share.expiresAt ? `Expires ${expires.label}` : "No expiry",
-                            shareUsage(share),
-                          ]
-                            .filter((part) => part !== null)
-                            .join(" · ")}
-                        />
-                      </DataTableCell>
-                    ) : (
-                      <>
-                        <DataTableCell title={share.name}>
-                          <ShareName share={share} />
-                        </DataTableCell>
-                        <TruncatedCell
-                          title={shareItemLabel(share.paths)}
-                          className="hidden text-muted-foreground text-xs @2xl:table-cell"
-                        >
-                          {shareItemLabel(share.paths)}
-                        </TruncatedCell>
+              </Alert>
+            </div>
+          )}
+          {management.query.isPending ? (
+            <RowsSkeleton label="Loading links…" rows={3} />
+          ) : management.query.isError ? null : items === undefined || items.length === 0 ? (
+            // Not a flex container: the people section follows, so the empty state stays compact.
+            <div>
+              <PageEmpty
+                icon={LinkIcon}
+                title="No share links yet"
+                description="Select files or a folder in Files and choose Share to create one."
+              />
+            </div>
+          ) : (
+            <DataTable className="table-fixed">
+              <DataTableHeader>
+                <DataTableRow>
+                  <DataTableHead>Name</DataTableHead>
+                  {!mobile && (
+                    <>
+                      <DataTableHead className="hidden w-[20%] @2xl:table-cell">Item</DataTableHead>
+                      <DataTableHead className="hidden w-24 @md:table-cell">Access</DataTableHead>
+                      <DataTableHead className="hidden w-28 @4xl:table-cell">
+                        Shown as
+                      </DataTableHead>
+                      <DataTableHead className="hidden w-40 @3xl:table-cell">Usage</DataTableHead>
+                      <DataTableHead className="hidden w-32 @sm:table-cell">Expires</DataTableHead>
+                    </>
+                  )}
+                  <DataTableHead className={mobile ? "w-[6.75rem] text-right" : "w-20 text-right"}>
+                    Actions
+                  </DataTableHead>
+                </DataTableRow>
+              </DataTableHeader>
+              <DataTableBody>
+                {items.map((share) => {
+                  const expires = expiry(share);
+                  const expired = shareExpired(share);
+                  return (
+                    <DataTableRow
+                      key={share.id}
+                      {...sheet.rowProps(share.id)}
+                      className={cn(SHEET_ROW, mobile && "h-14")}
+                    >
+                      {mobile ? (
                         <DataTableCell>
-                          <Badge variant="secondary">{shareAccessLabel(share.scope)}</Badge>
+                          <RowText
+                            name={<span className={CHOSEN_NAME}>{share.name}</span>}
+                            detail={[
+                              shareAccessLabel(share.scope),
+                              share.hasPassword ? "Password protected" : null,
+                              shareItemLabel(share.paths),
+                              expired
+                                ? "Expired"
+                                : share.expiresAt
+                                  ? `Expires ${expires.label}`
+                                  : "No expiry",
+                              shareUsage(share),
+                            ]
+                              .filter((part) => part !== null)
+                              .join(" · ")}
+                          />
                         </DataTableCell>
-                        <TruncatedCell className="hidden text-muted-foreground text-xs @4xl:table-cell">
-                          {PRESENTATION_LABEL[share.presentation]}
-                        </TruncatedCell>
-                        <TruncatedCell className="hidden text-muted-foreground text-xs @3xl:table-cell">
-                          {shareUsage(share)}
-                        </TruncatedCell>
-                        <TruncatedCell
-                          title={expires.title}
-                          className="text-muted-foreground text-xs"
-                        >
-                          {expires.label}
-                        </TruncatedCell>
-                      </>
-                    )}
-                    <DataTableCell>{actions(share)}</DataTableCell>
-                  </DataTableRow>
-                );
-              })}
-            </DataTableBody>
-          </DataTable>
-        )}
-        {/*
-         * The people section brings its own heading and table. Padded while it is a plain
-         * block; flush once it is built from `PageSection`, which pads and borders itself.
-         */}
-        <div className="border-border border-t px-3 py-4 has-[>[data-slot=page-section]]:p-0">
-          <SharedWithPeopleSection />
-        </div>
-      </PageBody>
-      {editing && (
-        <ShareDialog
-          entries={editing.entries}
-          share={editing.share}
-          onClose={() => setEditing(null)}
-        />
-      )}
+                      ) : (
+                        <>
+                          <DataTableCell title={share.name} className={CHOSEN_NAME}>
+                            <ShareName share={share} />
+                          </DataTableCell>
+                          <TruncatedCell
+                            title={shareItemLabel(share.paths)}
+                            className="hidden text-muted-foreground text-xs @2xl:table-cell"
+                          >
+                            {shareItemLabel(share.paths)}
+                          </TruncatedCell>
+                          <DataTableCell className="hidden @md:table-cell">
+                            <StatusBadge>{shareAccessLabel(share.scope)}</StatusBadge>
+                          </DataTableCell>
+                          <TruncatedCell className="hidden text-muted-foreground text-xs @4xl:table-cell">
+                            {PRESENTATION_LABEL[share.presentation]}
+                          </TruncatedCell>
+                          <TruncatedCell className="hidden text-muted-foreground text-xs @3xl:table-cell">
+                            {shareUsage(share)}
+                          </TruncatedCell>
+                          <TruncatedCell
+                            title={expires.title}
+                            className="hidden text-muted-foreground text-xs @sm:table-cell"
+                          >
+                            {expired ? (
+                              <StatusBadge tone="warning">Expired</StatusBadge>
+                            ) : (
+                              expires.label
+                            )}
+                          </TruncatedCell>
+                        </>
+                      )}
+                      <DataTableCell>{actions(share)}</DataTableCell>
+                    </DataTableRow>
+                  );
+                })}
+              </DataTableBody>
+            </DataTable>
+          )}
+          {/* The people section brings its own heading and table, and pads and borders itself. */}
+          <div className="border-border border-t">
+            <SharedWithPeopleSection />
+          </div>
+        </PageBody>
+      </SheetDock>
       <AlertDialog
         open={revoking !== null}
         onOpenChange={(open) => {

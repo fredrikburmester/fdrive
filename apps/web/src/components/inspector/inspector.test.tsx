@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Inspector } from "./inspector";
 
@@ -19,7 +19,9 @@ vi.mock("@/lib/inspector/queries", () => ({
 }));
 
 vi.mock("@/components/metadata/entry-metadata-section", () => ({
-  EntryMetadataSection: () => null,
+  EntryMetadataSection: ({ entries }: { entries: readonly FsEntry[] }) => (
+    <div data-testid="metadata">{entries.map((entry) => entry.path).join(",")}</div>
+  ),
 }));
 
 vi.mock("@/lib/preview/deps", () => ({
@@ -40,13 +42,38 @@ const DIR_ENTRY: FsEntry = {
   mime: null,
 };
 
-beforeEach(() => {
+const FILE_ENTRY: FsEntry = {
+  name: "report.pdf",
+  path: "/docs/report.pdf",
+  kind: "file",
+  size: 2048,
+  modifiedAt: "2024-06-14T09:00:00.000Z",
+  ext: ".pdf",
+  mime: null,
+};
+
+/** The panel is an aside on a wide window and a sheet on a narrow one. */
+function stubWindow(wide: boolean) {
   vi.stubGlobal("matchMedia", (query: string) => ({
-    matches: true,
+    matches: wide,
     media: query,
     addEventListener: () => {},
     removeEventListener: () => {},
   }));
+}
+
+/** The label and value pairs the panel lists. */
+function factsOf(panel: HTMLElement): Record<string, string | null | undefined> {
+  return Object.fromEntries(
+    [...panel.querySelectorAll("dt")].map((term) => [
+      term.textContent ?? "",
+      term.nextElementSibling?.textContent,
+    ]),
+  );
+}
+
+beforeEach(() => {
+  stubWindow(true);
   useFolderSizeMock.mockReset();
   usePhotoDetailsMock.mockReset();
   usePhotoDetailsMock.mockReturnValue({ data: undefined });
@@ -54,6 +81,107 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe("Inspector: the panel", () => {
+  it("is a sheet beside the file list: panel ground, a hairline on its left, no shadow", () => {
+    render(<Inspector entries={[FILE_ENTRY]} onClose={() => {}} />);
+
+    const panel = screen.getByRole("complementary", { name: "Info" });
+    expect(panel.className).toContain("bg-panel");
+    expect(panel.className).toContain("border-l");
+    expect(panel.className).not.toContain("bg-card");
+    expect(panel.className).not.toContain("shadow");
+    // Its width is the one the file browser lays out around.
+    expect(panel.className).toContain("w-80");
+  });
+
+  it("titles the panel with the file's name, and its kind and size on a quiet line", () => {
+    render(<Inspector entries={[FILE_ENTRY]} onClose={() => {}} />);
+
+    const panel = within(screen.getByRole("complementary", { name: "Info" }));
+    const title = panel.getByRole("heading", { level: 2, name: "report.pdf" });
+    // The name is said once, and never cut short.
+    expect(panel.getAllByText("report.pdf")).toHaveLength(1);
+    expect(title.className).not.toContain("truncate");
+    expect(panel.getByText("PDF Document · 2.0 KB")).toBeTruthy();
+  });
+
+  it("lists the entry's facts under a small heading, each label with its value", () => {
+    render(<Inspector entries={[FILE_ENTRY]} onClose={() => {}} />);
+
+    const panel = screen.getByRole("complementary", { name: "Info" });
+    expect(within(panel).getByRole("heading", { level: 3, name: "Details" })).toBeTruthy();
+    const facts = factsOf(panel);
+    expect(Object.keys(facts)).toEqual(["Kind", "Size", "Modified", "Location", "Extension"]);
+    expect(facts).toMatchObject({
+      Kind: "PDF Document",
+      Size: "2.0 KB",
+      Location: "/docs",
+      Extension: ".pdf",
+    });
+    expect(within(panel).getByTestId("metadata").textContent).toBe("/docs/report.pdf");
+  });
+
+  it("names a folder's kind alone until its size is known", () => {
+    useFolderSizeMock.mockReturnValue({ isPending: true, isError: false, data: undefined });
+    const view = render(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} />);
+    expect(screen.getByText("Folder", { selector: "p" })).toBeTruthy();
+
+    useFolderSizeMock.mockReturnValue({
+      isPending: false,
+      isError: false,
+      data: { bytes: 2048, files: 12, indexed: true },
+    });
+    view.rerender(<Inspector entries={[DIR_ENTRY]} onClose={() => {}} />);
+    expect(screen.getByText("Folder · 2.0 KB")).toBeTruthy();
+  });
+
+  it("closes from its close button", () => {
+    const onClose = vi.fn();
+    render(<Inspector entries={[FILE_ENTRY]} onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Close info" }));
+
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("says when nothing is selected", () => {
+    render(<Inspector entries={[]} onClose={() => {}} />);
+
+    const panel = screen.getByRole("complementary", { name: "Info" });
+    expect(within(panel).getByRole("heading", { level: 2, name: "No selection" })).toBeTruthy();
+    expect(within(panel).getByText("Select a file or folder to see its details.")).toBeTruthy();
+    expect(factsOf(panel)).toEqual({});
+    expect(within(panel).queryByTestId("metadata")).toBeNull();
+    expect(within(panel).getByRole("button", { name: "Close info" })).toBeTruthy();
+  });
+
+  it("sums up several selected items, and tags or favorites them together", () => {
+    render(<Inspector entries={[FILE_ENTRY, DIR_ENTRY]} onClose={() => {}} />);
+
+    const panel = screen.getByRole("complementary", { name: "Info" });
+    expect(within(panel).getByRole("heading", { level: 2, name: "2 items selected" })).toBeTruthy();
+    expect(within(panel).getByText("2.0 KB total")).toBeTruthy();
+    expect(factsOf(panel)).toEqual({});
+    expect(within(panel).getByTestId("metadata").textContent).toBe("/docs/report.pdf,/photos");
+  });
+
+  it("is a sheet named Info on a narrow window, with the same header and its own close", async () => {
+    stubWindow(false);
+    const onClose = vi.fn();
+    render(<Inspector entries={[FILE_ENTRY]} onClose={onClose} />);
+
+    const sheet = await screen.findByRole("dialog", { name: "Info" });
+    expect(screen.queryByRole("complementary", { name: "Info" })).toBeNull();
+    expect(within(sheet).getByRole("heading", { level: 2, name: "report.pdf" })).toBeTruthy();
+    expect(within(sheet).getByText("PDF Document · 2.0 KB")).toBeTruthy();
+    expect(factsOf(sheet).Kind).toBe("PDF Document");
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });
 
 describe("Inspector: folder size states", () => {

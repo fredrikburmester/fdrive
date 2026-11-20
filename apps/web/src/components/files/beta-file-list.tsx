@@ -68,7 +68,10 @@ interface DesktopRow extends RowIcon {
   readonly chevron: string;
 }
 
-/** "compact" is the list as it was before rows got taller; "comfortable" fills a 64px row. */
+/**
+ * "standard" is the list as it always was; "comfortable" fills a 64px row, and "compact" draws
+ * everything a step smaller in a 30px one.
+ */
 const DESKTOP_ROWS: Record<ListDensity, DesktopRow> = {
   comfortable: {
     slotPx: 40,
@@ -81,7 +84,7 @@ const DESKTOP_ROWS: Record<ListDensity, DesktopRow> = {
     name: "text-[15px]",
     chevron: "size-5",
   },
-  compact: {
+  standard: {
     slotPx: 24,
     gapPx: 10,
     gap: "gap-2.5",
@@ -91,12 +94,23 @@ const DESKTOP_ROWS: Record<ListDensity, DesktopRow> = {
     name: "",
     chevron: "size-4",
   },
+  compact: {
+    slotPx: 20,
+    gapPx: 8,
+    gap: "gap-2",
+    slot: "size-5",
+    icon: "size-4",
+    thumbnail: "size-5 rounded-xs",
+    name: "text-[13px]",
+    chevron: "size-3.5",
+  },
 };
 
 /** A phone row's icon column, next to two lines of text. */
 const PHONE_ICONS: Record<ListDensity, RowIcon> = {
   comfortable: { slot: "size-10", icon: "size-6", thumbnail: "size-10 rounded-md" },
-  compact: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm" },
+  standard: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm" },
+  compact: { slot: "size-7", icon: "size-[18px]", thumbnail: "size-7 rounded-sm" },
 };
 
 /**
@@ -105,7 +119,8 @@ const PHONE_ICONS: Record<ListDensity, RowIcon> = {
  */
 const TOUCH_TREE: Record<ListDensity, { box: string; icon: string; indentPx: number }> = {
   comfortable: { box: "size-5", icon: "size-4", indentPx: 24 },
-  compact: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+  standard: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+  compact: { box: "size-4", icon: "size-3.5", indentPx: 16 },
 };
 
 /** Shown while the row is hovered or the control has keyboard focus. */
@@ -427,7 +442,7 @@ export function BetaFileList({
             onClick={() => setSelecting((on) => !on)}
             className={cn(
               "absolute right-0 text-muted-foreground",
-              selecting && "font-medium text-primary hover:text-primary",
+              selecting && "font-medium text-ring hover:text-ring",
             )}
           >
             {selecting ? "Done" : "Select"}
@@ -559,7 +574,7 @@ export function BetaFileList({
                   if (inRow(event)) onEntryDoubleClick(entry);
                 }}
                 className={cn(
-                  "group/row absolute flex items-center pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
+                  "group/row absolute flex items-center pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-ring/15",
                   gap,
                   hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
                   hoverControls && joinsAbove && "rounded-t-none",

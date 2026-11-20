@@ -90,6 +90,40 @@ describe("SettingsSheet", () => {
     expect(screen.getByText("Workers must be 1-16.")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
   });
+
+  it("is a dialog named by its title, with one way to close it", () => {
+    mount({ description: undefined });
+
+    expect(screen.getByRole("dialog", { name: "Indexer settings" })).toBeTruthy();
+    expect(screen.queryByText("Applied on the next scan.")).toBeNull();
+    expect(screen.getAllByRole("button", { name: "Close" })).toHaveLength(1);
+  });
+
+  it("saves and resets a dirty, valid draft, with Save last", () => {
+    const onSave = vi.fn();
+    const { onReset } = mount({ dirty: true, onSave });
+
+    const footer = screen.getByRole("button", { name: "Save" }).parentElement as HTMLElement;
+    expect(
+      Array.from(footer.querySelectorAll("button")).map((button) => button.textContent),
+    ).toEqual(["Reset", "Save"]);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reset" }));
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("says a save is in flight and holds both buttons", () => {
+    mount({ dirty: true, pending: true });
+
+    expect((screen.getByRole("button", { name: "Saving…" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect((screen.getByRole("button", { name: "Reset" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
 });
 
 describe("SystemSettingsButton", () => {

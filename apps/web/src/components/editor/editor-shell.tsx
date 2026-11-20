@@ -308,7 +308,7 @@ export function EditorShell({ path, from = null }: EditorShellProps) {
               <span
                 role="status"
                 aria-label="Unsaved changes"
-                className="size-1.5 shrink-0 rounded-full bg-primary"
+                className="size-1.5 shrink-0 rounded-full bg-ring"
               />
             )}
           </span>

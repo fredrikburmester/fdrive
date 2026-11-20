@@ -110,6 +110,24 @@ async function unlockedWith(status: Extract<EncryptionStatus, { enabled: true }>
   await keyStore.unlocked(keys.identity);
 }
 
+/** The segments that choose which part of an unlocked sheet shows. */
+function parts() {
+  return screen.getByRole("group", { name: "Section" });
+}
+
+/** Shows one part of an unlocked sheet: Key, Password or Macs. */
+function show(part: "Key" | "Password" | "Macs") {
+  fireEvent.click(within(parts()).getByRole("button", { name: part }));
+}
+
+/** The words of the sheet's status badges, in order. */
+function badges(container: HTMLElement) {
+  return Array.from(
+    container.querySelectorAll('[data-slot="status-badge"]'),
+    (badge) => badge.textContent,
+  );
+}
+
 describe("EncryptionSection", () => {
   it("stays hidden while the account loads, and says so where encrypted folders are off", () => {
     mocks.me = undefined;
@@ -117,6 +135,9 @@ describe("EncryptionSection", () => {
     expect(container.textContent).toBe("");
     mocks.me = makeMe({ encryptedFolders: false });
     rerender(<EncryptionSection />);
+    const sheet = screen.getByRole("region", { name: "Encryption" });
+    expect(within(sheet).getByRole("heading", { level: 1, name: "Encryption" })).toBeDefined();
+    expect(badges(container)).toEqual([]);
     expect(screen.getByText("Encrypted folders are not available")).toBeDefined();
     expect(screen.getByText("This fdrive server does not offer them.")).toBeDefined();
     expect(screen.queryByLabelText("Encryption password")).toBeNull();
@@ -126,7 +147,10 @@ describe("EncryptionSection", () => {
   it("shows a placeholder while the status loads, and a retry when it fails", () => {
     mocks.status = { ...mocks.status, data: undefined };
     const { container, rerender } = mount();
+    expect(screen.getByRole("heading", { level: 1, name: "Encryption" })).toBeDefined();
     expect(container.querySelector('[data-slot="skeleton"]')).not.toBeNull();
+    // Neither On nor Off until the server has said which.
+    expect(badges(container)).toEqual([]);
 
     mocks.status = {
       ...mocks.status,
@@ -152,10 +176,13 @@ describe("EncryptionSection", () => {
       configurable: true,
     });
     mocks.enable.mockResolvedValue(enabled);
-    mount();
+    const { container } = mount();
 
-    expect(screen.getByRole("heading", { level: 2, name: "Encryption" })).toBeDefined();
+    expect(screen.getByRole("heading", { level: 1, name: "Encryption" })).toBeDefined();
     expect(screen.getByText("Folders only your own devices can open.")).toBeDefined();
+    expect(badges(container)).toEqual(["Off"]);
+    // Nothing to reset before there are keys.
+    expect(container.querySelector('[data-slot="detail-sheet-footer"]')).toBeNull();
     expect(screen.getByText(/the server and its administrators cannot open them/)).toBeDefined();
     expect(
       screen.getByText(/A server that has been taken over could change this web app/),
@@ -184,6 +211,11 @@ describe("EncryptionSection", () => {
     const shown = await screen.findByText(/^AGE-SECRET-KEY-1/);
     const recoveryIdentity = shown.textContent ?? "";
     expect(crypto.isIdentity(recoveryIdentity)).toBe(true);
+    expect(shown.getAttribute("data-slot")).toBe("recovery-key");
+    expect(screen.getByRole("heading", { level: 2, name: "Recovery key" })).toBeDefined();
+    expect(screen.getByText(/it is the only way back into your encrypted folders/)).toBeDefined();
+    // The password step is behind it, and its Continue went with it.
+    expect(screen.queryByRole("button", { name: "Continue" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Download" }));
     expect(click).toHaveBeenCalledOnce();
@@ -294,19 +326,87 @@ describe("EncryptionSection", () => {
   it("asks a locked browser for the encryption password and still offers a reset", async () => {
     mocks.status = { ...mocks.status, data: enabled };
     await keyStore.refresh(enabled);
-    mount();
+    const { container } = mount();
 
+    expect(badges(container)).toEqual(["On", "Locked in this browser"]);
+    expect(screen.getByRole("heading", { level: 2, name: "Unlock this browser" })).toBeDefined();
     expect(
       screen.getByText(/Enter your encryption password to open encrypted folders here/),
     ).toBeDefined();
-    expect(screen.getByRole("button", { name: "Reset encryption" })).toBeDefined();
+    // The parts of an unlocked sheet wait for the key.
+    expect(screen.queryByRole("group", { name: "Section" })).toBeNull();
+    const footer = container.querySelector('[data-slot="detail-sheet-footer"]') as HTMLElement;
+    expect(within(footer).getByRole("button", { name: "Reset encryption" })).toBeDefined();
     type("Encryption password", PASSWORD);
     fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
     await waitFor(() => expect(keyStore.get().status).toBe("unlocked"));
     expect(await screen.findByText("Key fingerprint")).toBeDefined();
+    expect(badges(container)).toEqual(["On", "Unlocked in this browser"]);
   });
 
-  it("shows the key fingerprint, paired Macs and locks this browser", async () => {
+  it("shows the key fingerprint and locks this browser", async () => {
+    await unlockedWith(enabled);
+    const { container } = mount();
+
+    expect(badges(container)).toEqual(["On", "Unlocked in this browser"]);
+    expect(screen.getByRole("heading", { level: 2, name: "Your key" })).toBeDefined();
+    expect(
+      screen.getByText("This browser holds your key until you lock it or sign out."),
+    ).toBeDefined();
+    const fingerprint = await crypto.keyFingerprint(keys.recipient);
+    const shown = await screen.findByText(fingerprint);
+    expect(shown.getAttribute("data-slot")).toBe("key-fingerprint");
+    expect(
+      screen.getByText("The Mac app shows the same fingerprint once it holds your key."),
+    ).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Lock this browser" }));
+    await waitFor(() => expect(keyStore.get().status).toBe("locked"));
+    expect(await screen.findByRole("button", { name: "Unlock" })).toBeDefined();
+    expect(badges(container)).toEqual(["On", "Locked in this browser"]);
+  });
+
+  it("shows one part of an unlocked sheet at a time, the key first", async () => {
+    await unlockedWith(enabled);
+    mount();
+
+    const pressed = () =>
+      within(parts())
+        .getAllByRole("button")
+        .map((segment) => [segment.textContent, segment.getAttribute("aria-pressed")]);
+    expect(pressed()).toEqual([
+      ["Key", "true"],
+      ["Password", "false"],
+      ["Macs", "false"],
+    ]);
+    expect(screen.getByText("Key fingerprint")).toBeDefined();
+    expect(screen.queryByLabelText("New encryption password")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Paired Macs" })).toBeNull();
+
+    show("Password");
+    expect(pressed()).toEqual([
+      ["Key", "false"],
+      ["Password", "true"],
+      ["Macs", "false"],
+    ]);
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Change encryption password" }),
+    ).toBeDefined();
+    expect(screen.getByLabelText("New encryption password")).toBeDefined();
+    expect(screen.queryByText("Key fingerprint")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Lock this browser" })).toBeNull();
+
+    show("Macs");
+    expect(screen.getByRole("heading", { level: 2, name: "Paired Macs" })).toBeDefined();
+    expect(screen.queryByLabelText("New encryption password")).toBeNull();
+
+    show("Key");
+    expect(screen.getByRole("button", { name: "Lock this browser" })).toBeDefined();
+    // The reset stays at the foot of the sheet whichever part shows.
+    expect(screen.getByRole("button", { name: "Reset encryption" })).toBeDefined();
+  });
+
+  it("lists paired Macs and removes one after it is confirmed", async () => {
     await unlockedWith({
       ...enabled,
       devices: [
@@ -318,17 +418,24 @@ describe("EncryptionSection", () => {
       ],
     });
     mount();
+    show("Macs");
 
-    expect(screen.getByText("Encryption is on, and this browser holds your key.")).toBeDefined();
-    const fingerprint = await crypto.keyFingerprint(keys.recipient);
-    expect(await screen.findByText(fingerprint)).toBeDefined();
+    expect(screen.getByText("Macs that hold a copy of your key.")).toBeDefined();
     const row = screen.getByRole("row", { name: /Ada's MacBook/ });
     expect(within(row).getByText("Ada's MacBook")).toBeDefined();
     expect(within(row).getByText("2026-11-02")).toBeDefined();
     expect(screen.getByRole("columnheader", { name: "Paired" })).toBeDefined();
+    expect(screen.queryByText("No Mac holds your key.")).toBeNull();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Remove Ada's MacBook" }));
+    let dialog = await screen.findByRole("alertdialog");
+    expect(within(dialog).getByText('Remove "Ada\'s MacBook"?')).toBeDefined();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(mocks.remove).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Ada's MacBook" }));
-    const dialog = await screen.findByRole("alertdialog");
+    dialog = await screen.findByRole("alertdialog");
     expect(within(dialog).getByText(/It cannot erase a key the Mac already holds/)).toBeDefined();
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     expect(mocks.remove).toHaveBeenCalledWith(
@@ -338,14 +445,13 @@ describe("EncryptionSection", () => {
     const options = mocks.remove.mock.calls[0]?.[1] as { onError: (error: Error) => void };
     options.onError(new Error("Offline"));
     expect(mocks.error).toHaveBeenCalledWith("Offline");
-
-    fireEvent.click(screen.getByRole("button", { name: "Lock this browser" }));
-    await waitFor(() => expect(keyStore.get().status).toBe("locked"));
   });
 
   it("says when no Mac holds the key", async () => {
     await unlockedWith(enabled);
     mount();
+    show("Macs");
+
     expect(screen.getByRole("heading", { level: 2, name: "Paired Macs" })).toBeDefined();
     expect(screen.getByText("No Mac holds your key.")).toBeDefined();
     expect(screen.queryByRole("table")).toBeNull();
@@ -357,7 +463,11 @@ describe("EncryptionSection", () => {
       .mockResolvedValueOnce({ ok: true });
     await unlockedWith(enabled);
     mount();
+    show("Password");
 
+    expect(
+      screen.getByText("Your encrypted folders and paired Macs keep working as before."),
+    ).toBeDefined();
     const submit = screen.getByRole("button", {
       name: "Change encryption password",
     }) as HTMLButtonElement;
@@ -387,11 +497,19 @@ describe("EncryptionSection", () => {
     await unlockedWith(enabled);
     const view = mount();
 
-    fireEvent.click(screen.getByRole("button", { name: "Reset encryption" }));
+    // The reset stands apart, at the foot of the sheet, beside what it destroys and what it keeps.
+    const footer = view.container.querySelector('[data-slot="detail-sheet-footer"]') as HTMLElement;
+    expect(
+      within(footer).getByText(/every encrypted folder becomes unreadable for good/),
+    ).toBeDefined();
+    expect(within(footer).getByText(/Your other files are not touched/)).toBeDefined();
+    expect(within(footer).getAllByRole("button")).toHaveLength(1);
+    fireEvent.click(within(footer).getByRole("button", { name: "Reset encryption" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(
       within(dialog).getByText(/Every encrypted folder becomes unreadable for good/),
     ).toBeDefined();
+    expect(mocks.reset.mutate).not.toHaveBeenCalled();
     const confirm = within(dialog).getByRole("button", {
       name: "Reset encryption",
     }) as HTMLButtonElement;

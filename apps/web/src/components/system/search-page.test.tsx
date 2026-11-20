@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemSearchResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -19,15 +19,19 @@ vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
     description: string;
+    badges?: ReactNode;
     actions?: ReactNode;
+    footer?: ReactNode;
     feature?: string | readonly string[];
     children: ReactNode;
   }) => (
     <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
+      <div data-testid="badges">{props.badges}</div>
       <div data-testid="actions">{props.actions}</div>
       <div>{props.children}</div>
+      <div data-testid="footer">{props.footer}</div>
     </div>
   ),
 }));
@@ -45,15 +49,20 @@ const CONFIGURED_FIXTURE: SystemSearchResponse = {
   index: { files: 16, withText: 10, chunks: 10, embedded: 10 },
 };
 
-function mockConfigured() {
+function mockConfigured(overrides: Partial<SystemSearchResponse> = {}) {
   useSystemSearchMock.mockReturnValue({
-    data: CONFIGURED_FIXTURE,
+    data: { ...CONFIGURED_FIXTURE, ...overrides },
     isLoading: false,
     error: null,
     dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
     refetch: vi.fn(),
   });
   useReembedMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+}
+
+/** The value a `FactList` shows beside a label. */
+function fact(label: string): string | null | undefined {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling?.textContent;
 }
 
 afterEach(() => {
@@ -69,16 +78,16 @@ describe("SearchPage", () => {
     expect(screen.getByTestId("system-page").dataset.feature).toBe("semanticSearch");
   });
 
-  it("renders the semantic status and model", async () => {
+  it("shows the model's state and name as badges in the header", async () => {
     mockConfigured();
     render(<SearchPage />);
 
-    expect(await screen.findByText("Reachable")).toBeTruthy();
-    expect(screen.getByText("intfloat/multilingual-e5-small")).toBeTruthy();
-    expect(screen.getByText("max input 512 tokens")).toBeTruthy();
+    const badges = within(screen.getByTestId("badges"));
+    expect(await badges.findByText("Reachable")).toBeTruthy();
+    expect(badges.getByText("intfloat/multilingual-e5-small")).toBeTruthy();
   });
 
-  it("renders the index totals as stat cards", async () => {
+  it("renders the index totals as headline numbers", async () => {
     mockConfigured();
     render(<SearchPage />);
 
@@ -88,20 +97,55 @@ describe("SearchPage", () => {
     expect(screen.getAllByText("10").length).toBeGreaterThan(0);
   });
 
-  it("renders the model, dimension, and re-embed cost descriptions", async () => {
+  it("splits the chunks into embedded and pending", () => {
+    mockConfigured({ index: { files: 16, withText: 10, chunks: 12, embedded: 9 } });
+    render(<SearchPage />);
+
+    const rows = within(screen.getByRole("list")).getAllByRole("listitem");
+    expect(rows.map((row) => row.textContent)).toEqual(["Embedded9", "Pending3"]);
+  });
+
+  it("lists the model, its dimensions and its input limit as facts", () => {
     mockConfigured();
     render(<SearchPage />);
 
-    expect(
-      await screen.findByText(
-        "Each chunk of text is turned into a 384-dimension vector by this model, so search can rank results by meaning, not just matching words. The badge above shows the model's own limit on how much text it can embed at once.",
-      ),
-    ).toBeTruthy();
+    expect(fact("Model")).toBe("intfloat/multilingual-e5-small");
+    expect(fact("Dimensions")).toBe("384");
+    expect(fact("Max input")).toBe("512 tokens");
     expect(
       screen.getByText(
-        "Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings. On a large index this can take a long time and loads the indexer with work.",
+        "Each chunk of text becomes a vector, so search can rank results by meaning, not just matching words.",
       ),
     ).toBeTruthy();
+  });
+
+  it("says what re-embedding costs in the sheet's footer", () => {
+    mockConfigured();
+    render(<SearchPage />);
+
+    expect(screen.getByTestId("footer").textContent).toBe(
+      "Re-embed re-extracts and re-embeds every file from scratch. On a large index this can take a long time.",
+    );
+  });
+
+  it("asks before re-embedding, then marks every file", async () => {
+    mockConfigured();
+    const mutate = vi.fn();
+    useReembedMock.mockReturnValue({ mutate, isPending: false });
+    render(<SearchPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Re-embed" }));
+    expect(await screen.findByRole("heading", { name: "Re-embed everything?" })).toBeTruthy();
+    expect(mutate).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Re-embed" }));
+    expect(mutate).toHaveBeenCalledWith(undefined, expect.anything());
+  });
+
+  it("does not offer re-embedding while search is not configured", () => {
+    mockConfigured({ configured: false });
+    render(<SearchPage />);
+
+    expect(screen.getByRole("button", { name: "Re-embed" })).toHaveProperty("disabled", true);
   });
 
   it("shows Loading while the query has not resolved yet", () => {
@@ -139,20 +183,26 @@ describe("SearchPage", () => {
   });
 
   it("names the missing variable when semantic search is not configured", async () => {
-    useSystemSearchMock.mockReturnValue({
-      data: {
-        ...CONFIGURED_FIXTURE,
-        semantic: { configured: false, healthy: false },
-      },
-      isLoading: false,
-      error: null,
-      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
-      refetch: vi.fn(),
-    });
-    useReembedMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
-
+    mockConfigured({ semantic: { configured: false, healthy: false } });
     render(<SearchPage />);
 
-    expect(await screen.findByText("Not configured: set FDRIVE_ML_URL.")).toBeTruthy();
+    expect(await screen.findByText("Not configured", { selector: "span" })).toBeTruthy();
+    expect(
+      screen.getByText((_, node) => node?.textContent === "Not configured: set FDRIVE_ML_URL."),
+    ).toBeTruthy();
+  });
+
+  it("says the model is unreachable and keeps the index numbers on screen", () => {
+    mockConfigured({ semantic: { configured: true, healthy: false } });
+    render(<SearchPage />);
+
+    expect(within(screen.getByTestId("badges")).getByText("Unreachable")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "The embedding model is unreachable. Its name and limit show here when it answers again.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("Model", { selector: "dt" })).toBeNull();
+    expect(screen.getByText("16")).toBeTruthy();
   });
 });

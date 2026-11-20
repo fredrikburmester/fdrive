@@ -1,13 +1,4 @@
 import type { MeResponse } from "@fdrive/contracts";
-import {
-  CalendarClock,
-  KeyRound,
-  LockKeyhole,
-  type LucideIcon,
-  MousePointerClick,
-  Palette,
-  RectangleEllipsis,
-} from "lucide-react";
 import type { Route } from "next";
 
 /**
@@ -30,52 +21,45 @@ export interface SettingsSection {
   /** One line under the label where the section list is a screen of its own. */
   readonly description: string;
   readonly href: Route;
-  readonly Icon: LucideIcon;
 }
 
-/** Every Settings section, in the order the section list shows them. */
+/** Every Settings section, in the order the list shows them. Each one's page is its sheet. */
 export const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   {
     id: "appearance",
     label: "Appearance",
     description: "Theme and file list design",
     href: "/account/appearance" as Route,
-    Icon: Palette,
   },
   {
     id: "browsing",
     label: "Browsing",
     description: "Row clicks and folder views",
     href: "/account/browsing" as Route,
-    Icon: MousePointerClick,
   },
   {
     id: "formats",
     label: "Formats",
     description: "Sizes, dates and times",
     href: "/account/formats" as Route,
-    Icon: CalendarClock,
   },
   {
     id: "password",
     label: "Password",
     description: "The password you sign in with",
     href: "/account/password" as Route,
-    Icon: RectangleEllipsis,
   },
   {
     id: "encryption",
     label: "Encryption",
     description: "Encrypted folders, keys and paired Macs",
     href: "/account/encryption" as Route,
-    Icon: LockKeyhole,
   },
   {
     id: "tokens",
     label: "API tokens",
     description: "Tokens for Claude and Raycast",
     href: "/account/tokens" as Route,
-    Icon: KeyRound,
   },
 ];
 

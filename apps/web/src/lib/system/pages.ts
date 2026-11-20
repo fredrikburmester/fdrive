@@ -7,9 +7,9 @@ export interface SystemPageLink {
 }
 
 /**
- * Where each feature's own System page lives. The Features cards link here
- * ("Open {label}"), and the sidebar builds its System group from the same
- * table, so a route rename cannot leave the two disagreeing.
+ * Where each feature's own System page lives. The list of System areas
+ * (`areas.ts`) is built from the same table, so a route rename cannot leave
+ * links to a feature and the list disagreeing.
  *
  * Full-text search and search OCR are both the indexer's work, so they
  * share the Indexer page.
@@ -36,10 +36,7 @@ export const AI_PAGE: SystemPageLink = { href: "/system/ai" as Route, label: "AI
 export const USERS_PAGE: SystemPageLink = { href: "/system/users" as Route, label: "Users" };
 
 /**
- * What every System page's settings apply to: the whole installation, never
- * just the login being browsed. Each page header says so, and the sidebar
- * caption says the section is for administrators.
+ * What every System area's settings apply to: the whole installation, never
+ * just the login being browsed. The list of areas says so under its rows.
  */
-export const SYSTEM_SCOPE_CAPTION = "Admins only";
-export const SYSTEM_SCOPE_NOTE =
-  "Installation-wide. Applies to every user and login, not just the one you are browsing.";
+export const SYSTEM_SCOPE_NOTE = "Admins only. Changes here apply to every user of this server.";

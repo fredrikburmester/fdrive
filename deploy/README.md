@@ -105,11 +105,11 @@ The walkthrough:
 Trash needs no step: deleted items wait in each user's Trash for 30 days, which an
 administrator can change under **System > General**. See [Trash](../docs/TRASH.md).
 
-Add everyone else under **System > Users**. Everything stays editable in
-**System > Features**. Features start off and download models only when needed, and
+Add everyone else under **System > Users**. Everything stays editable under
+**System**, where each feature has its own switch. Features start off and download models only when needed, and
 browsing keeps working if one is unavailable.
 
-Afterwards, wait until each enabled feature shows as ready in **System > Features**, or run
+Afterwards, wait until each enabled feature shows as On under **System**, or run
 `docker compose exec api node wait-ready.ts`, which returns once they all are. Then look for a
 real thumbnail or search result: healthy containers don't prove a feature works for a given
 user.
@@ -129,7 +129,7 @@ This moves to the newest [release](https://github.com/fredrikburmester/fdrive/re
 download that file again before you update.
 
 Enabled features restart with the update and can take a few minutes to be ready again.
-**System > Features** shows each one's state, or wait in the terminal with
+**System** shows each one's state, or wait in the terminal with
 `docker compose exec api node wait-ready.ts`: it returns once every enabled feature is ready,
 and after 20 minutes fails and names the ones that aren't.
 
@@ -169,9 +169,9 @@ apply it.
   is ready.
 - **PDF conversion blocked**: its worker needs read-write access. Search only needs read.
 - **Feature "failed" while containers look healthy**: its controller gave up starting it. The
-  reason is on **System > Features** and in `detail` of `GET /api/v1/health`. It retries after
-  `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300), or at once when you save features. If it
-  keeps failing, read that worker's logs. See
+  reason is on the feature's own **System** page and in `detail` of `GET /api/v1/health`. It
+  retries after `FDRIVE_RUNTIME_RETRY_AFTER_SECONDS` (default 300), or at once from
+  **Retry preparation** there. If it keeps failing, read that worker's logs. See
   [optional-worker controllers](REFERENCE.md#subsystem-health--self-diagnostics).
 - **Indexer unhealthy after the database was recreated**: expected while Postgres starts; it
   reconnects on its own. If it stays unhealthy, Postgres isn't up.

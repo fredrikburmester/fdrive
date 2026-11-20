@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemLogEntry } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const useSystemLogsMock = vi.fn();
@@ -206,11 +206,72 @@ describe("LogSheet", () => {
     expect(fetchNextPage).toHaveBeenCalled();
   });
 
-  it("expands attached data on click", async () => {
+  it("shows attached data under its message, with nothing to open first", async () => {
     useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
     render(<LogSheet subsystem="indexer" />);
     fireEvent.click(screen.getByRole("button", { name: "Logs" }));
-    fireEvent.click(await screen.findByText("Reindex failed: unreachable"));
-    expect(await screen.findByText(/"root": "files"/)).toBeTruthy();
+
+    const [withData, plain] = await screen.findAllByRole("listitem");
+    expect(withData?.textContent).toContain('{"root":"files"}');
+    expect(withData?.querySelector("button")).toBeNull();
+    expect(plain?.textContent).not.toContain("{");
+  });
+
+  it("says each entry's level as a word, colored only for warnings and errors", async () => {
+    useSystemLogsMock.mockReturnValue(
+      loaded([
+        ...ENTRIES,
+        {
+          id: "scan:0",
+          at: "2026-09-09T09:00:00.000Z",
+          level: "warn",
+          message: "Slow scan",
+          source: "indexer",
+        },
+      ]),
+    );
+    render(<LogSheet subsystem="indexer" />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+
+    const list = within(await screen.findByRole("list", { name: "Log entries" }));
+    expect(list.getByText("error").className).toContain("text-destructive");
+    expect(list.getByText("warn").className).toContain("text-warning");
+    expect(list.getByText("info").className).toContain("text-muted-foreground");
+  });
+
+  it("leads to the per-file failure history from the areas that keep one", async () => {
+    // The failure line a feature's sheet shows under its header.
+    const line = document.createElement("div");
+    line.id = "processing-failures";
+    line.scrollIntoView = vi.fn();
+    document.body.append(line);
+    useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
+    const indexer = render(<LogSheet subsystem="indexer" />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: "View per-file failure history" }));
+
+    // It closes the log and brings the line into view.
+    expect(line.scrollIntoView).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.queryByText("Scan of files finished")).toBeNull());
+    indexer.unmount();
+    line.remove();
+
+    render(<LogSheet subsystem="ocr" />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+    await screen.findByText("Scan of files finished");
+    expect(screen.queryByRole("button", { name: "View per-file failure history" })).toBeNull();
+  });
+
+  it("names the sheet after the subsystem and closes from its header", async () => {
+    useSystemLogsMock.mockReturnValue(loaded(ENTRIES));
+    render(<LogSheet subsystem="image-search" />);
+    fireEvent.click(screen.getByRole("button", { name: "Logs" }));
+
+    expect(await screen.findByRole("heading", { name: "image-search log" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "image-search log" })).toBeNull(),
+    );
   });
 });

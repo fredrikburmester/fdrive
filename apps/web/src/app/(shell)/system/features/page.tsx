@@ -1,7 +1,10 @@
-import type { Metadata } from "next";
-import { FeaturesPage } from "@/components/system/features-page";
+import { redirect } from "next/navigation";
+import { SYSTEM_ROUTE } from "@/lib/system/areas";
 
-export const metadata: Metadata = { title: "Features - fdrive" };
-export default function SystemFeaturesPage() {
-  return <FeaturesPage />;
+/**
+ * System had a Features page that listed every optional feature. Each feature is now turned on
+ * and off in its own area, so an old link to the page lands on System itself.
+ */
+export default function SystemFeaturesPage(): never {
+  redirect(SYSTEM_ROUTE);
 }

@@ -87,7 +87,11 @@ it("lists the file's latest activity newest first, with its earlier location and
 
   expect(mocks.file).toHaveBeenCalledWith("/b.txt");
   expect(mocks.history).toHaveBeenCalledWith({ limit: 10 }, `/files/${fileId}/events`);
-  const items = within(screen.getByRole("region", { name: "Activity" })).getAllByRole("listitem");
+  // A block of the details panel: a small heading over rows that are all in the open.
+  const block = screen.getByRole("region", { name: "Activity" });
+  expect(within(block).getByRole("heading", { level: 3, name: "Activity" })).toBeTruthy();
+  expect(block.querySelector("details")).toBeNull();
+  const items = within(block).getAllByRole("listitem");
   expect(items.map((item) => item.textContent)).toEqual([
     expect.stringMatching(/^Viewed info 3 times/),
     expect.stringMatching(/^Renamed.*From a\.txt$/),

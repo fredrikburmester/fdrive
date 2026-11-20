@@ -5,7 +5,7 @@ elsewhere in the drive. Nothing moves until the person reviews the suggestions a
 
 ## Set up
 
-An administrator opens **System > AI > Settings**:
+An administrator opens **System > AI**:
 
 | Provider | Needs | Notes |
 | --- | --- | --- |
@@ -13,8 +13,8 @@ An administrator opens **System > AI > Settings**:
 | Mistral | API key | Default model `mistral-large-latest`. Choose a model that supports tool calling. The api container needs outbound HTTPS to `api.mistral.ai`. |
 | OpenAI-compatible server | Base URL, model | Ollama, LM Studio, vLLM or OpenRouter. Choose a model that supports tool calling. The key is optional. |
 
-**Check connection** verifies the key, address and model without generating text. For Mistral
-it also checks that the model can call tools. Two switches
+**Test connection** verifies the saved key, address and model without generating text. For
+Mistral it also checks that the model can call tools. Two switches
 turn the features on for everyone signed in: **Organize** puts Organize in the selection bar and
 the row context menu, and **Chat** shows the chat panel. Either works on its own.
 

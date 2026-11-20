@@ -375,7 +375,7 @@ function CrumbRow({ crumb, isLast, maxWidth, onInternalDrop }: CrumbRowProps) {
             style={style}
             className={cn(
               CRUMB_CLASS,
-              "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+              "data-[drop-target=true]:bg-ring/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-ring/50",
             )}
           >
             {crumb.name}
@@ -390,7 +390,7 @@ function CrumbRow({ crumb, isLast, maxWidth, onInternalDrop }: CrumbRowProps) {
             style={style}
             className={cn(
               CRUMB_CLASS,
-              "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+              "data-[drop-target=true]:bg-ring/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-ring/50",
             )}
           >
             {crumb.name}
@@ -487,6 +487,7 @@ interface ViewSortMenuItemsProps {
 
 const DENSITY_LABELS: Record<ListDensity, string> = {
   comfortable: "Comfortable",
+  standard: "Standard",
   compact: "Compact",
 };
 

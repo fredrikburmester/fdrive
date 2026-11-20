@@ -66,7 +66,7 @@ test("a storage rename on System > General reaches logins and Mac approval, not 
     await page.bringToFront();
     await page.goto(url("/system/general"));
     await dismissActivityPanel(page);
-    const name = page.getByLabel("Name", { exact: true });
+    const name = page.getByLabel("Storage name", { exact: true });
     await expect(page.getByText("Shown under each username and in Finder.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Save name" })).toBeDisabled();
     await name.fill("   ");

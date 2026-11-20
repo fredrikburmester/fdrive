@@ -20,7 +20,7 @@ function trashRow(page: Page, name: string): Locator {
 /** The Trash section on System > General. */
 function trashSettings(page: Page): Locator {
   return page
-    .locator('[data-slot="page-section"]')
+    .locator('[data-slot="setting-row"]')
     .filter({ has: page.getByLabel("Days in Trash") });
 }
 
@@ -186,6 +186,26 @@ test.describe("trash available", () => {
     }
     await expect(page.getByRole("button", { name: "Search", exact: true })).toHaveCount(0);
 
+    // Choosing the row opens the item's sheet beside the list: where it was, when it was
+    // deleted and how long Trash keeps it. That does not check the row for the bar's actions.
+    await row.getByText(fileName, { exact: true }).click();
+    const details = page.getByRole("region", { name: fileName, exact: true });
+    await expect(details.getByText(`/${fileName}`, { exact: true })).toBeVisible();
+    await expect(
+      details.getByText("Restoring puts it back in Home.", { exact: true }),
+    ).toBeVisible();
+    for (const fact of ["Original location", "Deleted", "Size", "Kept until"]) {
+      await expect(details.getByText(fact, { exact: true })).toBeVisible();
+    }
+    await expect(details.getByRole("button", { name: "Restore", exact: true })).toBeEnabled();
+    await expect(row).toHaveAttribute("aria-selected", "true");
+    await expect(row.getByRole("checkbox", { name: `Select ${fileName}` })).not.toBeChecked();
+    await expect(page.getByText("1 item", { exact: true })).toBeVisible();
+    // Escape closes the sheet and returns to the row.
+    await page.keyboard.press("Escape");
+    await expect(details).toBeHidden();
+    await expect(row).toBeFocused();
+
     // Restore returns it to the listing. The request is held back once so the
     // toolbar's busy state is observable: Restore shows progressive copy and
     // both restore buttons are disabled until it completes.
@@ -233,6 +253,34 @@ test.describe("trash available", () => {
     await page.getByRole("button", { name: "Delete permanently" }).click();
     await page.getByRole("alertdialog").getByRole("button", { name: "Delete permanently" }).click();
     await expect(conflictRow).toBeHidden();
+
+    // An item's sheet restores it with its one primary action, and deletes it permanently
+    // from its footer after asking.
+    const sheetFileName = `${uniqueName("from-sheet")}.txt`;
+    await page.goto(`${webBaseUrl}/files`);
+    await uploadFiles(page, [{ name: sheetFileName, mimeType: "text/plain", contents: "sheet" }]);
+    await expect(listing(page).getByText(sheetFileName, { exact: true })).toBeVisible();
+    await moveToTrash(page, sheetFileName);
+    await page.goto(`${webBaseUrl}/trash`);
+    const sheetRow = trashRow(page, sheetFileName);
+    await sheetRow.getByText(sheetFileName, { exact: true }).click();
+    const sheet = page.getByRole("region", { name: sheetFileName, exact: true });
+    await sheet.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByText("Restored 1 item.")).toBeVisible();
+    await expect(sheet).toBeHidden();
+    await expect(sheetRow).toBeHidden();
+    await page.goto(`${webBaseUrl}/files`);
+    await expect(listing(page).getByText(sheetFileName, { exact: true })).toBeVisible();
+    await moveToTrash(page, sheetFileName);
+    await page.goto(`${webBaseUrl}/trash`);
+    await sheetRow.getByText(sheetFileName, { exact: true }).click();
+    await sheet.getByRole("button", { name: "Delete permanently", exact: true }).click();
+    const purge = page.getByRole("alertdialog");
+    await expect(purge).toContainText("1 item will be permanently deleted.");
+    await purge.getByRole("button", { name: "Delete permanently" }).click();
+    await expect(page.getByText("Deleted 1 item permanently.")).toBeVisible();
+    await expect(sheet).toBeHidden();
+    await expect(sheetRow).toBeHidden();
 
     // Restore to can create a destination without leaving the Trash flow.
     const restoreFileName = `${uniqueName("restore-to")}.txt`;

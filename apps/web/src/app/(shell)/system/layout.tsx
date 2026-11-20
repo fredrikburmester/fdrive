@@ -1,6 +1,7 @@
 import type { Route } from "next";
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
+import { SystemShell } from "@/components/system/system-shell";
 import { loadMe } from "../load-me";
 
 /**
@@ -11,7 +12,8 @@ import { loadMe } from "../load-me";
 const FILES_ROUTE = "/files" as unknown as Route;
 
 /**
- * Gate for every `System` page. The sidebar only hides the section from
+ * Gate for every `System` page, and the frame they share: the header, the
+ * list of areas, and the chosen area's sheet. The sidebar only hides the section from
  * non-administrators; this layout is what actually refuses them. The API
  * already answers 403 on the admin routes, so nothing is exposed either
  * way, but the page shell must not render for an account the section is
@@ -23,5 +25,5 @@ export default async function SystemLayout({ children }: { children: ReactNode }
   if (!me.isAdmin) {
     redirect(FILES_ROUTE);
   }
-  return <>{children}</>;
+  return <SystemShell>{children}</SystemShell>;
 }

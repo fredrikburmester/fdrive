@@ -1,21 +1,20 @@
-# System sidebar activity
+# System activity
 
-The admin sidebar shows a trailing spinner while a feature prepares, stops or processes
-files, and while a settings action is pending. Existing navigation icons and labels remain.
-Idle services are quiet. Hover or keyboard focus exposes the phase and counts; reduced
-motion disables rotation. Errors, blocked retries and unavailable telemetry use a static
-warning. Background job state survives navigation and reload.
+Administrators have one System row in the sidebar. It shows a trailing spinner while any
+feature prepares, stops or processes files, and while a settings action is pending. Idle
+services are quiet. Hover or keyboard focus exposes the phase and counts; reduced motion
+disables rotation. Errors, blocked retries and unavailable telemetry use a static warning.
+Background job state survives navigation and reload.
 
-The section never follows the login being browsed. Activity, counts and actions cover the
-whole files folder. The group label carries an "Admins only" caption and every System page header states its scope with
-shared copy from `lib/system/pages`. Scoping the sidebar to the signed-in login made it disagree
-with the pages and was reverted.
+The System page lists its areas (General, Users, Backups, each optional feature, Office, AI
+and About, from `lib/system/areas`). An area's row carries that area's own spinner, with a
+percentage for fixed workloads, or its warning. An area that can be turned off ends in an On
+or Off dot, and Users in its count.
 
-Features sits last, with a separate expand/collapse button nesting
-Thumbnails, Full-text search, Semantic search, Searchable PDFs, Image search and Office. The label
-still opens the overview, whose activity remains visible when collapsed. Backups, General and
-Users stay at the top level. Expansion is remembered in this browser; opening a feature
-page reveals its navigation item.
+System never follows the login being browsed. Activity, counts and actions cover the whole
+files folder, and the list of areas says so under its rows with shared copy from
+`lib/system/pages`. Scoping the sidebar to the signed-in login made it disagree with the
+pages and was reverted.
 
 ## Data flow
 
@@ -97,7 +96,7 @@ remaining workers finish. Watcher arrivals and changes the API journaled belong 
 their text and image embeddings run on threads of their own, so Semantic search and Image
 search can trail.
 Compatible simultaneous operations are weighted by their counts. Mixed kinds/units, zero
-or unknown totals omit the percentage. Features overview always omits an aggregate ratio.
+or unknown totals omit the percentage. The sidebar's System row never shows a ratio.
 
 OCR and clear jobs show live processed counts with a spinner; their discovery has no fixed
 denominator. Inventories for those jobs remain an optional enhancement, with extra startup

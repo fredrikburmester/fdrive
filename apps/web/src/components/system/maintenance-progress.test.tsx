@@ -55,4 +55,63 @@ describe("MaintenanceProgress", () => {
     render(<MaintenanceProgress title="Index clear" job={{ ...idle, errors: 1 }} />);
     expect(screen.getByRole("status").textContent).toContain("1 errors");
   });
+  it("names the pass beside its progress, and links its errors to the failure history", () => {
+    render(
+      <MaintenanceProgress
+        title="Index clear"
+        job={{ ...idle, startedAt: "2026-09-06T12:00:00Z", processed: 4, total: 4, errors: 2 }}
+      />,
+    );
+    expect(screen.getByText("Index clear")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "2 errors" }).getAttribute("href")).toBe(
+      "#processing-failures",
+    );
+  });
+  it("draws the share done as a bar only while a pass with a known total runs", () => {
+    const running = { ...idle, running: true, startedAt: "2026-09-06T12:00:00Z" };
+    const bar = () => document.querySelector<HTMLElement>('[data-slot="bar-fill"]');
+    const view = render(
+      <MaintenanceProgress title="Rebuild" job={{ ...running, processed: 3, total: 4 }} />,
+    );
+    expect(bar()?.style.width).toBe("75%");
+    // More processed than first counted never overfills the bar.
+    view.rerender(
+      <MaintenanceProgress title="Rebuild" job={{ ...running, processed: 5, total: 4 }} />,
+    );
+    expect(bar()?.style.width).toBe("100%");
+    // Still discovering: there is no whole to take a share of yet.
+    view.rerender(
+      <MaintenanceProgress
+        title="Rebuild"
+        job={{ ...running, processed: 3, total: 3, totalKnown: false }}
+      />,
+    );
+    expect(bar()).toBeNull();
+    view.rerender(<MaintenanceProgress title="Rebuild" job={{ ...running, total: 0 }} />);
+    expect(bar()).toBeNull();
+    // Finished: the line says so and the bar is gone.
+    view.rerender(
+      <MaintenanceProgress
+        title="Rebuild"
+        job={{ ...running, running: false, processed: 4, total: 4 }}
+      />,
+    );
+    expect(bar()).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("Completed · 4 of 4 processed · 0 errors");
+  });
+  it("says when a pass was stopped", () => {
+    render(
+      <MaintenanceProgress
+        title="Rebuild"
+        job={{
+          ...idle,
+          startedAt: "2026-09-06T12:00:00Z",
+          processed: 1,
+          total: 4,
+          outcome: "stopped",
+        }}
+      />,
+    );
+    expect(screen.getByRole("status").textContent).toBe("Stopped · 1 of 4 processed · 0 errors");
+  });
 });

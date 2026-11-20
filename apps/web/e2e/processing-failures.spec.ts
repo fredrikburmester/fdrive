@@ -32,7 +32,7 @@ test("failure details paginate, filter and remain readable on narrow screens", a
     });
   });
   await page.goto("/system/thumbnails");
-  await expect(page.getByText("2 unresolved files", { exact: true })).toBeVisible();
+  await expect(page.getByText("2 unresolved failures.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "View failures", exact: true }).click();
   const sheet = page.getByRole("dialog");
   await expect(sheet).toContainText("Permission denied");
@@ -41,7 +41,8 @@ test("failure details paginate, filter and remain readable on narrow screens", a
   await sheet.getByRole("button", { name: "UnidentifiedImageError · 1", exact: true }).click();
   await expect(sheet.getByRole("listitem")).toHaveCount(1);
   await expect(sheet).toContainText("Cannot decode image bytes");
-  await sheet.getByText("Details", { exact: true }).click();
+  // Every detail is on the row itself, with nothing to open first.
+  await expect(sheet.getByText("Details", { exact: true })).toHaveCount(0);
   await expect(sheet).toContainText("scan-before-restart");
   for (const width of [1280, 320]) {
     await page.setViewportSize({ width, height: 800 });

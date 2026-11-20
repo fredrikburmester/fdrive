@@ -2,11 +2,12 @@
 import type { EncryptedFolderInfo, TrashEntry } from "@fdrive/contracts";
 import * as crypto from "@fdrive/crypto";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "@/lib/api/client";
 import { keyStore } from "@/lib/encryption/keys";
+import { formatDate } from "@/lib/format";
 import { TrashPage } from "./trash-page";
 
 const report: TrashEntry = {
@@ -24,6 +25,7 @@ const fixtures = vi.hoisted(() => ({
   error: null as Error | null,
   refetch: vi.fn(),
   restore: vi.fn(),
+  purge: vi.fn(),
   restorePending: false,
   restoreConflict: false,
   toastSuccess: vi.fn(),
@@ -72,7 +74,7 @@ vi.mock("@/lib/trash/queries", () => ({
     refetch: fixtures.refetch,
   }),
   useTrashRestore: () => ({ mutate: fixtures.restore, isPending: fixtures.restorePending }),
-  useTrashPurge: () => ({ mutate: vi.fn(), isPending: false }),
+  useTrashPurge: () => ({ mutate: fixtures.purge, isPending: false }),
   useTrashEmpty: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
@@ -130,6 +132,7 @@ afterEach(() => {
   cleanup();
   fixtures.refetch.mockClear();
   fixtures.restore.mockClear();
+  fixtures.purge.mockClear();
   fixtures.toastSuccess.mockClear();
   fixtures.toastError.mockClear();
   window.localStorage.clear();
@@ -343,6 +346,238 @@ it("closes the Restore to picker on a conflict and offers it again from the toas
   expect(screen.getByRole("dialog", { name: "Restore to" })).toBeDefined();
 });
 
+/** Chooses the row of `name` by clicking its name, and returns the sheet that opens. */
+function openSheet(name = "report.txt"): HTMLElement {
+  fireEvent.click(within(screen.getByRole("row", { name: new RegExp(name) })).getByText(name));
+  return screen.getByRole("region", { name });
+}
+
+/** The open sheet's named values, by label. */
+function facts(): Record<string, string> {
+  const list = document.querySelector('[data-slot="fact-list"]');
+  return Object.fromEntries(
+    [...(list?.querySelectorAll("dt") ?? [])].map((term) => [
+      term.textContent ?? "",
+      term.nextElementSibling?.textContent ?? "",
+    ]),
+  );
+}
+
+function when(iso: string): string {
+  return formatDate(new Date(iso), { style: "absolute", clock: "24h" });
+}
+
+/** The strip of actions for the checked rows, as opposed to a sheet's own. */
+function bar(): HTMLElement {
+  return document.querySelector('[data-slot="page-bar"]') as HTMLElement;
+}
+
+describe("a chosen item's sheet", () => {
+  it("shows where the item was, when it was deleted and how long Trash keeps it", () => {
+    renderPage();
+    const row = screen.getByRole("row", { name: /report\.txt/ });
+    expect(row.getAttribute("aria-selected")).toBe("false");
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+
+    const sheet = openSheet();
+
+    expect(row.getAttribute("aria-selected")).toBe("true");
+    expect(row.getAttribute("data-state")).toBe("selected");
+    expect(document.activeElement).toBe(sheet);
+    expect(within(sheet).getByRole("heading", { level: 2, name: "report.txt" })).toBeDefined();
+    expect(within(sheet).getByText("Restoring puts it back in /docs.")).toBeDefined();
+    expect(within(sheet).getByText("/docs/report.txt").tagName).toBe("CODE");
+    expect(facts()).toEqual({
+      "Original location": "/docs/report.txt",
+      Deleted: when(report.deletedAt),
+      Size: "12 B",
+      "Kept until": when("2026-01-31T00:00:00Z"),
+    });
+    // Choosing a row opens it. It does not check it for the bar's actions.
+    expect(screen.getByText("1 item")).toBeDefined();
+    expect(
+      screen.getByRole("checkbox", { name: "Select report.txt" }).getAttribute("aria-checked"),
+    ).toBe("false");
+    expect(within(bar()).getByRole("button", { name: "Restore" })).toHaveProperty("disabled", true);
+  });
+
+  it("names the top folder, and leaves out how long an item is kept until that is known", () => {
+    fixtures.entries = [{ ...report, name: "top.txt", originalPath: "/top.txt" }];
+    fixtures.retentionDays = undefined;
+    renderPage();
+
+    const sheet = openSheet("top.txt");
+
+    expect(within(sheet).getByText("Restoring puts it back in Home.")).toBeDefined();
+    expect(facts()).toEqual({
+      "Original location": "/top.txt",
+      Deleted: when(report.deletedAt),
+      Size: "12 B",
+    });
+  });
+
+  it("stays closed when a row's checkbox is clicked, and keeps a checked row marked", () => {
+    fixtures.entries = [
+      report,
+      { ...report, id: "trash-3", name: "top.txt", originalPath: "/top.txt" },
+    ];
+    renderPage();
+
+    selectReport();
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+    expect(screen.getByText("1 selected")).toBeDefined();
+
+    // Another row's sheet opens beside the checked row, and both are marked.
+    openSheet("top.txt");
+    const checked = screen.getByRole("row", { name: /report\.txt/ });
+    const chosen = screen.getByRole("row", { name: /top\.txt/ });
+    expect(checked.getAttribute("data-state")).toBe("selected");
+    expect(checked.getAttribute("aria-selected")).toBe("false");
+    expect(chosen.getAttribute("data-state")).toBe("selected");
+    expect(chosen.getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText("1 selected")).toBeDefined();
+  });
+
+  it("opens from the keyboard, and Escape or Close returns to the row", () => {
+    renderPage();
+    const row = screen.getByRole("row", { name: /report\.txt/ });
+    expect(row.tabIndex).toBe(0);
+
+    row.focus();
+    fireEvent.keyDown(row, { key: "Enter" });
+    const sheet = screen.getByRole("region", { name: "report.txt" });
+    expect(document.activeElement).toBe(sheet);
+
+    fireEvent.keyDown(sheet, { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+    expect(document.activeElement).toBe(row);
+
+    fireEvent.keyDown(row, { key: " " });
+    fireEvent.click(
+      within(screen.getByRole("region", { name: "report.txt" })).getByRole("button", {
+        name: "Close",
+      }),
+    );
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+    expect(document.activeElement).toBe(row);
+  });
+
+  it("restores the item, busy on its own button, and closes once the item has left Trash", () => {
+    const view = renderPage();
+    const sheet = openSheet();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Restore" }));
+    expect(fixtures.restore).toHaveBeenCalledWith(
+      { ids: ["trash-1"] },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+        onSettled: expect.any(Function),
+      }),
+    );
+
+    fixtures.restorePending = true;
+    view.rerender(<TrashPage />);
+    const busy = within(sheet).getByRole("button", { name: "Restoring…" });
+    expect(busy.hasAttribute("disabled")).toBe(true);
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(busy.querySelector("svg.animate-spin")).not.toBeNull();
+    expect(within(sheet).getByRole("button", { name: "Restore to" }).hasAttribute("disabled")).toBe(
+      true,
+    );
+    // The bar does not claim the sheet's restore for itself.
+    expect(within(bar()).queryByRole("button", { name: "Restoring…" })).toBeNull();
+    expect(
+      within(bar()).getByRole("button", { name: "Restore" }).getAttribute("aria-busy"),
+    ).not.toBe("true");
+
+    const callbacks = lastRestoreCallbacks();
+    fixtures.restorePending = false;
+    fixtures.entries = [];
+    callbacks.onSuccess();
+    callbacks.onSettled?.();
+    view.rerender(<TrashPage />);
+    expect(fixtures.toastSuccess).toHaveBeenCalledWith("Restored 1 item.");
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+    expect(screen.getByText("Trash is empty")).toBeDefined();
+  });
+
+  it("offers another folder when the item's old place is taken", () => {
+    fixtures.restoreConflict = true;
+    const view = renderPage();
+    const sheet = openSheet();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Restore" }));
+    const callbacks = lastRestoreCallbacks();
+    callbacks.onError(new Error("conflict"));
+    callbacks.onSettled?.();
+    view.rerender(<TrashPage />);
+
+    expect(fixtures.toastError).toHaveBeenCalledWith(
+      'Could not restore "report.txt": a file already exists at that location.',
+      expect.objectContaining({ action: expect.objectContaining({ label: "Restore to" }) }),
+    );
+    // The item is still in Trash, so its sheet stays, ready again.
+    expect(within(sheet).getByRole("button", { name: "Restore" }).hasAttribute("disabled")).toBe(
+      false,
+    );
+  });
+
+  it("restores the item to a folder picked from its sheet", () => {
+    renderPage();
+    const sheet = openSheet();
+
+    fireEvent.click(within(sheet).getByRole("button", { name: "Restore to" }));
+    fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Restore to" })).getByRole("button", {
+        name: "Restore here",
+      }),
+    );
+
+    expect(fixtures.restore).toHaveBeenCalledWith(
+      { ids: ["trash-1"], target: "/elsewhere/report.txt" },
+      expect.objectContaining({ onSettled: expect.any(Function) }),
+    );
+  });
+
+  it("asks before deleting the item permanently, apart from the sheet's other actions", async () => {
+    renderPage();
+    const sheet = openSheet();
+    const footer = sheet.querySelector('[data-slot="detail-sheet-footer"]') as HTMLElement;
+    expect(footer.textContent).toContain("Deleting permanently cannot be undone.");
+
+    fireEvent.click(within(footer).getByRole("button", { name: "Delete permanently" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Delete permanently?");
+    expect(dialog.textContent).toContain(
+      "1 item will be permanently deleted. This cannot be undone.",
+    );
+    expect(fixtures.purge).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+    expect(fixtures.purge).toHaveBeenCalledWith(["trash-1"], expect.anything());
+  });
+
+  it("opens from a tile in the grid, where the tile's checkbox still only selects", () => {
+    window.localStorage.setItem("fdrive.view", JSON.stringify("grid"));
+    renderPage();
+    const tile = screen.getByText("report.txt").closest("[aria-selected]") as HTMLElement;
+    expect(tile.getAttribute("aria-selected")).toBe("false");
+
+    selectReport();
+    expect(screen.queryByRole("region", { name: "report.txt" })).toBeNull();
+    expect(tile.getAttribute("data-state")).toBe("selected");
+    selectReport();
+    expect(tile.getAttribute("data-state")).toBeNull();
+
+    fireEvent.click(screen.getByText("report.txt"));
+    const sheet = screen.getByRole("region", { name: "report.txt" });
+    expect(tile.getAttribute("aria-selected")).toBe("true");
+    expect(tile.getAttribute("data-state")).toBe("selected");
+    expect(within(sheet).getByText("/docs/report.txt")).toBeDefined();
+  });
+});
+
 describe("items from inside an encrypted folder", () => {
   async function encryptedTrash() {
     const account = await crypto.newKeyPair();
@@ -387,6 +622,12 @@ describe("items from inside an encrypted folder", () => {
     expect(lookup).toHaveBeenCalledWith(parent);
     expect(lookup).toHaveBeenCalledTimes(1);
 
+    // Its sheet reads the same way: the names as this browser decrypted them, never the stored ones.
+    const sheet = openSheet("Taxes 2026.pdf");
+    expect(within(sheet).getByText("/Private/Receipts/Taxes 2026.pdf").tagName).toBe("CODE");
+    expect(sheet.textContent).not.toContain(taxes);
+    fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+
     fireEvent.click(screen.getByRole("checkbox", { name: "Select Taxes 2026.pdf" }));
     fireEvent.click(screen.getByRole("button", { name: "Restore" }));
     expect(fixtures.restore).toHaveBeenCalledWith({ ids: [entry.id] }, expect.anything());
@@ -421,6 +662,13 @@ describe("items from inside an encrypted folder", () => {
     expect(screen.getByText("report.txt")).toBeDefined();
     expect(screen.queryByText(taxes)).toBeNull();
     expect(lookup).not.toHaveBeenCalled();
+
+    // Its sheet says no more than the row: no name, and its folder only as far as it reads.
+    const sheet = openSheet("Encrypted item");
+    expect(within(sheet).getByRole("heading", { level: 2, name: "Encrypted item" })).toBeDefined();
+    expect(within(sheet).getByText("Restoring puts it back where it was.")).toBeDefined();
+    expect(facts()["Original location"]).toBe("/Private/…");
+    expect(sheet.textContent).not.toContain(taxes);
   });
 
   it("shows an encrypted item when its folder is gone or its marker does not open", async () => {

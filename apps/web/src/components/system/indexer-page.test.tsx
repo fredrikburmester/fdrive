@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import type { SystemIndexerResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type { SystemFeaturesResponse, SystemIndexerResponse } from "@fdrive/contracts";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const useSystemIndexerMock = vi.fn();
+const useSystemFeaturesMock = vi.fn();
+const useUpdateFeaturesMock = vi.fn();
 const useUpdateIndexerSettingsMock = vi.fn();
 const useReindexMock = vi.fn();
 const useClearIndexMock = vi.fn();
@@ -20,28 +22,34 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemIndexer: () => useSystemIndexerMock(),
+  useSystemFeatures: () => useSystemFeaturesMock(),
+  useUpdateFeatures: () => useUpdateFeaturesMock(),
   useUpdateIndexerSettings: () => useUpdateIndexerSettingsMock(),
   useReindex: () => useReindexMock(),
   useClearIndex: () => useClearIndexMock(),
   useSystemMaintenanceBusy: () => useSystemMaintenanceBusyMock(),
 }));
 
-// `SystemPage` pulls in the whole shell chrome (sidebar trigger, global
-// search) which needs a `SidebarProvider` and a `QueryClient` this test has
-// no reason to set up: only its `children` (and `actions`) matter here.
+// `SystemPage` reads the features and the failure history itself, which
+// needs a `QueryClient` this test has no reason to set up: only what the
+// page hands it (badges, actions, content and footer) matters here.
 vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
     description: string;
+    badges?: ReactNode;
     actions?: ReactNode;
+    footer?: ReactNode;
     feature?: string | readonly string[];
     children: ReactNode;
   }) => (
     <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
+      <div data-testid="badges">{props.badges}</div>
       <div data-testid="actions">{props.actions}</div>
       <div>{props.children}</div>
+      <div data-testid="footer">{props.footer}</div>
     </div>
   ),
 }));
@@ -103,6 +111,36 @@ const CONFIGURED_FIXTURE: SystemIndexerResponse = {
   },
 };
 
+/** Every feature off, as a fresh installation has them. */
+const FEATURES: SystemFeaturesResponse = {
+  configuration: {
+    version: 1,
+    revision: 3,
+    values: {
+      thumbnails: false,
+      textSearch: false,
+      searchOcr: false,
+      semanticSearch: true,
+      imageSearch: false,
+      pdfOcr: false,
+    },
+    walkthroughComplete: true,
+  },
+  source: "settings",
+  statuses: [],
+};
+
+/** The number a `StatGrid` shows over a label. */
+function stat(label: string): string | null | undefined {
+  const grid = document.querySelector('[data-slot="stat-grid"]') as HTMLElement;
+  return within(grid).getByText(label).parentElement?.querySelector("dd")?.textContent;
+}
+
+/** The value a `FactList` shows beside a label. */
+function fact(list: HTMLElement, label: string): string | null | undefined {
+  return within(list).getByText(label).nextElementSibling?.textContent;
+}
+
 function mockConfigured() {
   useSystemIndexerMock.mockReturnValue({
     data: CONFIGURED_FIXTURE,
@@ -116,50 +154,181 @@ function mockConfigured() {
   useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
 }
 
+beforeEach(() => {
+  useSystemFeaturesMock.mockReturnValue({ data: FEATURES });
+  useUpdateFeaturesMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
   useSystemMaintenanceBusyMock.mockReturnValue(false);
 });
 
+/** Sets the clock twelve minutes after the fixture's last scan started. */
+function twelveMinutesAfterTheScan() {
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.parse("2026-09-06T18:33:30Z") });
+}
+
 describe("IndexerPage", () => {
-  it("renders the stat cards computed from the configured fixture", async () => {
+  it("renders the headline numbers computed from the configured fixture", async () => {
     mockConfigured();
     render(<IndexerPage />);
 
     // Files: sum of countsByStatus (3 + 1 + 1 + 10 + 1); with text: indexed + partial.
-    // The Files label appears in both the stat card and table header.
-    expect((await screen.findAllByText("Files")).length).toBeGreaterThan(0);
-    expect(screen.getByText("16")).toBeTruthy();
-    expect(screen.getByText("With text")).toBeTruthy();
-    expect(screen.getAllByText("10").length).toBeGreaterThan(0);
-    expect(screen.getByText("Embedded")).toBeTruthy();
+    await screen.findByText("With text");
+    expect(stat("Files")).toBe("16");
+    expect(stat("With text")).toBe("10");
+    expect(stat("Chunks")).toBe("10");
+    expect(stat("Embedded")).toBe("10");
+    expect(stat("Queue depth")).toBe("0");
     expect(screen.queryByText("Thumbnails")).toBeNull();
     expect(screen.queryByRole("button", { name: "Rebuild thumbnails" })).toBeNull();
-    expect(screen.getByText("Queue depth")).toBeTruthy();
   });
 
-  it("renders one table row per status from countsByStatus, and the watcher", async () => {
+  it("says how the indexer is doing in the header's badges", async () => {
+    twelveMinutesAfterTheScan();
     mockConfigured();
     render(<IndexerPage />);
 
-    await screen.findByText("Counts by status");
-    for (const [status, count] of Object.entries(CONFIGURED_FIXTURE.stats?.countsByStatus ?? {})) {
-      expect(screen.getByText(status)).toBeTruthy();
-      expect(screen.getAllByText(String(count)).length).toBeGreaterThan(0);
-    }
-    expect(screen.getByText("Watcher on")).toBeTruthy();
+    const badges = within(await screen.findByTestId("badges"));
+    expect(badges.getByText("Reachable")).toBeTruthy();
+    expect(badges.getByText("Watcher on").dataset.tone).toBe("neutral");
+    expect(badges.getByText("Scan 12m ago")).toBeTruthy();
   });
 
-  it("renders the last scan summary", async () => {
+  it("marks a stopped watcher as off", async () => {
+    mockConfigured();
+    useSystemIndexerMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        health: { ok: true, watcher: false, embedOk: true },
+        stats: { ...CONFIGURED_FIXTURE.stats, lastScan: null },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    render(<IndexerPage />);
+
+    const badges = within(await screen.findByTestId("badges"));
+    expect(badges.getByText("Watcher off").dataset.tone).toBe("off");
+    expect(badges.queryByText(/^Scan /)).toBeNull();
+    // No scan has run, so there is nothing to list under "Last scan".
+    expect(screen.queryByText("Last scan")).toBeNull();
+    expect(screen.getByText("Files by status")).toBeTruthy();
+  });
+
+  it("draws one bar per status from countsByStatus, indexed first and errors last", async () => {
     mockConfigured();
     render(<IndexerPage />);
 
-    await screen.findByText("Last scan");
-    expect(screen.getByText(/16 seen/)).toBeTruthy();
-    expect(screen.getByText(/0 changed/)).toBeTruthy();
-    expect(screen.getByText(/0 deleted/)).toBeTruthy();
-    expect(screen.getByText(/0 errors/)).toBeTruthy();
+    const section = (await screen.findByRole("heading", { name: "Files by status" })).closest(
+      "section",
+    ) as HTMLElement;
+    const bars = within(section).getAllByRole("listitem");
+    expect(bars.map((bar) => bar.textContent)).toEqual([
+      "Indexed10",
+      "No text1",
+      "Excluded3",
+      "None1",
+      "Error1",
+    ]);
+    expect(bars[0]?.dataset.tone).toBe("success");
+    expect(bars.at(-1)?.dataset.tone).toBe("danger");
+    // A bar is its share of all files: 10 of 16 indexed.
+    expect(
+      (bars[0]?.querySelector('[data-slot="bar-fill"]') as HTMLElement | null)?.style.width,
+    ).toBe("62.5%");
+  });
+
+  it("names a status it has no label for in plain words", async () => {
+    mockConfigured();
+    useSystemIndexerMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        stats: { ...CONFIGURED_FIXTURE.stats, countsByStatus: { "disabled:text": 2, error: 1 } },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    render(<IndexerPage />);
+
+    const section = (await screen.findByRole("heading", { name: "Files by status" })).closest(
+      "section",
+    ) as HTMLElement;
+    expect(
+      within(section)
+        .getAllByRole("listitem")
+        .map((bar) => bar.textContent),
+    ).toEqual(["Disabled text2", "Error1"]);
+  });
+
+  it("lists the last scan as facts", async () => {
+    twelveMinutesAfterTheScan();
+    mockConfigured();
+    render(<IndexerPage />);
+
+    const section = (await screen.findByRole("heading", { name: "Last scan" })).closest(
+      "section",
+    ) as HTMLElement;
+    expect(fact(section, "Started")).toBe("12m ago");
+    expect(fact(section, "Seen")).toBe("16");
+    expect(fact(section, "Changed")).toBe("0");
+    expect(fact(section, "Deleted")).toBe("0");
+    expect(fact(section, "Errors")).toBe("0");
+    expect(within(section).getByText("Errors").nextElementSibling?.innerHTML).not.toContain(
+      "text-destructive",
+    );
+  });
+
+  it("writes a last scan's errors in the destructive color", async () => {
+    mockConfigured();
+    const lastScan = CONFIGURED_FIXTURE.stats?.lastScan;
+    useSystemIndexerMock.mockReturnValue({
+      data: {
+        ...CONFIGURED_FIXTURE,
+        stats: { ...CONFIGURED_FIXTURE.stats, lastScan: { ...lastScan, errors: 2 } },
+      },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    render(<IndexerPage />);
+
+    const errors = (await screen.findByText("Errors")).nextElementSibling;
+    expect(errors?.textContent).toBe("2");
+    expect(errors?.innerHTML).toContain("text-destructive");
+  });
+
+  it("shows no numbers while the indexer is not reporting", async () => {
+    useSystemIndexerMock.mockReturnValue({
+      data: { configured: true, reachable: false, settings: CONFIGURED_FIXTURE.settings },
+      isLoading: false,
+      error: null,
+      dataUpdatedAt: Date.parse("2026-09-06T18:22:00Z"),
+      refetch: vi.fn(),
+    });
+    useUpdateIndexerSettingsMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useReindexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useClearIndexMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    render(<IndexerPage />);
+
+    expect(await screen.findByText("Unreachable")).toBeTruthy();
+    expect(screen.getByText(/The indexer is not reporting/)).toBeTruthy();
+    expect(document.querySelector('[data-slot="stat-grid"]')).toBeNull();
+    expect(screen.queryByText("Files by status")).toBeNull();
+    // Nothing to reindex or clear on an indexer that cannot be reached.
+    expect(screen.getByRole("button", { name: "Reindex" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "Clear index" })).toHaveProperty("disabled", true);
+    // Its settings and Search OCR live in fdrive, so they stay editable.
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("switch", { name: "Enable search ocr" })).toBeTruthy();
   });
 
   it("offers the Logs sheet instead of an inline errors list", async () => {
@@ -250,9 +419,97 @@ describe("IndexerPage", () => {
     mockConfigured();
     render(<IndexerPage />);
 
+    // Full-text search comes first: it is the area's own feature, the one the header's switch
+    // and On or Off badge are about.
     expect(screen.getByTestId("system-page").dataset.feature).toBe(
-      "thumbnails,textSearch,searchOcr,imageSearch",
+      "textSearch,searchOcr,thumbnails,imageSearch",
     );
+  });
+
+  it("puts Reindex last among the header's actions, as the one primary button", () => {
+    mockConfigured();
+    render(<IndexerPage />);
+
+    const actions = within(screen.getByTestId("actions"))
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+    expect(actions).toEqual(["Settings", "Logs", "Reindex"]);
+  });
+
+  it("keeps Clear index apart in the footer, beside what clearing keeps", () => {
+    mockConfigured();
+    render(<IndexerPage />);
+
+    const footer = within(screen.getByTestId("footer"));
+    expect(footer.getByRole("button", { name: "Clear index" })).toBeTruthy();
+    expect(footer.getByText(/Your files are not touched/)).toBeTruthy();
+    expect(
+      within(screen.getByTestId("actions")).queryByRole("button", { name: "Clear index" }),
+    ).toBeNull();
+  });
+
+  it("turns Search OCR on at once, and full-text search with it", () => {
+    mockConfigured();
+    const mutate = vi.fn();
+    useUpdateFeaturesMock.mockReturnValue({ mutate, isPending: false });
+    render(<IndexerPage />);
+
+    expect(screen.getByText("Search OCR")).toBeTruthy();
+    expect(screen.getByText(/Read text in scans and images/)).toBeTruthy();
+    const toggle = screen.getByRole("switch", { name: "Enable search ocr" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        revision: 3,
+        values: { ...FEATURES.configuration.values, searchOcr: true, textSearch: true },
+        walkthroughComplete: true,
+        walkthroughStep: 0,
+      },
+      expect.anything(),
+    );
+  });
+
+  it("turns Search OCR off alone, and reports a save that failed", () => {
+    mockConfigured();
+    const on = {
+      ...FEATURES.configuration.values,
+      textSearch: true,
+      searchOcr: true,
+    };
+    useSystemFeaturesMock.mockReturnValue({
+      data: { ...FEATURES, configuration: { ...FEATURES.configuration, values: on } },
+    });
+    const mutate = vi.fn((_input: unknown, options: { onError: (err: Error) => void }) =>
+      options.onError(new Error("The settings changed elsewhere.")),
+    );
+    useUpdateFeaturesMock.mockReturnValue({ mutate, isPending: false });
+    render(<IndexerPage />);
+
+    const toggle = screen.getByRole("switch", { name: "Enable search ocr" });
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(toggle);
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ values: { ...on, searchOcr: false } }),
+      expect.anything(),
+    );
+    expect(errorToast).toHaveBeenCalledWith("The settings changed elsewhere.");
+  });
+
+  it("holds the Search OCR switch while a change is being saved, and waits for the features", () => {
+    mockConfigured();
+    useUpdateFeaturesMock.mockReturnValue({ mutate: vi.fn(), isPending: true });
+    const view = render(<IndexerPage />);
+    const toggle = screen.getByRole("switch", { name: "Enable search ocr" });
+    expect(toggle.hasAttribute("disabled") || toggle.getAttribute("aria-disabled") === "true").toBe(
+      true,
+    );
+
+    useSystemFeaturesMock.mockReturnValue({ data: undefined });
+    view.rerender(<IndexerPage />);
+    expect(screen.queryByRole("switch", { name: "Enable search ocr" })).toBeNull();
   });
 
   it("reindex contains no thumbnail toggle", async () => {
@@ -359,6 +616,11 @@ describe("IndexerPage", () => {
 
     render(<IndexerPage />);
 
-    expect(await screen.findByText("Not configured: set FDRIVE_INDEXER_URL.")).toBeTruthy();
+    // The variable is set in mono, as a value to copy, so the sentence spans two elements.
+    const variable = await screen.findByText("FDRIVE_INDEXER_URL");
+    expect(variable.tagName).toBe("CODE");
+    expect(variable.parentElement?.textContent).toBe("Not configured: set FDRIVE_INDEXER_URL.");
+    expect(within(screen.getByTestId("badges")).getByText("Not configured")).toBeTruthy();
+    expect(document.querySelector('[data-slot="stat-grid"]')).toBeNull();
   });
 });

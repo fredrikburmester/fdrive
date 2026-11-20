@@ -311,7 +311,7 @@ function ChatPanelBody({ folder, onClose }: PanelProps) {
       <div
         aria-hidden={!dropping}
         className={cn(
-          "pointer-events-none absolute inset-2 flex items-center justify-center rounded-lg border-2 border-dashed border-primary bg-background/80 text-sm transition-opacity",
+          "pointer-events-none absolute inset-2 flex items-center justify-center rounded-lg border-2 border-dashed border-ring bg-background/80 text-sm transition-opacity",
           dropping ? "opacity-100" : "opacity-0",
         )}
       >

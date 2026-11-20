@@ -11,13 +11,18 @@ import { useSystemPublicUrl, useUpdatePublicUrl } from "@/lib/api/public-url-que
 import { SystemErrorState } from "./system-error-state";
 import { SystemAlert, SystemLine, SystemSection, useSystemSurface } from "./system-section";
 
-const ADDRESS_NOTE =
-  "Document editing is told this is where fdrive lives, and links from connected assistants point here. Behind an HTTPS reverse proxy this must be the https:// address.";
+const ADDRESS_SUMMARY =
+  "The address everyone uses to open fdrive, including http:// or https:// and any port.";
+const PROXY_NOTE = "Behind an HTTPS reverse proxy this must be the https:// address.";
+/** What the walkthrough says under the field, where there is room to say why it matters. */
+const ADDRESS_NOTE = `Document editing is told this is where fdrive lives, and links from connected assistants point here. ${PROXY_NOTE}`;
 
 /**
  * The address everyone opens fdrive at. Prefilled from the browser's own
  * address, which is right whenever the owner is onboarding from the address
- * others will use too (an HTTPS edge, or the LAN address).
+ * others will use too (an HTTPS edge, or the LAN address). On System > General
+ * it is one setting row with its own Save; in the setup walkthrough it is a
+ * card that saves and moves on.
  */
 export function PublicUrlCard({
   onContinue,
@@ -55,20 +60,11 @@ export function PublicUrlCard({
     <Input
       id="public-url"
       type="url"
-      className={card ? undefined : "min-w-0 max-w-sm flex-1 basis-56 max-md:min-h-11"}
+      className={card ? undefined : "min-w-0 flex-1 max-md:min-h-11"}
       value={value}
       disabled={busy}
       onChange={(event) => setDraft(event.target.value)}
     />
-  );
-  const saveButton = (
-    <Button
-      className={card ? undefined : "max-md:min-h-11"}
-      disabled={busy || !parsed?.success}
-      onClick={save}
-    >
-      {update.isPending ? "Saving…" : onContinue ? "Save and continue" : "Save server address"}
-    </Button>
   );
   const problems = (
     <>
@@ -95,47 +91,85 @@ export function PublicUrlCard({
       ) : null}
     </>
   );
+
+  if (!card) {
+    if (query.isError) {
+      return (
+        <SystemErrorState
+          row
+          title="Couldn't load the server address"
+          error={query.error}
+          onRetry={() => void query.refetch()}
+        />
+      );
+    }
+    if (saved === undefined) {
+      return (
+        <SystemLine role="status" className="border-border border-t py-4.5">
+          Loading server address…
+        </SystemLine>
+      );
+    }
+    return (
+      <SettingRow
+        label="Server address"
+        htmlFor="public-url"
+        description={`${ADDRESS_SUMMARY} ${PROXY_NOTE}`}
+      >
+        <div className="flex items-center gap-2">
+          {input}
+          {/* One of several Saves on the sheet, so it says which one to assistive technology. */}
+          <Button
+            variant="outline"
+            className="max-md:min-h-11"
+            aria-label={update.isPending ? undefined : "Save server address"}
+            // Nothing to save while the field holds the saved address.
+            disabled={busy || !parsed?.success || unchanged}
+            onClick={save}
+          >
+            {update.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+        {problems}
+      </SettingRow>
+    );
+  }
+
   return (
-    <SystemSection
-      title="Server address"
-      description="The address everyone uses to open fdrive, including http:// or https:// and any port."
-      contentClassName="gap-4"
-    >
+    <SystemSection title="Server address" description={ADDRESS_SUMMARY} contentClassName="gap-4">
       {query.isError ? (
         <>
-          <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
+          <SystemErrorState
+            title="Couldn't load the server address"
+            error={query.error}
+            onRetry={() => void query.refetch()}
+          />
           {onContinue ? (
-            <div className={card ? "contents" : "px-3 py-2.5"}>
-              <Button variant="outline" disabled={busy} onClick={onContinue}>
-                Continue without changing the address
-              </Button>
-            </div>
+            <Button variant="outline" disabled={busy} onClick={onContinue}>
+              Continue without changing the address
+            </Button>
           ) : null}
         </>
       ) : saved ? (
-        card ? (
-          <>
-            <Field>
-              <FieldLabel htmlFor="public-url">Server address</FieldLabel>
-              {input}
-              <FieldDescription>{ADDRESS_NOTE}</FieldDescription>
-            </Field>
-            {problems}
-            <div className="flex justify-end">{saveButton}</div>
-          </>
-        ) : (
-          <SettingRow label="Server address" htmlFor="public-url" description={ADDRESS_NOTE}>
-            <div className="flex flex-wrap items-center gap-2">
-              {input}
-              {saveButton}
-            </div>
-            {problems}
-          </SettingRow>
-        )
-      ) : card ? (
-        <p role="status">Loading server address…</p>
+        <>
+          <Field>
+            <FieldLabel htmlFor="public-url">Server address</FieldLabel>
+            {input}
+            <FieldDescription>{ADDRESS_NOTE}</FieldDescription>
+          </Field>
+          {problems}
+          <div className="flex justify-end">
+            <Button disabled={busy || !parsed?.success} onClick={save}>
+              {update.isPending
+                ? "Saving…"
+                : onContinue
+                  ? "Save and continue"
+                  : "Save server address"}
+            </Button>
+          </div>
+        </>
       ) : (
-        <SystemLine role="status">Loading server address…</SystemLine>
+        <p role="status">Loading server address…</p>
       )}
     </SystemSection>
   );

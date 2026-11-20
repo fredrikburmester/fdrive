@@ -3,7 +3,7 @@
 import { Monitor, Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSyncExternalStore } from "react";
-import { PageSection } from "@/components/shell/page-layout";
+import { DetailSheet } from "@/components/shell/list-sheet";
 import { ChoiceRow } from "@/components/shell/setting-controls";
 import { LIST_DESIGNS, type ListDesign } from "@/lib/files/list-design";
 import { useListDesign } from "@/lib/files/use-list-design";
@@ -49,24 +49,26 @@ export function AppearanceSection() {
   const [theme, setTheme] = useStoredTheme();
   const [design, setDesign] = useListDesign();
   return (
-    <PageSection title="Appearance" description="How fdrive looks in this browser.">
-      <ChoiceRow
-        label="Theme"
-        hint={THEME_HINTS[theme]}
-        value={theme}
-        options={THEMES}
-        labels={THEME_LABELS}
-        icons={THEME_ICONS}
-        onChange={setTheme}
-      />
-      <ChoiceRow
-        label="File list"
-        hint={DESIGN_HINTS[design]}
-        value={design}
-        options={LIST_DESIGNS}
-        labels={DESIGN_LABELS}
-        onChange={setDesign}
-      />
-    </PageSection>
+    <DetailSheet title="Appearance" lede="How fdrive looks in this browser.">
+      <div data-slot="setting-rows">
+        <ChoiceRow
+          label="Theme"
+          hint={THEME_HINTS[theme]}
+          value={theme}
+          options={THEMES}
+          labels={THEME_LABELS}
+          icons={THEME_ICONS}
+          onChange={setTheme}
+        />
+        <ChoiceRow
+          label="File list"
+          hint={DESIGN_HINTS[design]}
+          value={design}
+          options={LIST_DESIGNS}
+          labels={DESIGN_LABELS}
+          onChange={setDesign}
+        />
+      </div>
+    </DetailSheet>
   );
 }

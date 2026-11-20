@@ -3,16 +3,10 @@
 import type { IndexerSettingsValue } from "@fdrive/contracts";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import {
-  DataTable,
-  DataTableBody,
-  DataTableCell,
-  DataTableHead,
-  DataTableHeader,
-  DataTableRow,
-  SettingRow,
-} from "@/components/shell/page-layout";
-import { Badge } from "@/components/ui/badge";
+import { SheetColumns } from "@/components/shell/list-sheet";
+import { SettingRow } from "@/components/shell/page-layout";
+import { BarList, type BarListItem, Code, FactList } from "@/components/shell/sheet-data";
+import { StatusBadge } from "@/components/shell/status";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,14 +18,18 @@ import {
 } from "@/components/ui/dialog";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import { describeApiError } from "@/lib/api/errors";
 import {
   useClearIndex,
   useReindex,
+  useSystemFeatures,
   useSystemIndexer,
   useSystemMaintenanceBusy,
+  useUpdateFeatures,
   useUpdateIndexerSettings,
 } from "@/lib/api/system-queries";
+import { changeFeature, FEATURE_DESCRIPTIONS } from "@/lib/system/features";
 import { formatRelativeTime } from "@/lib/system/format";
 import { describeMaintenanceError } from "@/lib/system/maintenance";
 import {
@@ -46,10 +44,10 @@ import { MaintenanceProgress } from "./maintenance-progress";
 import { GlobsField } from "./settings-form";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
-import { StatusBadge } from "./status-badge";
+import { StatusBadge as SidecarBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemLine, SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
 interface SettingsDraft {
   scanIntervalSeconds: string;
@@ -79,7 +77,78 @@ function valuesFromDraft(draft: SettingsDraft): IndexerSettingsValue {
   };
 }
 
-/** Admin page: `System > Indexer`. Health, stats, settings, reindex, and index clearing. */
+/** What the indexer calls a file's text state, in the order the bars list them. */
+const STATUS_LABELS: Record<string, string> = {
+  indexed: "Indexed",
+  no_text: "No text",
+  excluded: "Excluded",
+  partial: "Partial",
+  none: "None",
+  pending: "Pending",
+};
+const STATUS_ORDER = Object.keys(STATUS_LABELS);
+
+/** A state this page has no name for, as words: `disabled:text` reads "Disabled text". */
+function statusLabel(status: string): string {
+  const words = status.replace(/[_:]+/g, " ").trim();
+  return STATUS_LABELS[status] ?? words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** Where a state sits among the bars: the known ones first, failures last. */
+function statusRank(status: string): number {
+  if (status === "error") return STATUS_ORDER.length + 1;
+  const known = STATUS_ORDER.indexOf(status);
+  return known === -1 ? STATUS_ORDER.length : known;
+}
+
+/** One bar per text state: indexed files in green, failed ones in red at the end. */
+function statusBars(counts: Record<string, number>): BarListItem[] {
+  return Object.entries(counts)
+    .sort(([a], [b]) => statusRank(a) - statusRank(b))
+    .map(([status, value]) => ({
+      label: statusLabel(status),
+      value,
+      tone: status === "indexed" ? "success" : status === "error" ? "danger" : "neutral",
+    }));
+}
+
+/**
+ * Search OCR is the indexer's work and has no page of its own, so its switch is a row of this
+ * sheet. It saves at once, like the area's own switch in the header.
+ */
+function SearchOcrRow() {
+  const features = useSystemFeatures();
+  const update = useUpdateFeatures();
+  const configuration = features.data?.configuration;
+  if (configuration === undefined) return null;
+  const info = FEATURE_DESCRIPTIONS.searchOcr;
+  return (
+    <SettingRow label={info.title} description={info.description} align="end">
+      <Switch
+        aria-label={`Enable ${info.title.toLowerCase()}`}
+        title={`${info.cost} ${info.dependency}`}
+        checked={configuration.values.searchOcr}
+        disabled={update.isPending}
+        onCheckedChange={(checked) =>
+          update.mutate(
+            {
+              revision: configuration.revision,
+              values: changeFeature(configuration.values, "searchOcr", checked),
+              walkthroughComplete: configuration.walkthroughComplete,
+              walkthroughStep: configuration.walkthroughStep ?? 0,
+            },
+            { onError: (err) => toast.error(describeApiError(err)) },
+          )
+        }
+      />
+    </SettingRow>
+  );
+}
+
+/**
+ * Admin page: `System > Full-text search`. The indexer's health and numbers, its settings,
+ * reindexing and clearing the index.
+ */
 export function IndexerPage() {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemIndexer();
   const updateSettings = useUpdateIndexerSettings();
@@ -96,11 +165,13 @@ export function IndexerPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const status = data !== undefined ? sidecarStatus(data.configured, data.reachable) : null;
+  const health = data?.health;
   const stats = data?.stats;
   const counts = stats?.countsByStatus ?? {};
   const lastScan = stats?.lastScan ?? null;
   const totalFiles = Object.values(counts).reduce((a, b) => a + b, 0);
   const withText = (counts.indexed ?? 0) + (counts.partial ?? 0);
+  const bars = statusBars(counts);
 
   const draftValues = draft !== null ? valuesFromDraft(draft) : null;
   const dirty =
@@ -159,30 +230,57 @@ export function IndexerPage() {
   return (
     <SystemPage
       title="Full-text search"
-      description="Scan status and extraction settings for full-text search."
+      description="Search by file name and by the text inside documents."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
-      feature={["thumbnails", "textSearch", "searchOcr", "imageSearch"]}
+      // Full-text search is this area's own feature. The indexer also does the work of the
+      // other three, so its numbers stay on screen while any of them is on.
+      feature={["textSearch", "searchOcr", "thumbnails", "imageSearch"]}
+      badges={
+        status === null || error !== null ? null : (
+          <>
+            <SidecarBadge status={status} />
+            {health !== undefined ? (
+              <StatusBadge tone={health.watcher ? "neutral" : "off"}>
+                Watcher {health.watcher ? "on" : "off"}
+              </StatusBadge>
+            ) : null}
+            {lastScan !== null ? (
+              <StatusBadge>
+                Scan {formatRelativeTime(new Date(lastScan.startedAt), new Date())}
+              </StatusBadge>
+            ) : null}
+          </>
+        )
+      }
       actions={
         <>
+          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
+          <LogSheet subsystem="indexer" />
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            disabled={unavailable || busy}
-            onClick={() => setClearOpen(true)}
-          >
-            Clear index
-          </Button>
-          <Button
-            type="button"
-            size="sm"
+            size="lg"
             onClick={() => setReindexOpen(true)}
             disabled={unavailable || busy}
           >
             Reindex
           </Button>
-          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
-          <LogSheet subsystem="indexer" />
+        </>
+      }
+      footer={
+        <>
+          <p className="min-w-0 flex-[1_1_16rem] text-muted-foreground">
+            Clearing removes the search index only. Your files are not touched.
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            className="ml-auto sheet:px-2"
+            disabled={unavailable || busy}
+            onClick={() => setClearOpen(true)}
+          >
+            Clear index
+          </Button>
         </>
       }
     >
@@ -192,76 +290,70 @@ export function IndexerPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Status">
-            <SettingRow
-              label="Indexer"
-              description={
-                data.configured
-                  ? "The indexer's internal API and its file watcher."
-                  : "Not configured: set FDRIVE_INDEXER_URL."
-              }
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                {status !== null ? <StatusBadge status={status} /> : null}
-                {data.health !== undefined ? (
-                  <Badge variant={data.health.watcher ? "secondary" : "outline"}>
-                    Watcher {data.health.watcher ? "on" : "off"}
-                  </Badge>
-                ) : null}
-              </div>
-            </SettingRow>
-            {lastScan !== null ? (
-              <SettingRow label="Last scan">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground">
-                  <span>
-                    started {formatRelativeTime(new Date(lastScan.startedAt), new Date())}
-                  </span>
-                  <span>
-                    {lastScan.filesSeen} seen · {lastScan.filesChanged} changed ·{" "}
-                    {lastScan.filesDeleted} deleted · {lastScan.errors} errors
-                  </span>
-                </div>
-              </SettingRow>
-            ) : null}
-            <MaintenanceProgress title="Index clear" job={stats?.indexClear} />
-          </SystemSection>
-
-          <SystemSection title="Index">
-            <StatGrid
-              stats={[
-                { label: "Files", value: totalFiles.toLocaleString() },
-                { label: "With text", value: withText.toLocaleString() },
-                { label: "Chunks", value: (stats?.chunks ?? 0).toLocaleString() },
-                { label: "Embedded", value: (stats?.chunksEmbedded ?? 0).toLocaleString() },
-                { label: "Queue depth", value: (stats?.queueDepth ?? 0).toLocaleString() },
-              ]}
-            />
-          </SystemSection>
-
-          {Object.keys(counts).length > 0 ? (
-            <SystemSection title="Counts by status">
-              <DataTable>
-                <DataTableHeader>
-                  <DataTableRow>
-                    <DataTableHead>Status</DataTableHead>
-                    <DataTableHead className="text-right">Files</DataTableHead>
-                  </DataTableRow>
-                </DataTableHeader>
-                <DataTableBody>
-                  {Object.entries(counts).map(([status_, count]) => (
-                    <DataTableRow key={status_}>
-                      <DataTableCell>{status_}</DataTableCell>
-                      <DataTableCell className="text-right text-muted-foreground tabular-nums">
-                        {count.toLocaleString()}
-                      </DataTableCell>
-                    </DataTableRow>
-                  ))}
-                </DataTableBody>
-              </DataTable>
-            </SystemSection>
-          ) : null}
+          <MaintenanceProgress title="Index clear" job={stats?.indexClear} />
+          {stats === undefined ? (
+            <SystemNote>
+              <p>
+                {data.configured ? (
+                  "The indexer is not reporting. Its numbers and last scan show here when it answers again."
+                ) : (
+                  <>
+                    Not configured: set <Code>FDRIVE_INDEXER_URL</Code>.
+                  </>
+                )}
+              </p>
+            </SystemNote>
+          ) : (
+            <>
+              <StatGrid
+                stats={[
+                  { label: "Files", value: totalFiles.toLocaleString() },
+                  { label: "With text", value: withText.toLocaleString() },
+                  { label: "Chunks", value: stats.chunks.toLocaleString() },
+                  { label: "Embedded", value: stats.chunksEmbedded.toLocaleString() },
+                  { label: "Queue depth", value: stats.queueDepth.toLocaleString() },
+                ]}
+              />
+              {bars.length > 0 || lastScan !== null ? (
+                <SheetColumns>
+                  {bars.length > 0 ? (
+                    <SystemSection title="Files by status">
+                      <BarList items={bars} />
+                    </SystemSection>
+                  ) : null}
+                  {lastScan !== null ? (
+                    <SystemSection title="Last scan">
+                      <FactList
+                        facts={[
+                          {
+                            label: "Started",
+                            value: formatRelativeTime(new Date(lastScan.startedAt), new Date()),
+                          },
+                          { label: "Seen", value: lastScan.filesSeen.toLocaleString() },
+                          { label: "Changed", value: lastScan.filesChanged.toLocaleString() },
+                          { label: "Deleted", value: lastScan.filesDeleted.toLocaleString() },
+                          {
+                            label: "Errors",
+                            value: (
+                              <span
+                                className={lastScan.errors > 0 ? "text-destructive" : undefined}
+                              >
+                                {lastScan.errors.toLocaleString()}
+                              </span>
+                            ),
+                          },
+                        ]}
+                      />
+                    </SystemSection>
+                  ) : null}
+                </SheetColumns>
+              ) : null}
+            </>
+          )}
         </>
       )}
+
+      <SearchOcrRow />
 
       <SettingsSheet
         title="Full-text search settings"

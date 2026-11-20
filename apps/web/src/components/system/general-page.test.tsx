@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import type { SystemStorage } from "@fdrive/contracts";
+import type { SystemFeaturesResponse, SystemStorage } from "@fdrive/contracts";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -9,9 +9,14 @@ const mocks = vi.hoisted(() => ({
   update: vi.fn(),
   mutate: vi.fn(),
   refetch: vi.fn(),
+  features: vi.fn(),
+  updateFeatures: vi.fn(),
+  saveFeatures: vi.fn(),
+  replace: vi.fn(),
 }));
-vi.mock("./public-url-card", () => ({ PublicUrlCard: () => <p>Server address card</p> }));
-vi.mock("./trash-settings-card", () => ({ TrashSettingsCard: () => <p>Trash card</p> }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }) }));
+vi.mock("./public-url-card", () => ({ PublicUrlCard: () => <p>Server address row</p> }));
+vi.mock("./trash-settings-card", () => ({ TrashSettingsCard: () => <p>Trash row</p> }));
 vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
@@ -33,6 +38,8 @@ vi.mock("@/lib/api/public-url-queries", () => ({
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemStorage: () => mocks.storage(),
   useUpdateSystemStorage: () => mocks.update(),
+  useSystemFeatures: () => mocks.features(),
+  useUpdateFeatures: () => mocks.updateFeatures(),
 }));
 const { GeneralPage } = await import("./general-page");
 
@@ -40,6 +47,28 @@ const FOLDER: SystemStorage = {
   name: "Local folder",
   healthy: true,
   detail: "The storage root is a writable folder",
+};
+
+const VALUES: SystemFeaturesResponse["configuration"]["values"] = {
+  thumbnails: true,
+  textSearch: true,
+  searchOcr: false,
+  semanticSearch: false,
+  imageSearch: false,
+  pdfOcr: false,
+};
+
+/** The saved feature choices: a finished walkthrough, at revision 9. */
+const FEATURES: SystemFeaturesResponse = {
+  configuration: {
+    version: 1,
+    revision: 9,
+    values: VALUES,
+    walkthroughComplete: true,
+    walkthroughStep: 8,
+  },
+  source: "settings",
+  statuses: [],
 };
 
 function withStorage(storage: SystemStorage) {
@@ -54,6 +83,12 @@ function withStorage(storage: SystemStorage) {
 beforeEach(() => {
   withStorage(FOLDER);
   mocks.update.mockReturnValue({ mutate: mocks.mutate, isPending: false, isError: false });
+  mocks.features.mockReturnValue({ data: FEATURES });
+  mocks.updateFeatures.mockReturnValue({
+    mutate: mocks.saveFeatures,
+    isPending: false,
+    isError: false,
+  });
 });
 afterEach(() => {
   cleanup();
@@ -61,27 +96,37 @@ afterEach(() => {
 });
 
 function nameInput(): HTMLInputElement {
-  return screen.getByLabelText("Name") as HTMLInputElement;
+  return screen.getByLabelText("Storage name") as HTMLInputElement;
+}
+function walkthroughButton(): HTMLButtonElement {
+  return screen.getByRole("button", { name: "Run walkthrough" }) as HTMLButtonElement;
 }
 function saveButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Save name" }) as HTMLButtonElement;
 }
 
-it("holds the installation-wide settings: the address, the files folder and Trash", () => {
-  render(<GeneralPage />);
+it("holds the installation-wide settings as rows: the address, the files folder, Trash and the walkthrough", () => {
+  const { container } = render(<GeneralPage />);
 
   expect(screen.getByRole("heading", { name: "General" })).toBeTruthy();
-  expect(screen.getByText("Settings for the whole installation.")).toBeTruthy();
+  expect(
+    screen.getByText("Settings for the whole installation. They apply to every user and login."),
+  ).toBeTruthy();
   expect(screen.getByText("updated: 5")).toBeTruthy();
-  expect(screen.getByText("Server address card")).toBeTruthy();
-  expect(screen.getByText("Storage")).toBeTruthy();
+  expect(screen.getByText("Server address row")).toBeTruthy();
+  expect(screen.getByText("Files folder")).toBeTruthy();
   expect(screen.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeTruthy();
   expect(screen.getByText("Shown under each username and in Finder.")).toBeTruthy();
-  expect(screen.getByText("Trash card")).toBeTruthy();
-  // A healthy folder needs no health line, and nothing links elsewhere.
+  expect(screen.getByText("Trash row")).toBeTruthy();
+  expect(screen.getByText("Setup walkthrough")).toBeTruthy();
+  // A healthy folder says so in a word, with no health line, and nothing links elsewhere.
+  expect(screen.getByText("Healthy").getAttribute("data-tone")).toBe("success");
   expect(screen.queryByText("Unavailable")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByRole("link")).toBeNull();
+  // Rows in one block, not titled sections or cards.
+  expect(container.querySelector('[data-slot="page-section"]')).toBeNull();
+  expect(container.querySelector('[data-slot="card"]')).toBeNull();
 });
 
 it("renames the storage with the trimmed name, and only once it changed", () => {
@@ -132,9 +177,10 @@ it("says why fdrive cannot use the folder", () => {
   withStorage({ ...FOLDER, healthy: false, detail: reason });
   render(<GeneralPage />);
 
-  expect(screen.getByText("Unavailable")).toBeTruthy();
+  expect(screen.getByText("Unavailable").getAttribute("data-tone")).toBe("danger");
+  expect(screen.queryByText("Healthy")).toBeNull();
   expect(screen.getByRole("alert").textContent).toBe(reason);
-  expect(screen.getByText("Trash card")).toBeTruthy();
+  expect(screen.getByText("Trash row")).toBeTruthy();
 });
 
 it("shows a placeholder while loading and a retry when the storage fails to load", () => {
@@ -152,6 +198,53 @@ it("shows a placeholder while loading and a retry when the storage fails to load
     refetch: mocks.refetch,
   });
   render(<GeneralPage />);
+  expect(screen.getByRole("alert").textContent).toBe("Couldn't load the files folderoffline");
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(mocks.refetch).toHaveBeenCalledOnce();
+});
+
+it("runs the setup walkthrough again: marks it unfinished at its first step, then opens /setup", () => {
+  render(<GeneralPage />);
+
+  fireEvent.click(walkthroughButton());
+
+  // The feature choices are sent back as they are: only the walkthrough's state changes.
+  expect(mocks.saveFeatures).toHaveBeenCalledWith(
+    { revision: 9, values: VALUES, walkthroughComplete: false, walkthroughStep: 0 },
+    expect.anything(),
+  );
+  expect(mocks.replace).not.toHaveBeenCalled();
+  act(() => mocks.saveFeatures.mock.calls[0]?.[1].onSuccess());
+  expect(mocks.replace).toHaveBeenCalledWith("/setup");
+});
+
+it("keeps the walkthrough button off until the choices are known and while it saves", () => {
+  mocks.features.mockReturnValue({ data: undefined });
+  const { unmount } = render(<GeneralPage />);
+  expect(walkthroughButton().disabled).toBe(true);
+  fireEvent.click(walkthroughButton());
+  expect(mocks.saveFeatures).not.toHaveBeenCalled();
+  unmount();
+
+  mocks.features.mockReturnValue({ data: FEATURES });
+  mocks.updateFeatures.mockReturnValue({
+    mutate: mocks.saveFeatures,
+    isPending: true,
+    isError: false,
+  });
+  render(<GeneralPage />);
+  expect(walkthroughButton().disabled).toBe(true);
+});
+
+it("says why the walkthrough could not be started", () => {
+  mocks.updateFeatures.mockReturnValue({
+    mutate: mocks.saveFeatures,
+    isPending: false,
+    isError: true,
+    error: new Error("revision conflict"),
+  });
+  render(<GeneralPage />);
+
+  expect(screen.getByRole("alert").textContent).toBe("revision conflict");
+  expect(mocks.replace).not.toHaveBeenCalled();
 });

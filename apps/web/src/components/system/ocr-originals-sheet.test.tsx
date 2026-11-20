@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { OcrOriginal } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const useOcrOriginalsMock = vi.fn();
@@ -66,6 +66,40 @@ describe("OcrOriginalsSheet", () => {
     expect(await screen.findByText("fredrik/docs/scan.pdf")).toBeTruthy();
     expect(screen.getByText("OCR'd")).toBeTruthy();
     expect(screen.getByText("1–1 of 1")).toBeTruthy();
+  });
+
+  it("shows each original as a row with its state, size, age and root", async () => {
+    mockPage([
+      ORIGINAL,
+      { ...ORIGINAL, id: "fedcba9876543210_bill.pdf", path: "fredrik/bill.pdf", state: "changed" },
+    ]);
+    render(<OcrOriginalsSheet />);
+    open();
+
+    const rows = within(await screen.findByRole("list", { name: "Kept originals" })).getAllByRole(
+      "listitem",
+    );
+    expect(rows).toHaveLength(2);
+    const [first, second] = rows as [HTMLElement, HTMLElement];
+    expect(within(first).getByText("fredrik/docs/scan.pdf")).toBeTruthy();
+    expect(within(first).getByText("OCR'd")).toBeTruthy();
+    expect(within(first).getByText("1.0 KB")).toBeTruthy();
+    expect(within(first).getByText("in files")).toBeTruthy();
+    expect(first.textContent).toMatch(/kept \d+[mhd] ago/);
+    expect(within(second).getByText("Changed since OCR")).toBeTruthy();
+  });
+
+  it.each([
+    ["ocred", "OCR'd", "neutral"],
+    ["restored", "Restored", "neutral"],
+    ["changed", "Changed since OCR", "warning"],
+    ["missing", "File deleted", "warning"],
+  ] as const)("badges a %s original as %s in the %s tone", async (state, label, tone) => {
+    mockPage([{ ...ORIGINAL, state }]);
+    render(<OcrOriginalsSheet />);
+    open();
+
+    expect((await screen.findByText(label)).dataset.tone).toBe(tone);
   });
 
   it("restores without an opt-in when the OCR output is still in place", async () => {

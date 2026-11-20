@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { SettingRow } from "@/components/shell/page-layout";
+import { Code } from "@/components/shell/sheet-data";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -31,9 +31,12 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemLine, SystemNote, SystemSection } from "./system-section";
+import { SystemLine, SystemNote } from "./system-section";
 
-/** Admin controls for preview cache maintenance, independent of text indexing. */
+/**
+ * Admin page: `System > Thumbnails`. The preview cache's size, rebuilding it and clearing it,
+ * independent of text indexing.
+ */
 export function ThumbnailsPage() {
   const { formatBytes } = useFormatters();
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemThumbnails();
@@ -43,13 +46,15 @@ export function ThumbnailsPage() {
   const busy =
     useSystemMaintenanceBusy(indexer.data?.stats) || rebuild.isPending || clear.isPending;
   const unavailable = !data?.configured || !indexer.data?.reachable || !!error || !!indexer.error;
-  // The thumbnail cache is produced by the indexer, so its own badge and
-  // description share one status computed from both FDRIVE_THUMBS_DIR
+  // The thumbnail cache is produced by the indexer, so the badge and the
+  // note under it share one status computed from both FDRIVE_THUMBS_DIR
   // (`data.configured`) and the indexer's configured/reachable state,
-  // rather than describing "available" from one signal while the badge
-  // below shows "Not configured" from another.
-  const thumbnailsConfigured = (data?.configured ?? false) && (indexer.data?.configured ?? false);
-  const status = sidecarStatus(thumbnailsConfigured, indexer.data?.reachable ?? false);
+  // rather than one signal saying "Reachable" while the other says
+  // "Not configured". It is unknown until both have answered.
+  const status =
+    data === undefined || indexer.data === undefined
+      ? null
+      : sidecarStatus(data.configured && indexer.data.configured, indexer.data.reachable);
   const [rebuildOpen, setRebuildOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
   const [path, setPath] = useState("");
@@ -92,29 +97,38 @@ export function ThumbnailsPage() {
   return (
     <SystemPage
       title="Thumbnails"
-      description="The indexer's on-disk thumbnail cache."
+      description="Previews of images, PDFs and videos, kept in a cache on disk."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="thumbnails"
+      badges={status === null || error ? null : <StatusBadge status={status} />}
       actions={
         <>
+          <LogSheet subsystem="thumbnails" />
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            disabled={unavailable || busy}
-            onClick={() => setClearOpen(true)}
-          >
-            Clear cache
-          </Button>
-          <Button
-            type="button"
-            size="sm"
+            size="lg"
             disabled={unavailable || busy}
             onClick={() => setRebuildOpen(true)}
           >
             Rebuild
           </Button>
-          <LogSheet subsystem="thumbnails" />
+        </>
+      }
+      footer={
+        <>
+          <p className="min-w-0 flex-[1_1_16rem] text-muted-foreground">
+            Clearing removes cached previews only. Your files are not touched.
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            className="ml-auto sheet:px-2"
+            disabled={unavailable || busy}
+            onClick={() => setClearOpen(true)}
+          >
+            Clear thumbnails
+          </Button>
         </>
       }
     >
@@ -124,47 +138,37 @@ export function ThumbnailsPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Status">
-            <SettingRow
-              label="Thumbnail cache"
-              description={
-                status === "ok"
-                  ? "Thumbnail cache is available."
-                  : status === "unreachable"
-                    ? "The indexer that generates thumbnails is unreachable."
-                    : "Not configured: set FDRIVE_THUMBS_DIR and FDRIVE_INDEXER_URL."
-              }
-            >
-              <StatusBadge status={status} />
-            </SettingRow>
-            <MaintenanceProgress
-              title="Thumbnail rebuild"
-              job={indexer.data?.stats?.thumbnailRebuild}
-            />
-            <MaintenanceProgress
-              title="Thumbnail cache clear"
-              job={indexer.data?.stats?.thumbnailClear}
-            />
+          <MaintenanceProgress
+            title="Thumbnail rebuild"
+            job={indexer.data?.stats?.thumbnailRebuild}
+          />
+          <MaintenanceProgress
+            title="Thumbnail cache clear"
+            job={indexer.data?.stats?.thumbnailClear}
+          />
+          {status === "unreachable" || status === "not_configured" ? (
             <SystemNote>
               <p>
-                Rebuild fills missing previews for photos, PDFs, and videos. Force rebuild replaces
-                existing previews. Clear cache removes previews globally. Original files, text,
-                search data, and metadata stay unchanged. Normal indexing or on-demand generation
-                can create previews again.
+                {status === "unreachable" ? (
+                  "The indexer that generates thumbnails is unreachable."
+                ) : (
+                  <>
+                    Not configured: set <Code>FDRIVE_THUMBS_DIR</Code> and{" "}
+                    <Code>FDRIVE_INDEXER_URL</Code>.
+                  </>
+                )}
               </p>
             </SystemNote>
-          </SystemSection>
+          ) : null}
           {indexer.error ? (
             <SystemErrorState error={indexer.error} onRetry={() => void indexer.refetch()} />
           ) : null}
-          <SystemSection title="Cache">
-            <StatGrid
-              stats={[
-                { label: "Thumbnails", value: data.count.toLocaleString() },
-                { label: "Cache size", value: formatBytes(data.bytes) },
-              ]}
-            />
-          </SystemSection>
+          <StatGrid
+            stats={[
+              { label: "Thumbnails", value: data.count.toLocaleString() },
+              { label: "Cache size", value: formatBytes(data.bytes) },
+            ]}
+          />
         </>
       )}
       <Dialog open={rebuildOpen} onOpenChange={setRebuildOpen}>
@@ -227,7 +231,7 @@ export function ThumbnailsPage() {
               disabled={unavailable || busy}
               onClick={handleClearConfirm}
             >
-              Clear cache
+              Clear thumbnails
             </Button>
           </DialogFooter>
         </DialogContent>

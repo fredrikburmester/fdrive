@@ -29,7 +29,7 @@ appear as coverage gaps.
    dedicated credentials, and keep those credentials outside fdrive too.
    A bucket with default Object Lock retention keeps the probe object; fdrive never asks for a
    retention bypass. The destination is saved and the kept object's name and deadline are shown
-   on its card and recorded in the event log.
+   in its row under Destinations and recorded in the event log.
 4. Choose a schedule and retention, then run a backup. A destination can inherit the installation
    policy or have its own hourly, daily or weekly policy and IANA timezone. Downtime produces
    one catch-up run; it does not replay every missed interval.

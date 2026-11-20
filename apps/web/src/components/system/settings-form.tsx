@@ -15,9 +15,11 @@ export interface SettingsFormActionsProps {
 
 /**
  * Save and Reset for a settings draft: Save is disabled until the draft is
- * both dirty and valid, Reset until it is dirty. Rendered inline by
- * `SettingsFormShell` and in the footer by `SettingsSheet`, so both places
- * agree on when each button is available.
+ * both dirty and valid, Reset until it is dirty. Rendered inline by a page
+ * and in the footer by `SettingsSheet`, so both places agree on when each
+ * button is available. Save is the one primary button, last. In an overlay
+ * sheet's footer both are 44px tall; inline in a detail sheet they take its
+ * own control height, beside its inputs.
  */
 export function SettingsFormActions({
   dirty,
@@ -28,10 +30,21 @@ export function SettingsFormActions({
 }: SettingsFormActionsProps) {
   return (
     <>
-      <Button type="button" variant="outline" disabled={!dirty || pending} onClick={onReset}>
+      <Button
+        type="button"
+        variant="secondary"
+        className="h-11 px-4.5"
+        disabled={!dirty || pending}
+        onClick={onReset}
+      >
         Reset
       </Button>
-      <Button type="button" disabled={!dirty || invalid || pending} onClick={onSave}>
+      <Button
+        type="button"
+        className="h-11 px-4.5"
+        disabled={!dirty || invalid || pending}
+        onClick={onSave}
+      >
         {pending ? "Saving…" : "Save"}
       </Button>
     </>
@@ -45,9 +58,9 @@ export interface SettingsFormShellProps extends SettingsFormActionsProps {
 /** A settings form with its Save/Reset row below the fields. */
 export function SettingsFormShell({ children, ...actions }: SettingsFormShellProps) {
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-5">
       {children}
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         <SettingsFormActions {...actions} />
       </div>
     </div>
@@ -73,7 +86,7 @@ export function GlobsField({ id, label, value, onChange, description }: GlobsFie
         onChange={(event) => onChange(event.target.value)}
         rows={4}
         placeholder="One pattern per line"
-        className="font-mono text-sm"
+        className="font-mono"
       />
       {description !== undefined ? <FieldDescription>{description}</FieldDescription> : null}
     </Field>

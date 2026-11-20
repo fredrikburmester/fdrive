@@ -9,10 +9,12 @@ import {
 import { isRoot, joinPath, parentPath, splitSegments } from "@fdrive/core";
 import { decryptName } from "@fdrive/crypto";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Loader2, LockIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
+import { cn } from "cn";
+import { Loader2, Trash2Icon, TriangleAlertIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
+import { SheetDock } from "@/components/shell/list-sheet";
 import { PageHeader } from "@/components/shell/page-header";
 import {
   DataTable,
@@ -26,6 +28,7 @@ import {
   PageEmpty,
 } from "@/components/shell/page-layout";
 import { PHONE_TARGET, RowsSkeleton, RowText, TruncatedCell } from "@/components/shell/page-rows";
+import { CHOSEN_NAME, SHEET_ROW, useSheetRow } from "@/components/shell/use-sheet-row";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -65,14 +68,8 @@ import {
   useTrashRestore,
 } from "@/lib/trash/queries";
 import { useFormatters } from "@/lib/use-format-preferences";
-
-/** How a trashed item reads: its name, null for an encrypted one this browser cannot read, and its original folder. */
-interface TrashLabel {
-  readonly name: string | null;
-  readonly folder: string;
-}
-
-const ENCRYPTED_ITEM = "Encrypted item";
+import { ENCRYPTED_ITEM, type TrashLabel, TrashName } from "./trash-name";
+import { TrashSheet } from "./trash-sheet";
 
 /**
  * The "Original folder" label for `originalPath`: its parent, or "Home" at the
@@ -183,17 +180,6 @@ function useTrashLabels(entries: readonly TrashEntry[]): (entry: TrashEntry) => 
   };
 }
 
-/** A trashed item's name, or "Encrypted item" with a lock where it cannot be read. */
-function TrashName({ label }: { label: TrashLabel }) {
-  if (label.name !== null) return label.name;
-  return (
-    <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-      <LockIcon className="size-3.5" aria-hidden="true" />
-      {ENCRYPTED_ITEM}
-    </span>
-  );
-}
-
 /** What the confirmation dialog is asking about: permanently deleting the
  * given selection, or emptying the whole trash. */
 type ConfirmAction =
@@ -201,7 +187,8 @@ type ConfirmAction =
   | { readonly kind: "empty" };
 
 /** The trash listing at `/trash`: restore, restore-to-a-different-folder,
- * permanent delete, and empty, plus loading/empty/error states. */
+ * permanent delete, and empty, plus loading/empty/error states. A checkbox
+ * selects rows for the bar's actions; choosing a row opens its sheet. */
 export function TrashPage() {
   const { formatBytes, formatDate } = useFormatters();
   const [viewMode] = useDefaultView();
@@ -210,13 +197,17 @@ export function TrashPage() {
   const restore = useTrashRestore();
   const purge = useTrashPurge();
   const emptyTrash = useTrashEmpty();
-  const retention = retentionNote(useTrashSettings().data?.retentionDays);
+  const retentionDays = useTrashSettings().data?.retentionDays;
+  const retention = retentionNote(retentionDays);
 
   const entries = useMemo(() => trash.data?.entries ?? [], [trash.data]);
   const labelOf = useTrashLabels(entries);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [restoreTargetEntry, setRestoreTargetEntry] = useState<TrashEntry | null>(null);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const sheet = useSheetRow(entries);
+  /** The item whose sheet started the restore that is running, if a sheet did. */
+  const [sheetRestoreId, setSheetRestoreId] = useState<string | null>(null);
 
   const selectedEntries = useMemo(
     () => entries.filter((entry) => selected.has(entry.id)),
@@ -281,6 +272,28 @@ export function TrashPage() {
     );
   }
 
+  /** Restores the item a sheet shows to where it was, with the sheet's button busy meanwhile. */
+  function handleRestoreChosen(entry: TrashEntry) {
+    setSheetRestoreId(entry.id);
+    restore.mutate(
+      { ids: [entry.id] },
+      {
+        onSuccess: () => {
+          toast.success(restoredToastMessage(1));
+          dropFromSelection([entry.id]);
+        },
+        onError: (error) => {
+          if (isRestoreConflict(error)) {
+            offerRestoreElsewhere(entry);
+          }
+        },
+        onSettled: () => {
+          setSheetRestoreId(null);
+        },
+      },
+    );
+  }
+
   /** Restores the picked entry into `folder`. The picker stays open, showing
    * its busy state, until the request settles; a conflict then closes it and
    * offers the picker again from the toast. */
@@ -337,8 +350,10 @@ export function TrashPage() {
   }
 
   // A restore started from the toolbar; a "Restore to" restore shows its
-  // busy state in the picker instead, while the toolbar is merely disabled.
-  const restoringSelection = restore.isPending && restoreTargetEntry === null;
+  // busy state in the picker instead, and a sheet's restore on the sheet's
+  // own button, while the toolbar is merely disabled.
+  const restoringSelection =
+    restore.isPending && restoreTargetEntry === null && sheetRestoreId === null;
 
   const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
   const selectAllLabel = allSelected ? "Deselect all" : "Select all";
@@ -351,210 +366,254 @@ export function TrashPage() {
     />
   );
 
+  const chosen = sheet.chosen;
+
   return (
     <>
       <PageHeader breadcrumbs={<h1 className="truncate font-medium text-sm">Trash</h1>} />
-      <PageBody>
-        <PageBar>
-          {trash.data !== undefined && (
-            <span className="text-foreground">
-              {selected.size > 0 ? `${selected.size} selected` : itemCountLabel(entries.length)}
-            </span>
-          )}
-          {entries.length > 0 && <span>{formatBytes(totalSize)}</span>}
-          {retention !== null && <span>{retention}</span>}
-          {/* Two by two on a phone, where four buttons side by side would not fit. */}
-          <div className="flex items-center gap-1.5 max-md:grid max-md:w-full max-md:grid-cols-2 md:ml-auto">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={PHONE_TARGET}
-              disabled={selected.size === 0 || restore.isPending}
-              aria-busy={restoringSelection}
-              onClick={handleRestoreSelected}
-            >
-              {restoringSelection && <Loader2 className="animate-spin" aria-hidden="true" />}
-              {restoringSelection ? "Restoring…" : "Restore"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={PHONE_TARGET}
-              disabled={selectedEntries.length !== 1 || restore.isPending}
-              onClick={() => {
-                const only = selectedEntries[0];
-                if (only !== undefined) {
-                  setRestoreTargetEntry(only);
-                }
-              }}
-            >
-              Restore to
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={PHONE_TARGET}
-              disabled={selected.size === 0}
-              onClick={() => setConfirmAction({ kind: "purge", ids: [...selected] })}
-            >
-              Delete permanently
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className={PHONE_TARGET}
-              disabled={entries.length === 0}
-              onClick={() => setConfirmAction({ kind: "empty" })}
-            >
-              Empty Trash
-            </Button>
-          </div>
-        </PageBar>
-
-        {trash.isLoading ? (
-          <RowsSkeleton label="Loading Trash…" />
-        ) : trash.isError ? (
-          <PageEmpty
-            icon={TriangleAlertIcon}
-            title="Could not load Trash"
-            description={describeFsError(trash.error, "Could not load the trash.")}
-            action={
-              <Button variant="outline" size="sm" onClick={() => trash.refetch()}>
-                Try again
-              </Button>
-            }
-          />
-        ) : entries.length === 0 ? (
-          <PageEmpty
-            icon={Trash2Icon}
-            title="Trash is empty"
-            description="Items you delete show up here until you restore them or delete them permanently."
-          />
-        ) : (
-          <>
-            {viewMode === "grid" ? (
-              <>
-                <div className="flex h-9 items-center gap-3 border-border border-b px-3 text-muted-foreground text-xs">
-                  {selectAll}
-                  <span>{selectAllLabel}</span>
-                </div>
-                <div
-                  className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]"
-                  data-slot="trash-grid"
-                >
-                  {entries.map((entry) => {
-                    const deletedAt = new Date(entry.deletedAt);
-                    const label = labelOf(entry);
-                    return (
-                      <div
-                        key={entry.id}
-                        data-state={selected.has(entry.id) ? "selected" : undefined}
-                        className="flex min-w-0 items-start gap-3 border-border/60 border-r border-b px-3 py-2.5 hover:bg-muted/60 data-[state=selected]:bg-primary/10"
-                      >
-                        <Checkbox
-                          className="mt-0.5"
-                          checked={selected.has(entry.id)}
-                          onCheckedChange={(checked) => toggleOne(entry.id, checked)}
-                          aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm">
-                            <TrashName label={label} />
-                          </p>
-                          <p className="truncate text-muted-foreground text-xs">{label.folder}</p>
-                          <p className="mt-1 flex justify-between gap-2 text-muted-foreground text-xs">
-                            <span>{formatBytes(entry.size)}</span>
-                            <span title={deletedAt.toLocaleString()}>{formatDate(deletedAt)}</span>
-                          </p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </>
-            ) : (
-              // Trash has no live directory paths to resolve. Tree therefore intentionally
-              // uses the same flat rows as list, while the shared global default still selects it.
-              <DataTable
-                data-slot={viewMode === "tree" ? "trash-tree" : "trash-list"}
-                className="table-fixed"
+      <SheetDock
+        sheet={
+          chosen !== null ? (
+            <TrashSheet
+              key={chosen.id}
+              entry={chosen}
+              label={labelOf(chosen)}
+              retentionDays={retentionDays}
+              restoring={sheetRestoreId === chosen.id}
+              busy={restore.isPending}
+              onRestore={() => handleRestoreChosen(chosen)}
+              onRestoreTo={() => setRestoreTargetEntry(chosen)}
+              onPurge={() => setConfirmAction({ kind: "purge", ids: [chosen.id] })}
+              {...sheet.sheetProps}
+            />
+          ) : null
+        }
+      >
+        <PageBody>
+          <PageBar>
+            {trash.data !== undefined && (
+              <span className="text-foreground">
+                {selected.size > 0 ? `${selected.size} selected` : itemCountLabel(entries.length)}
+              </span>
+            )}
+            {entries.length > 0 && <span>{formatBytes(totalSize)}</span>}
+            {retention !== null && <span>{retention}</span>}
+            {/* Two by two on a phone, where four buttons side by side would not fit. */}
+            <div className="flex flex-wrap items-center gap-1.5 max-md:grid max-md:w-full max-md:grid-cols-2 md:ml-auto md:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={selected.size === 0 || restore.isPending}
+                aria-busy={restoringSelection}
+                onClick={handleRestoreSelected}
               >
-                <DataTableHeader>
-                  <DataTableRow>
-                    <DataTableHead className="w-9">{selectAll}</DataTableHead>
-                    <DataTableHead>Name</DataTableHead>
-                    {!mobile && (
-                      <>
-                        <DataTableHead className="w-[32%]">Original folder</DataTableHead>
-                        <DataTableHead className="w-24 text-right">Size</DataTableHead>
-                        <DataTableHead className="w-32">Deleted</DataTableHead>
-                      </>
-                    )}
-                  </DataTableRow>
-                </DataTableHeader>
-                <DataTableBody>
-                  {entries.map((entry) => {
-                    const deletedAt = new Date(entry.deletedAt);
-                    const label = labelOf(entry);
-                    const name = <TrashName label={label} />;
-                    return (
-                      <DataTableRow
-                        key={entry.id}
-                        data-state={selected.has(entry.id) ? "selected" : undefined}
-                        className={mobile ? "h-14" : undefined}
-                      >
-                        <DataTableCell>
+                {restoringSelection && <Loader2 className="animate-spin" aria-hidden="true" />}
+                {restoringSelection ? "Restoring…" : "Restore"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={selectedEntries.length !== 1 || restore.isPending}
+                onClick={() => {
+                  const only = selectedEntries[0];
+                  if (only !== undefined) {
+                    setRestoreTargetEntry(only);
+                  }
+                }}
+              >
+                Restore to
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={selected.size === 0}
+                onClick={() => setConfirmAction({ kind: "purge", ids: [...selected] })}
+              >
+                Delete permanently
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={entries.length === 0}
+                onClick={() => setConfirmAction({ kind: "empty" })}
+              >
+                Empty Trash
+              </Button>
+            </div>
+          </PageBar>
+
+          {trash.isLoading ? (
+            <RowsSkeleton label="Loading Trash…" />
+          ) : trash.isError ? (
+            <PageEmpty
+              icon={TriangleAlertIcon}
+              title="Could not load Trash"
+              description={describeFsError(trash.error, "Could not load the trash.")}
+              action={
+                <Button variant="outline" size="sm" onClick={() => trash.refetch()}>
+                  Try again
+                </Button>
+              }
+            />
+          ) : entries.length === 0 ? (
+            <PageEmpty
+              icon={Trash2Icon}
+              title="Trash is empty"
+              description="Items you delete show up here until you restore them or delete them permanently."
+            />
+          ) : (
+            <>
+              {viewMode === "grid" ? (
+                <>
+                  <div className="flex h-9 items-center gap-3 border-border border-b px-3 text-muted-foreground text-xs">
+                    {selectAll}
+                    <span>{selectAllLabel}</span>
+                  </div>
+                  <div
+                    className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]"
+                    data-slot="trash-grid"
+                  >
+                    {entries.map((entry) => {
+                      const deletedAt = new Date(entry.deletedAt);
+                      const label = labelOf(entry);
+                      const row = sheet.rowProps(entry.id);
+                      return (
+                        <div
+                          key={entry.id}
+                          {...row}
+                          data-state={selected.has(entry.id) ? "selected" : row["data-state"]}
+                          className={cn(
+                            "flex min-w-0 items-start gap-3 border-border/60 border-r border-b px-3 py-2.5 hover:bg-muted/60 data-[state=selected]:bg-ring/10",
+                            SHEET_ROW,
+                          )}
+                        >
                           <Checkbox
+                            className="mt-0.5"
                             checked={selected.has(entry.id)}
                             onCheckedChange={(checked) => toggleOne(entry.id, checked)}
                             aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
                           />
-                        </DataTableCell>
-                        {mobile ? (
-                          <DataTableCell>
-                            <RowText
-                              name={name}
-                              detail={`${label.folder} · ${formatBytes(entry.size)} · ${formatDate(deletedAt)}`}
+                          <div className="min-w-0 flex-1">
+                            <p className={cn("truncate text-sm", CHOSEN_NAME)}>
+                              <TrashName label={label} />
+                            </p>
+                            <p className="truncate text-muted-foreground text-xs">{label.folder}</p>
+                            <p className="mt-1 flex justify-between gap-2 text-muted-foreground text-xs">
+                              <span>{formatBytes(entry.size)}</span>
+                              <span title={deletedAt.toLocaleString()}>
+                                {formatDate(deletedAt)}
+                              </span>
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                // Trash has no live directory paths to resolve. Tree therefore intentionally
+                // uses the same flat rows as list, while the shared global default still selects it.
+                // `PageBody` is a size container: beside an open sheet the table drops its folder,
+                // size and date columns, in that order, and the sheet shows them.
+                <DataTable
+                  data-slot={viewMode === "tree" ? "trash-tree" : "trash-list"}
+                  className="table-fixed"
+                >
+                  <DataTableHeader>
+                    <DataTableRow>
+                      <DataTableHead className="w-9">{selectAll}</DataTableHead>
+                      <DataTableHead>Name</DataTableHead>
+                      {!mobile && (
+                        <>
+                          <DataTableHead className="hidden w-[32%] @xl:table-cell">
+                            Original folder
+                          </DataTableHead>
+                          <DataTableHead className="hidden w-24 text-right @md:table-cell">
+                            Size
+                          </DataTableHead>
+                          <DataTableHead className="hidden w-32 @xs:table-cell">
+                            Deleted
+                          </DataTableHead>
+                        </>
+                      )}
+                    </DataTableRow>
+                  </DataTableHeader>
+                  <DataTableBody>
+                    {entries.map((entry) => {
+                      const deletedAt = new Date(entry.deletedAt);
+                      const label = labelOf(entry);
+                      const name = <TrashName label={label} />;
+                      const row = sheet.rowProps(entry.id);
+                      return (
+                        <DataTableRow
+                          key={entry.id}
+                          {...row}
+                          data-state={selected.has(entry.id) ? "selected" : row["data-state"]}
+                          className={cn(SHEET_ROW, mobile && "h-14")}
+                        >
+                          {/* The whole cell is the checkbox's: a near miss never opens the sheet. */}
+                          <DataTableCell data-row-control>
+                            <Checkbox
+                              checked={selected.has(entry.id)}
+                              onCheckedChange={(checked) => toggleOne(entry.id, checked)}
+                              aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
                             />
                           </DataTableCell>
-                        ) : (
-                          <>
-                            <TruncatedCell title={label.name ?? undefined}>{name}</TruncatedCell>
-                            <TruncatedCell
-                              title={label.folder}
-                              className="text-muted-foreground text-xs"
-                            >
-                              {label.folder}
-                            </TruncatedCell>
-                            <DataTableCell className="text-right text-muted-foreground text-xs">
-                              {formatBytes(entry.size)}
+                          {mobile ? (
+                            <DataTableCell>
+                              <RowText
+                                name={<span className={CHOSEN_NAME}>{name}</span>}
+                                detail={`${label.folder} · ${formatBytes(entry.size)} · ${formatDate(deletedAt)}`}
+                              />
                             </DataTableCell>
-                            <DataTableCell
-                              className="text-muted-foreground text-xs"
-                              title={deletedAt.toLocaleString()}
-                            >
-                              {formatDate(deletedAt)}
-                            </DataTableCell>
-                          </>
-                        )}
-                      </DataTableRow>
-                    );
-                  })}
-                </DataTableBody>
-              </DataTable>
-            )}
-            {trash.data?.truncated === true && (
-              <p className="border-border/60 border-b px-3 py-2 text-muted-foreground text-xs">
-                Showing the first {entries.length} items.
-              </p>
-            )}
-          </>
-        )}
-      </PageBody>
+                          ) : (
+                            <>
+                              <TruncatedCell
+                                title={label.name ?? undefined}
+                                className={CHOSEN_NAME}
+                              >
+                                {name}
+                              </TruncatedCell>
+                              <TruncatedCell
+                                title={label.folder}
+                                className="hidden text-muted-foreground text-xs @xl:table-cell"
+                              >
+                                {label.folder}
+                              </TruncatedCell>
+                              <DataTableCell className="hidden text-right text-muted-foreground text-xs @md:table-cell">
+                                {formatBytes(entry.size)}
+                              </DataTableCell>
+                              <DataTableCell
+                                className="hidden text-muted-foreground text-xs @xs:table-cell"
+                                title={deletedAt.toLocaleString()}
+                              >
+                                {formatDate(deletedAt)}
+                              </DataTableCell>
+                            </>
+                          )}
+                        </DataTableRow>
+                      );
+                    })}
+                  </DataTableBody>
+                </DataTable>
+              )}
+              {trash.data?.truncated === true && (
+                <p className="border-border/60 border-b px-3 py-2 text-muted-foreground text-xs">
+                  Showing the first {entries.length} items.
+                </p>
+              )}
+            </>
+          )}
+        </PageBody>
+      </SheetDock>
 
       {restoreTargetEntry !== null && (
         <DestinationPicker

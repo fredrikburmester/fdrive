@@ -1,19 +1,16 @@
 "use client";
 
-import type { ProcessingFeature } from "@fdrive/contracts";
+import type { ProcessingFailure, ProcessingFeature } from "@fdrive/contracts";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, RotateCcw } from "lucide-react";
-import { useState } from "react";
+import { cn } from "cn";
+import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
+import { SegmentedControl } from "@/components/shell/setting-controls";
+import { Code, FactList } from "@/components/shell/sheet-data";
 import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { apiClient } from "@/lib/api/client";
+import { SYSTEM_SHEET, SystemSheetHeader } from "./settings-sheet";
 
 export const FAILURE_FEATURES = [
   "thumbnails",
@@ -23,7 +20,14 @@ export const FAILURE_FEATURES = [
 ] as const;
 const key = (feature: ProcessingFeature) => ["system", "failures", feature] as const;
 
-/** Durable counts remain visible independently of live worker status. */
+const STATUSES = ["open", "resolved"] as const;
+type FailureStatus = (typeof STATUSES)[number];
+const STATUS_LABELS: Record<FailureStatus, string> = { open: "Unresolved", resolved: "Resolved" };
+
+/**
+ * One quiet line near the top of a feature's sheet: how many files still fail, and the way to
+ * the list of them. Durable counts remain visible independently of live worker status.
+ */
 export function ProcessingFailures({
   feature,
   retryEnabled,
@@ -37,30 +41,30 @@ export function ProcessingFailures({
     queryFn: () => apiClient.processingFailures(feature, { limit: 1 }),
     refetchInterval: 5000,
   });
+  const count = summary.data?.openCount ?? 0;
   return (
-    <div
-      id="processing-failures"
-      data-slot="processing-failures"
-      className="flex scroll-mt-14 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-border border-b px-3 py-2"
-    >
-      <div className="min-w-0">
-        <p className="flex items-center gap-2 font-medium text-sm">
-          {summary.data?.openCount ? <AlertCircle className="size-4 text-destructive" /> : null}
+    <div id="processing-failures" data-slot="processing-failures" className="scroll-mt-16 text-sm">
+      <p>
+        <span className={cn("font-medium", count > 0 && "text-destructive")}>
           {summary.isError
-            ? "Failure history unavailable"
+            ? "Failure history unavailable."
             : summary.isPending
               ? "Loading failure history…"
-              : `${summary.data.openCount.toLocaleString()} unresolved file${summary.data.openCount === 1 ? "" : "s"}`}
-        </p>
-        <p className="text-muted-foreground text-xs">
-          Failure details survive restarts. Resolved history is kept for up to 30 days.
-        </p>
-      </div>
-      <Button variant="outline" size="sm" className="max-md:min-h-11" onClick={() => setOpen(true)}>
-        View failures
-      </Button>
+              : `${count.toLocaleString()} unresolved failure${count === 1 ? "" : "s"}.`}
+        </span>{" "}
+        <button
+          type="button"
+          className="rounded-sm text-muted-foreground underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:-my-3 max-md:py-3"
+          onClick={() => setOpen(true)}
+        >
+          View failures
+        </button>
+      </p>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent className="gap-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
+        <SheetContent
+          showCloseButton={false}
+          className={cn(SYSTEM_SHEET, "data-[side=right]:sm:max-w-2xl")}
+        >
           {open ? <FailureList feature={feature} retryEnabled={retryEnabled} /> : null}
         </SheetContent>
       </Sheet>
@@ -75,7 +79,7 @@ function FailureList({
   feature: ProcessingFeature;
   retryEnabled: boolean;
 }) {
-  const [status, setStatus] = useState<"open" | "resolved">("open");
+  const [status, setStatus] = useState<FailureStatus>("open");
   const [code, setCode] = useState("");
   const client = useQueryClient();
   const query = useInfiniteQuery({
@@ -104,121 +108,75 @@ function FailureList({
   const entries = query.data?.pages.flatMap((page) => page.entries) ?? [];
   return (
     <>
-      <SheetHeader className="border-b pr-12">
-        <SheetTitle>Processing failures</SheetTitle>
-        <SheetDescription>
-          Inspect the cause for each file. Retries process unresolved files for this feature.
-        </SheetDescription>
-      </SheetHeader>
-      <div className="flex flex-wrap items-center gap-2 border-b p-4">
-        <Button
-          size="sm"
-          variant={status === "open" ? "secondary" : "ghost"}
-          onClick={() => {
-            setStatus("open");
+      <SystemSheetHeader
+        title="Processing failures"
+        description="Why each file failed. The list survives restarts, and resolved files stay for 30 days."
+      />
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-border border-b px-5 py-3">
+        <SegmentedControl
+          label="Show"
+          value={status}
+          options={STATUSES}
+          labels={STATUS_LABELS}
+          onChange={(next) => {
+            setStatus(next);
             setCode("");
           }}
-        >
-          Unresolved
-        </Button>
+        />
         <Button
-          size="sm"
-          variant={status === "resolved" ? "secondary" : "ghost"}
-          onClick={() => {
-            setStatus("resolved");
-            setCode("");
-          }}
-        >
-          Resolved
-        </Button>
-        <Button
-          size="sm"
-          className="ml-auto"
+          className="h-11 px-4.5"
           disabled={!retryEnabled || !first?.openCount || retry.isPending}
           onClick={() => retry.mutate(undefined)}
         >
-          <RotateCcw />
           {retry.isPending ? "Starting…" : "Retry failed"}
         </Button>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
         {query.isError ? (
-          <p role="alert" className="text-sm">
+          <p role="alert" className="text-destructive text-sm">
             Could not load failures: {query.error.message}
           </p>
         ) : query.isPending ? (
-          <p className="text-sm">Loading…</p>
+          <p className="text-muted-foreground text-sm">Loading…</p>
         ) : (
           <>
-            <fieldset className="mb-4 flex flex-wrap gap-2" aria-label="Filter by cause">
-              <Button
-                size="sm"
-                variant={code === "" ? "secondary" : "outline"}
-                onClick={() => setCode("")}
-              >
+            <fieldset className="mb-4 flex flex-wrap gap-1.5" aria-label="Filter by cause">
+              <CauseButton chosen={code === ""} onClick={() => setCode("")}>
                 All causes
-              </Button>
+              </CauseButton>
               {first?.groups.map((group) => (
-                <Button
+                <CauseButton
                   key={group.code}
-                  size="sm"
-                  className="h-auto max-w-full whitespace-normal break-all text-left"
-                  variant={code === group.code ? "secondary" : "outline"}
+                  chosen={code === group.code}
                   onClick={() => setCode(group.code)}
                 >
                   {group.code} · {group.count.toLocaleString()}
-                </Button>
+                </CauseButton>
               ))}
             </fieldset>
-            <p className="mb-3 text-xs text-muted-foreground">
+            <p className="pb-3 text-muted-foreground text-xs">
               {first?.total.toLocaleString()} {status === "open" ? "unresolved" : "resolved"} file
               {first?.total === 1 ? "" : "s"}
             </p>
             {entries.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="border-border border-t pt-4 text-muted-foreground text-sm">
                 No {status === "open" ? "unresolved" : "resolved"} failures.
               </p>
             ) : null}
-            <ul className="space-y-3" aria-label="Failed files">
+            <ul className="flex flex-col" aria-label="Failed files">
               {entries.map((entry) => (
-                <li key={entry.id} className="min-w-0 space-y-2 rounded-lg border p-3">
-                  <p className="break-all text-sm font-medium">
-                    {entry.root}/{entry.path}
-                  </p>
-                  <p className="whitespace-pre-wrap break-all text-sm text-muted-foreground">
-                    {entry.message}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {entry.attempts} failed attempt{entry.attempts === 1 ? "" : "s"} · Last failure{" "}
-                    {new Date(entry.lastFailedAt).toLocaleString()}
-                  </p>
-                  <details className="text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">Details</summary>
-                    <p className="mt-1">
-                      First failure: {new Date(entry.firstFailedAt).toLocaleString()}
-                    </p>
-                    <p className="break-all">Operation: {entry.operationId}</p>
-                    {entry.resolvedAt ? (
-                      <p>Resolved: {new Date(entry.resolvedAt).toLocaleString()}</p>
-                    ) : null}
-                  </details>
-                  {entry.resolvedAt === null ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={!retryEnabled || retry.isPending}
-                      onClick={() => retry.mutate(entry.id)}
-                    >
-                      Retry file
-                    </Button>
-                  ) : null}
-                </li>
+                <FailureRow
+                  key={entry.id}
+                  entry={entry}
+                  retryDisabled={!retryEnabled || retry.isPending}
+                  onRetry={() => retry.mutate(entry.id)}
+                />
               ))}
             </ul>
             {query.hasNextPage ? (
               <Button
-                className="mt-4"
-                variant="outline"
+                variant="secondary"
+                className="mt-2 h-10 px-3.5 max-md:h-11"
                 disabled={query.isFetchingNextPage}
                 onClick={() => void query.fetchNextPage()}
               >
@@ -229,5 +187,72 @@ function FailureList({
         )}
       </div>
     </>
+  );
+}
+
+/** One cause in the filter: the chosen one sits on `muted`, and says so to a screen reader. */
+function CauseButton({
+  chosen,
+  onClick,
+  children,
+}: {
+  chosen: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <Button
+      variant={chosen ? "secondary" : "ghost"}
+      aria-pressed={chosen}
+      className={cn(
+        "h-auto min-h-9 max-w-full whitespace-normal break-all py-1.5 text-left max-md:min-h-11",
+        !chosen && "text-muted-foreground",
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </Button>
+  );
+}
+
+/** A failed file: its path, what went wrong, then when and how often, under a hairline. */
+function FailureRow({
+  entry,
+  retryDisabled,
+  onRetry,
+}: {
+  entry: ProcessingFailure;
+  retryDisabled: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <li className="flex min-w-0 flex-col gap-2.5 border-border border-t py-4">
+      <p className="break-all font-medium text-sm">
+        {entry.root}/{entry.path}
+      </p>
+      <p className="whitespace-pre-wrap break-all text-muted-foreground text-sm">{entry.message}</p>
+      <FactList
+        className="gap-y-1 text-xs"
+        facts={[
+          { label: "Failed attempts", value: entry.attempts.toLocaleString() },
+          { label: "First failure", value: new Date(entry.firstFailedAt).toLocaleString() },
+          { label: "Last failure", value: new Date(entry.lastFailedAt).toLocaleString() },
+          { label: "Operation", value: <Code className="text-xs">{entry.operationId}</Code> },
+          ...(entry.resolvedAt
+            ? [{ label: "Resolved", value: new Date(entry.resolvedAt).toLocaleString() }]
+            : []),
+        ]}
+      />
+      {entry.resolvedAt === null ? (
+        <Button
+          variant="secondary"
+          className="h-10 self-start px-3.5 max-md:h-11"
+          disabled={retryDisabled}
+          onClick={onRetry}
+        >
+          Retry file
+        </Button>
+      ) : null}
+    </li>
   );
 }

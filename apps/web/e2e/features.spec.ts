@@ -1,5 +1,6 @@
 import type { SystemFeaturesResponse } from "@fdrive/contracts";
 import { expect, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 
 const off = {
   thumbnails: false,
@@ -61,12 +62,58 @@ test("an owner resumes and finishes setup without entering the application shell
     await expect(page.getByText("Ready to use fdrive", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Finish setup" }).click();
     await expect(page).toHaveURL(/\/files$/);
+    // Skipped features are off, and each is switched back on in its own System area.
     await page.goto("/system/thumbnails");
     await expect(page.getByText("Thumbnails is off")).toBeVisible();
-    await expect(page.getByRole("link", { name: "Manage features" })).toHaveAttribute(
-      "href",
-      "/system/features",
-    );
+    await expect(page.getByRole("switch", { name: "Enable thumbnails" })).not.toBeChecked();
+    await expect(page.getByRole("link", { name: "Manage features" })).toHaveCount(0);
+  } finally {
+    const current = (await (await page.request.get(endpoint)).json()) as SystemFeaturesResponse;
+    const restored = await page.request.put(endpoint, {
+      headers: { "x-requested-with": "fdrive" },
+      data: {
+        revision: current.configuration.revision,
+        values: original.configuration.values,
+        walkthroughComplete: true,
+        walkthroughStep: 0,
+      },
+    });
+    expect(restored.ok()).toBe(true);
+  }
+});
+
+test("the Features page is gone: its address opens System, where each area has its own switch", async ({
+  page,
+}) => {
+  await page.goto("/system/features");
+
+  await expect(page).toHaveURL(/\/system$/);
+  await expect(page.getByRole("heading", { level: 1, name: "General" })).toBeVisible();
+  const areas = page.getByRole("navigation", { name: "System areas" });
+  await expect(areas.getByRole("link", { name: "Features" })).toHaveCount(0);
+  await areas.getByRole("link", { name: "Thumbnails", exact: true }).click();
+  await expect(page).toHaveURL(/\/system\/thumbnails$/);
+  await expect(page.getByRole("switch", { name: "Enable thumbnails" })).toBeVisible();
+});
+
+test("alice (admin) runs the setup walkthrough again from System > General", async ({ page }) => {
+  const endpoint = "/api/v1/system/features";
+  const original = (await (await page.request.get(endpoint)).json()) as SystemFeaturesResponse;
+  try {
+    await page.goto("/system/general");
+    // Jobs left by earlier specs can put the Activity panel over the end of the sheet's rows.
+    await dismissActivityPanel(page);
+    await page.getByRole("button", { name: "Run walkthrough" }).click();
+
+    // The walkthrough lives outside the shell and starts over at its first step.
+    await expect(page).toHaveURL(/\/setup$/);
+    await expect(page.getByText("Step 3 of 11 · Thumbnails")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Toggle Sidebar" })).toHaveCount(0);
+    // Starting it changes no choice: the features are as they were.
+    const started = (await (await page.request.get(endpoint)).json()) as SystemFeaturesResponse;
+    expect(started.configuration.values).toEqual(original.configuration.values);
+    expect(started.configuration.walkthroughComplete).toBe(false);
+    expect(started.configuration.walkthroughStep).toBe(0);
   } finally {
     const current = (await (await page.request.get(endpoint)).json()) as SystemFeaturesResponse;
     const restored = await page.request.put(endpoint, {

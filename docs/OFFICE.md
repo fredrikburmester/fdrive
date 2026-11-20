@@ -1,8 +1,8 @@
 # Office documents and editing
 
 ONLYOFFICE is bundled with the standard fdrive stack, and it is the document server the
-published images support. Enable Office during onboarding, or later in
-**System > Features** (the Office card) or **System > Office > Settings**. No additional Compose file,
+published images support. Enable Office during onboarding, or later with the switch at the
+top of **System > Office**. No additional Compose file,
 activation environment variable, or processing storage mount is needed.
 
 ## Enable the editor
@@ -33,7 +33,7 @@ with its reason, visible in the Office settings and as the `office` entry of
 ## Editing permissions
 
 Editing defaults off. Editors are chosen from fdrive's users, ordinary users or
-administrators, on **System > Office > Settings**.
+administrators, on **System > Office**.
 
 Only choose users who should participate in editing sessions. A shared editing session can
 save one participant's changes through another participant, so write access alone is

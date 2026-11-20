@@ -109,6 +109,18 @@ describe("PreviewShell shortcuts with nothing editable focused", () => {
     expect(mocks.push).toHaveBeenNthCalledWith(3, "/edit/docs/b.txt?from=%2F");
   });
 
+  it("offers Show in folder for the file's own folder, wherever it was opened from", async () => {
+    await renderShell("/");
+    // Back returns to the tree above; Show in folder always goes to the folder the file is in.
+    expect(screen.getByRole("button", { name: "Show in folder" }).getAttribute("href")).toBe(
+      "/files/docs?select=b.txt",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    const item = await screen.findByRole("menuitem", { name: "Show in folder" });
+    expect(item.getAttribute("href")).toBe("/files/docs?select=b.txt");
+  });
+
   it("steps to the previous and next sibling on the arrow keys", async () => {
     await renderShell();
     fireEvent.keyDown(document.body, { key: "ArrowLeft" });

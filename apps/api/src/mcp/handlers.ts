@@ -66,7 +66,7 @@ export interface McpToolDeps {
   /** Whether the files folder is indexed now; index-backed tools refuse while it is not. */
   readonly indexed: () => Promise<boolean>;
   /**
-   * The address everyone opens fdrive at (System > Features), the base of
+   * The address everyone opens fdrive at (System > General), the base of
    * every link a tool returns; `null` until the owner sets one, when links
    * are relative paths (still useful to an LLM, just not clickable).
    */

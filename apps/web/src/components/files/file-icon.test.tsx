@@ -20,7 +20,7 @@ it("stays muted in the classic list and takes its kind's color in the beta", () 
   expect(iconClass(pdf.container)).toContain("text-muted-foreground");
 
   act(() => setListDesign("beta"));
-  expect(iconClass(folder.container)).toContain("text-primary");
+  expect(iconClass(folder.container)).toContain("text-ring");
   expect(iconClass(pdf.container)).toContain("text-tag-red");
   expect(pdf.container.querySelector("svg")?.getAttribute("data-icon-kind")).toBe("pdf");
 });
@@ -41,7 +41,7 @@ it("lets a caller's class win, as the sidebar's muted favorites do", () => {
     <FileIcon kind="dir" ext="" mime={null} className="text-muted-foreground" />,
   );
   expect(iconClass(container)).toContain("text-muted-foreground");
-  expect(iconClass(container)).not.toContain("text-primary");
+  expect(iconClass(container)).not.toContain("text-ring");
 });
 
 it("keeps lucide's line weight unless a caller asks for a lighter one", () => {

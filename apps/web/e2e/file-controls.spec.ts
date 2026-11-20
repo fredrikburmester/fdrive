@@ -274,7 +274,7 @@ test.describe("file controls ux", () => {
     await expect(sheet).toHaveCount(0);
   });
 
-  test("list rows are roomy by default, and Compact in the View menu brings back the tighter rows", async ({
+  test("list rows are Standard by default, and the View menu makes them Comfortable or Compact", async ({
     page,
   }) => {
     const sandbox = await createSandbox(page);
@@ -282,19 +282,24 @@ test.describe("file controls ux", () => {
     const row = page.locator(`[data-path="/${sandbox}/notes.txt"]`);
     await expect(row).toBeVisible({ timeout: 15_000 });
     const rowHeight = async () => (await row.boundingBox())?.height;
-    await expect.poll(rowHeight).toBe(64);
+    await expect.poll(rowHeight).toBe(36);
 
     await page.getByRole("button", { name: "View", exact: true }).click();
-    await expect(page.getByRole("menuitemradio", { name: "Comfortable" })).toHaveAttribute(
+    await expect(page.getByRole("menuitemradio", { name: "Standard" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
+    await page.getByRole("menuitemradio", { name: "Comfortable" }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(rowHeight).toBe(64);
+
+    await page.getByRole("button", { name: "View", exact: true }).click();
     await page.getByRole("menuitemradio", { name: "Compact" }).click();
     await page.keyboard.press("Escape");
-    await expect.poll(rowHeight).toBe(36);
+    await expect.poll(rowHeight).toBe(30);
 
     await page.reload();
     await expect(row).toBeVisible();
-    await expect.poll(rowHeight).toBe(36);
+    await expect.poll(rowHeight).toBe(30);
   });
 });

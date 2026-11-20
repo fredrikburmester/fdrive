@@ -44,7 +44,7 @@ A pass takes the rows of `idx.files` with the extension `.pdf` and a digest
   `ocr.max_mb`. These are settings, not facts about a file, so nothing is recorded for them
   and a change to the rules applies on the next pass.
 
-The index must have the PDFs, so Searchable PDFs requires full-text search: System > Features
+The index must have the PDFs, so Searchable PDFs requires full-text search: the API
 refuses one without the other (`FeaturesUpdateRequest`), switching Searchable PDFs on switches
 full-text search on, and switching full-text search off switches Searchable PDFs off.
 
@@ -269,7 +269,8 @@ bytes and sidecar, so they wait for an active backup capture to finish.
 ## Compose
 
 Production starts `ocr` alongside the other bundled services. Enable
-Searchable PDFs through onboarding or System > Features to allow processing:
+Searchable PDFs through onboarding or the switch at the top of System > Searchable PDFs to
+allow processing:
 
 ```sh
 docker compose up -d

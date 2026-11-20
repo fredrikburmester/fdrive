@@ -59,23 +59,57 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+/** A row's cells as text. The name's cell also holds the summary line a narrow sheet shows. */
+function cellsOf(row: HTMLElement) {
+  return within(row)
+    .getAllByRole("cell")
+    .map((cell) => (cell.querySelector('[data-slot="token-name"]') ?? cell).textContent);
+}
+
 describe("ApiTokensSection", () => {
   it("shows a placeholder while the tokens load, and waits for the account to create one", () => {
     mocks.me = undefined;
     mocks.tokens = { data: undefined, isLoading: true };
     const { container } = render(<ApiTokensSection />);
 
-    expect(screen.getByRole("heading", { level: 2, name: "API tokens" })).toBeDefined();
+    // The section is its own sheet, and its name is the page's heading.
+    const sheet = screen.getByRole("region", { name: "API tokens" });
+    expect(within(sheet).getByRole("heading", { level: 1, name: "API tokens" })).toBeDefined();
+    expect(
+      within(sheet).getByText("Long-lived tokens for Claude (MCP) and Raycast."),
+    ).toBeDefined();
     expect(container.querySelector('[data-slot="skeleton"]')).not.toBeNull();
     expect(screen.queryByText("No tokens yet.")).toBeNull();
     const create = screen.getByRole("button", { name: "Create token" }) as HTMLButtonElement;
     expect(create.disabled).toBe(true);
   });
 
+  it("offers Create token as the sheet's one action, in its header", () => {
+    mocks.tokens = { data: { items: [CLAUDE] }, isLoading: false };
+    const { container } = render(<ApiTokensSection />);
+
+    const actions = container.querySelector('[data-slot="detail-sheet-actions"]') as HTMLElement;
+    expect(
+      within(actions)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Create token"]);
+    // Every other button on the sheet revokes a token, in that token's own row.
+    const sheet = screen.getByRole("region", { name: "API tokens" });
+    const others = within(sheet)
+      .getAllByRole("button")
+      .filter((button) => !actions.contains(button));
+    expect(others.map((button) => button.textContent)).toEqual(["Revoke"]);
+    expect(others[0]?.closest("tr")).toBe(screen.getByRole("row", { name: /Claude/ }));
+  });
+
   it("says when there are no tokens", () => {
     render(<ApiTokensSection />);
 
     expect(screen.getByText("No tokens yet.")).toBeDefined();
+    expect(
+      screen.getByText("Create one to connect Claude or Raycast to your files."),
+    ).toBeDefined();
     expect(screen.queryByRole("table")).toBeNull();
     const create = screen.getByRole("button", { name: "Create token" }) as HTMLButtonElement;
     expect(create.disabled).toBe(false);
@@ -95,11 +129,7 @@ describe("ApiTokensSection", () => {
       "Actions",
     ]);
     const claude = screen.getByRole("row", { name: /Claude/ });
-    expect(
-      within(claude)
-        .getAllByRole("cell")
-        .map((cell) => cell.textContent),
-    ).toEqual([
+    expect(cellsOf(claude)).toEqual([
       "Claude",
       "Full management",
       "/docs, /notes",
@@ -109,12 +139,59 @@ describe("ApiTokensSection", () => {
       "Revoke",
     ]);
     const raycast = screen.getByRole("row", { name: /Raycast/ });
-    expect(
-      within(raycast)
-        .getAllByRole("cell")
-        .map((cell) => cell.textContent),
-    ).toEqual(["Raycast", "Read", "/", "2026-10-01", "2026-11-19", "Never", "Revoke"]);
+    expect(cellsOf(raycast)).toEqual([
+      "Raycast",
+      "Read",
+      "/",
+      "2026-10-01",
+      "2026-11-19",
+      "Never",
+      "Revoke",
+    ]);
     expect(screen.queryByText("No tokens yet.")).toBeNull();
+  });
+
+  it("folds access and expiry into a line under the name where the sheet is narrow", () => {
+    mocks.tokens = { data: { items: [CLAUDE, RAYCAST] }, isLoading: false };
+    const { container } = render(<ApiTokensSection />);
+
+    const summaries = Array.from(
+      container.querySelectorAll<HTMLElement>('[data-slot="token-summary"]'),
+    );
+    expect(summaries.map((summary) => summary.textContent)).toEqual([
+      "Full management · Expires 2026-12-10",
+      "Read · Never expires",
+    ]);
+    // The line goes at the width where the columns it stands in for arrive.
+    for (const summary of summaries) {
+      expect(summary.classList.contains("@xl:hidden")).toBe(true);
+    }
+    const hiddenBelow = (name: string) =>
+      Array.from(screen.getByRole("columnheader", { name }).classList).filter((token) =>
+        token.startsWith("@max-"),
+      );
+    expect(hiddenBelow("Name")).toEqual([]);
+    expect(hiddenBelow("Actions")).toEqual([]);
+    expect(hiddenBelow("Access")).toEqual(["@max-xl:hidden"]);
+    expect(hiddenBelow("Folders")).toEqual(["@max-xl:hidden"]);
+    expect(hiddenBelow("Expires")).toEqual(["@max-xl:hidden"]);
+    expect(hiddenBelow("Last used")).toEqual(["@max-3xl:hidden"]);
+    expect(hiddenBelow("Created")).toEqual(["@max-5xl:hidden"]);
+    // A cell hides with its column, or the row would not line up under the headers.
+    const row = screen.getByRole("row", { name: /Raycast/ });
+    expect(
+      within(row)
+        .getAllByRole("cell")
+        .map((cell) => Array.from(cell.classList).filter((token) => token.startsWith("@max-"))),
+    ).toEqual([
+      [],
+      ["@max-xl:hidden"],
+      ["@max-xl:hidden"],
+      ["@max-5xl:hidden"],
+      ["@max-3xl:hidden"],
+      ["@max-xl:hidden"],
+      [],
+    ]);
   });
 
   it("revokes a token only after it is confirmed", async () => {

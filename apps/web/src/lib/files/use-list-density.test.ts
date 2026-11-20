@@ -9,28 +9,28 @@ afterEach(() => {
 });
 
 it("reads the stored key and updates mounted consumers together", () => {
-  localStorage.setItem("fdrive.list.density", '"compact"');
+  localStorage.setItem("fdrive.list.rowDensity", '"compact"');
   const first = renderHook(useListDensity);
   const second = renderHook(useListDensity);
   expect(first.result.current[0]).toBe("compact");
   act(() => first.result.current[1]("comfortable"));
   expect(second.result.current[0]).toBe("comfortable");
-  expect(localStorage.getItem("fdrive.list.density")).toBe('"comfortable"');
+  expect(localStorage.getItem("fdrive.list.rowDensity")).toBe('"comfortable"');
 });
 
 it("observes other-tab storage changes and handles corrupt values", () => {
   const { result } = renderHook(useListDensity);
-  expect(result.current[0]).toBe("comfortable");
+  expect(result.current[0]).toBe("standard");
   act(() => {
-    localStorage.setItem("fdrive.list.density", '"compact"');
-    window.dispatchEvent(new StorageEvent("storage", { key: "fdrive.list.density" }));
+    localStorage.setItem("fdrive.list.rowDensity", '"compact"');
+    window.dispatchEvent(new StorageEvent("storage", { key: "fdrive.list.rowDensity" }));
   });
   expect(result.current[0]).toBe("compact");
   act(() => {
-    localStorage.setItem("fdrive.list.density", '"invalid"');
+    localStorage.setItem("fdrive.list.rowDensity", '"invalid"');
     window.dispatchEvent(new StorageEvent("storage"));
   });
-  expect(result.current[0]).toBe("comfortable");
+  expect(result.current[0]).toBe("standard");
   act(() => setListDensity("compact"));
   expect(result.current[0]).toBe("compact");
 });
@@ -42,5 +42,5 @@ it("renders the default on the server, where storage does not exist", async () =
     const [value] = useListDensity();
     return createElement("span", null, value);
   }
-  expect(renderToString(createElement(Probe))).toBe("<span>comfortable</span>");
+  expect(renderToString(createElement(Probe))).toBe("<span>standard</span>");
 });

@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
-import { SettingRow } from "@/components/shell/page-layout";
+import { SheetColumns } from "@/components/shell/list-sheet";
+import { BarList, Code, type Fact, FactList } from "@/components/shell/sheet-data";
+import { StatusBadge } from "@/components/shell/status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -13,23 +15,31 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { describeApiError } from "@/lib/api/errors";
 import { useReembed, useSystemSearch } from "@/lib/api/system-queries";
 import { sidecarStatus } from "@/lib/system/status";
 import { LogSheet } from "./log-sheet";
 import { StatGrid } from "./stat-grid";
-import { StatusBadge } from "./status-badge";
+import { StatusBadge as SidecarBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemLine, SystemNote, SystemSection } from "./system-section";
+import { SystemLine, SystemSection } from "./system-section";
 
-/** Admin page: `System > Search`. Semantic status, index totals, and a re-embed action. */
+/** The size of every stored embedding: the index's vector column is this wide. */
+const EMBEDDING_DIMENSIONS = 384;
+
+/**
+ * Admin page: `System > Semantic search`. The embedding model's state, how much of the index is
+ * embedded, and a re-embed action.
+ */
 export function SearchPage() {
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemSearch();
   const reembed = useReembed();
   const [reembedOpen, setReembedOpen] = useState(false);
+
+  const status =
+    data !== undefined ? sidecarStatus(data.semantic.configured, data.semantic.healthy) : null;
 
   function handleReembedConfirm() {
     reembed.mutate(undefined, {
@@ -43,25 +53,52 @@ export function SearchPage() {
     });
   }
 
+  const modelFacts: Fact[] = [];
+  if (data?.semantic.model !== undefined) {
+    modelFacts.push({ label: "Model", value: data.semantic.model });
+  }
+  modelFacts.push({ label: "Dimensions", value: EMBEDDING_DIMENSIONS.toLocaleString() });
+  if (data?.semantic.maxInputLength !== undefined) {
+    modelFacts.push({
+      label: "Max input",
+      value: `${data.semantic.maxInputLength.toLocaleString()} tokens`,
+    });
+  }
+
   return (
     <SystemPage
       title="Semantic search"
       description="Semantic embeddings and the hybrid search index."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="semanticSearch"
+      badges={
+        status === null || error !== null ? null : (
+          <>
+            <SidecarBadge status={status} />
+            {data?.semantic.model !== undefined ? (
+              <StatusBadge>{data.semantic.model}</StatusBadge>
+            ) : null}
+          </>
+        )
+      }
       actions={
         <>
+          <LogSheet subsystem="search" />
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            size="lg"
             onClick={() => setReembedOpen(true)}
             disabled={data === undefined || !data.configured}
           >
             Re-embed
           </Button>
-          <LogSheet subsystem="search" />
         </>
+      }
+      footer={
+        <p className="min-w-0 flex-[1_1_16rem] text-muted-foreground">
+          Re-embed re-extracts and re-embeds every file from scratch. On a large index this can take
+          a long time.
+        </p>
       }
     >
       {isLoading ? (
@@ -70,50 +107,44 @@ export function SearchPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Status">
-            <SettingRow
-              label="Embedding model"
+          <StatGrid
+            stats={[
+              { label: "Files", value: data.index.files.toLocaleString() },
+              { label: "With text", value: data.index.withText.toLocaleString() },
+              { label: "Chunks", value: data.index.chunks.toLocaleString() },
+              { label: "Embedded", value: data.index.embedded.toLocaleString() },
+            ]}
+          />
+          <SheetColumns>
+            <SystemSection title="Chunks">
+              <BarList
+                total={data.index.chunks}
+                items={[
+                  { label: "Embedded", value: data.index.embedded, tone: "success" },
+                  {
+                    label: "Pending",
+                    value: Math.max(data.index.chunks - data.index.embedded, 0),
+                  },
+                ]}
+              />
+            </SystemSection>
+            <SystemSection
+              title="Embedding model"
               description={
-                data.semantic.configured
-                  ? "The text embedding model fdrive queries at search time."
-                  : "Not configured: set FDRIVE_ML_URL."
+                status === "not_configured" ? (
+                  <>
+                    Not configured: set <Code>FDRIVE_ML_URL</Code>.
+                  </>
+                ) : status === "unreachable" ? (
+                  "The embedding model is unreachable. Its name and limit show here when it answers again."
+                ) : (
+                  "Each chunk of text becomes a vector, so search can rank results by meaning, not just matching words."
+                )
               }
             >
-              <div className="flex flex-wrap items-center gap-2">
-                <StatusBadge
-                  status={sidecarStatus(data.semantic.configured, data.semantic.healthy)}
-                />
-                {data.semantic.model !== undefined ? (
-                  <Badge variant="secondary">{data.semantic.model}</Badge>
-                ) : null}
-                {data.semantic.maxInputLength !== undefined ? (
-                  <Badge variant="outline">max input {data.semantic.maxInputLength} tokens</Badge>
-                ) : null}
-              </div>
-            </SettingRow>
-            <SystemNote>
-              <p>
-                Each chunk of text is turned into a 384-dimension vector by this model, so search
-                can rank results by meaning, not just matching words. The badge above shows the
-                model's own limit on how much text it can embed at once.
-              </p>
-              <p>
-                Re-embed re-extracts and re-embeds every file from scratch, not just the embeddings.
-                On a large index this can take a long time and loads the indexer with work.
-              </p>
-            </SystemNote>
-          </SystemSection>
-
-          <SystemSection title="Index">
-            <StatGrid
-              stats={[
-                { label: "Files", value: data.index.files.toLocaleString() },
-                { label: "With text", value: data.index.withText.toLocaleString() },
-                { label: "Chunks", value: data.index.chunks.toLocaleString() },
-                { label: "Embedded", value: data.index.embedded.toLocaleString() },
-              ]}
-            />
-          </SystemSection>
+              <FactList facts={modelFacts} />
+            </SystemSection>
+          </SheetColumns>
         </>
       )}
 
@@ -127,8 +158,12 @@ export function SearchPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={reembed.isPending} onClick={handleReembedConfirm}>
+            <AlertDialogCancel className="max-md:min-h-11">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="max-md:min-h-11"
+              disabled={reembed.isPending}
+              onClick={handleReembedConfirm}
+            >
               Re-embed
             </AlertDialogAction>
           </AlertDialogFooter>

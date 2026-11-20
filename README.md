@@ -136,7 +136,7 @@ until you turn their features on. Nothing is compiled on your server.
 
 From your Mac, phone, or another device on the same network, open **`http://<server-ip>:8090`**. No port-binding or cookie settings are needed. Use the claim token printed in the API log (`docker compose logs api`), then choose your username and password. That account is the first user and fdrive's administrator; its files are `<files folder>/<username>`, so use an existing folder's name to keep it. Add everyone else under **System > Users**.
 
-Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. [Trash](docs/TRASH.md) follows as a separate optional choice, then ONLYOFFICE, with browser viewing and an explicit editor list; see [Office setup](docs/OFFICE.md). PDF conversion has its own toggle because it modifies PDFs. All choices remain editable in **System > Features**. Models and processing stay inactive until enabled.
+Choose thumbnails, full-text search, search OCR, semantic search, image search, and searchable PDF conversion step by step. [Trash](docs/TRASH.md) follows as a separate optional choice, then ONLYOFFICE, with browser viewing and an explicit editor list; see [Office setup](docs/OFFICE.md). PDF conversion has its own toggle because it modifies PDFs. All choices remain editable under **System**, where each feature has its own switch. Models and processing stay inactive until enabled.
 
 See the [deployment guide](deploy/README.md) for startup and the [advanced reference](deploy/REFERENCE.md) for file permissions and remote access.
 

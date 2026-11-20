@@ -20,6 +20,14 @@ import { useAdminUsers } from "@/lib/api/system-queries";
 import { SystemErrorState } from "./system-error-state";
 import { SystemSection } from "./system-section";
 
+/** Shown wherever Office is about to be turned on while fdrive has no server address. */
+export const OFFICE_ADDRESS_NOTE =
+  "Set the fdrive server address first: the editor opens documents through it.";
+export const OFFICE_CLOSE_NOTE =
+  "Close open documents before disabling the editor to avoid interrupting unsaved work.";
+export const OFFICE_GUIDE_URL =
+  "https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md";
+
 /** Human name of the configured Office product. */
 export function officeProductName(product: string | undefined): string {
   return product === "collabora" ? "Collabora" : "ONLYOFFICE";
@@ -47,16 +55,20 @@ export interface OfficeSettingsDraft {
   setEditor: (username: string, editor: boolean) => void;
   /** Turning Office off also drops the unsaved editing draft. */
   setEnabled: (enabled: boolean) => void;
+  /**
+   * Saves Office on or off at once, with everything else as it was last saved. An unsaved
+   * editing draft is dropped: the Office sheet's switch works like a feature's.
+   */
+  saveEnabled: (enabled: boolean) => void;
   reset: () => void;
   commit: (input: OfficeSettings, onSaved?: () => void) => void;
 }
 
 /**
- * The Office settings draft shared by the wizard's card, the Features
- * page's Office card, and the Office page's settings sheet: one place that
- * knows how a draft merges with the polled record and what a save sends.
- * Editors are fdrive's users, so a name no user has any more (one removed
- * since it was saved) is left out of what a save sends.
+ * The Office settings draft shared by the wizard's card and the Office
+ * sheet: one place that knows how a draft merges with the polled record and
+ * what a save sends. Editors are fdrive's users, so a name no user has any
+ * more (one removed since it was saved) is left out of what a save sends.
  */
 export function useOfficeSettingsDraft(): OfficeSettingsDraft {
   const query = useSystemOffice();
@@ -67,10 +79,11 @@ export function useOfficeSettingsDraft(): OfficeSettingsDraft {
   const saved = query.data?.configuration;
   const stored = draft ?? saved;
   const known = users.data ? new Set(users.data.users.map((user) => user.username)) : null;
-  const values =
-    stored && known
-      ? { ...stored, editorUsernames: stored.editorUsernames.filter((name) => known.has(name)) }
-      : stored;
+  const withKnownEditors = (record: OfficeSettings): OfficeSettings =>
+    known
+      ? { ...record, editorUsernames: record.editorUsernames.filter((name) => known.has(name)) }
+      : record;
+  const values = stored ? withKnownEditors(stored) : stored;
   // The editor is told fdrive lives at the server address; without one the
   // api refuses to enable Office, so say so before the owner tries.
   const addressMissing = address.data !== undefined && address.data.url === null;
@@ -106,6 +119,18 @@ export function useOfficeSettingsDraft(): OfficeSettingsDraft {
       }
       setDraft(saved ? { ...saved, enabled: false } : null);
     },
+    saveEnabled: (enabled: boolean) => {
+      if (!saved) return;
+      const record = withKnownEditors(saved);
+      // Editing with no editor left (the last one is no longer a user) cannot be saved, and
+      // means view-only for everyone already, so the switch saves it as that.
+      const input = OfficeSettingsUpdateRequest.safeParse({
+        ...record,
+        enabled,
+        editingEnabled: record.editingEnabled && record.editorUsernames.length > 0,
+      });
+      if (input.success) update.mutate(input.data, { onSuccess: reset });
+    },
     reset,
     commit: (input: OfficeSettings, onSaved?: () => void) => {
       update.mutate(input, {
@@ -118,56 +143,67 @@ export function useOfficeSettingsDraft(): OfficeSettingsDraft {
   };
 }
 
-/** fdrive's users as checkboxes: the ones checked may edit documents. */
-function OfficeEditorsField({
+export const OFFICE_EDITORS_LABEL = "Users allowed to edit";
+export const OFFICE_EDITORS_NOTE =
+  "Everyone else opens documents view-only, and saves still need write access.";
+export const OFFICE_EDITING_NOTE =
+  "When off, all documents open for viewing. When on, only the users you choose can edit.";
+
+/**
+ * fdrive's users as checkboxes: the ones checked may edit documents. One column in the
+ * walkthrough's card; in the Office sheet they fill the row, several to a line.
+ */
+export function OfficeEditorChoices({
   draft,
   values,
-  disabled,
+  disabled = false,
+  label,
 }: {
   draft: OfficeSettingsDraft;
   values: OfficeSettings;
-  disabled: boolean;
+  disabled?: boolean;
+  /** Names the group where no legend does. */
+  label?: string;
 }) {
   const { users } = draft;
+  if (users.isError)
+    return <SystemErrorState error={users.error} onRetry={() => void users.refetch()} />;
+  if (users.data === undefined)
+    return (
+      <p role="status" className="text-sm text-muted-foreground">
+        Loading users…
+      </p>
+    );
   return (
-    <FieldSet>
-      <FieldLegend variant="label">Users allowed to edit</FieldLegend>
-      <FieldDescription>
-        Everyone else opens documents view-only, and saves still need write access.
-      </FieldDescription>
-      {users.isError ? (
-        <SystemErrorState error={users.error} onRetry={() => void users.refetch()} />
-      ) : users.data === undefined ? (
-        <p role="status" className="text-sm text-muted-foreground">
-          Loading users…
-        </p>
-      ) : (
-        <FieldGroup data-slot="checkbox-group">
-          {users.data.users.map((user) => (
-            <Field key={user.username} orientation="horizontal">
-              <Checkbox
-                id={`office-editor-${user.username}`}
-                checked={values.editorUsernames.includes(user.username)}
-                disabled={disabled}
-                onCheckedChange={(checked) => draft.setEditor(user.username, checked)}
-              />
-              <FieldLabel htmlFor={`office-editor-${user.username}`} className="font-normal">
-                {user.username}
-              </FieldLabel>
-            </Field>
-          ))}
-        </FieldGroup>
-      )}
-    </FieldSet>
+    <FieldGroup
+      data-slot="checkbox-group"
+      role={label === undefined ? undefined : "group"}
+      aria-label={label}
+      className="sheet:grid sheet:grid-cols-[repeat(auto-fill,minmax(9rem,1fr))] sheet:gap-x-6 sheet:gap-y-3 sheet:max-md:gap-y-0"
+    >
+      {users.data.users.map((user) => (
+        <Field key={user.username} orientation="horizontal" className="sheet:max-md:min-h-11">
+          <Checkbox
+            id={`office-editor-${user.username}`}
+            checked={values.editorUsernames.includes(user.username)}
+            disabled={disabled}
+            onCheckedChange={(checked) => draft.setEditor(user.username, checked)}
+          />
+          <FieldLabel htmlFor={`office-editor-${user.username}`} className="font-normal">
+            {user.username}
+          </FieldLabel>
+        </Field>
+      ))}
+    </FieldGroup>
   );
 }
 
 /**
- * The Office settings controls themselves, without the surrounding card or
- * its Save button: shared by the onboarding card and the Office page's
- * settings sheet.
+ * The Office settings as a form, without the surrounding card or its Save
+ * button: what the walkthrough's card shows. The Office sheet lays the same
+ * settings out as rows.
  */
-export function OfficeSettingsFields({
+function OfficeSettingsFields({
   draft,
   disabled = false,
 }: {
@@ -195,7 +231,7 @@ export function OfficeSettingsFields({
         <>
           {addressMissing ? (
             <p role="alert" className="text-sm text-destructive">
-              Set the fdrive server address first: the editor opens documents through it.
+              {OFFICE_ADDRESS_NOTE}
             </p>
           ) : null}
           {dirty && !parsed.success ? (
@@ -212,11 +248,13 @@ export function OfficeSettingsFields({
               onCheckedChange={(editingEnabled) => draft.change({ editingEnabled })}
             />
           </Field>
-          <FieldDescription>
-            When off, all documents open for viewing. When on, only the users you choose can edit.
-          </FieldDescription>
+          <FieldDescription>{OFFICE_EDITING_NOTE}</FieldDescription>
           {values.editingEnabled ? (
-            <OfficeEditorsField draft={draft} values={values} disabled={disabled} />
+            <FieldSet>
+              <FieldLegend variant="label">{OFFICE_EDITORS_LABEL}</FieldLegend>
+              <FieldDescription>{OFFICE_EDITORS_NOTE}</FieldDescription>
+              <OfficeEditorChoices draft={draft} values={values} disabled={disabled} />
+            </FieldSet>
           ) : null}
         </>
       ) : null}
@@ -277,13 +315,11 @@ export function OfficeSettingsCard({
             </p>
           ) : null}
           {saved?.enabled ? (
-            <p className="text-sm text-muted-foreground">
-              Close open documents before disabling the editor to avoid interrupting unsaved work.
-            </p>
+            <p className="text-sm text-muted-foreground">{OFFICE_CLOSE_NOTE}</p>
           ) : null}
           <a
             className="block text-sm underline"
-            href="https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md"
+            href={OFFICE_GUIDE_URL}
             target="_blank"
             rel="noreferrer"
           >

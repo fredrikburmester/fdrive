@@ -160,7 +160,7 @@ class OfficeLifecycle:
             if self._status == "ready":
                 # An `error` that outlives the condition it describes is worse
                 # than no error at all, because the health endpoint and the
-                # Features page both surface it as the reason.
+                # System page both surface it as the reason.
                 self._error = None
             return
         if self._process is not None:

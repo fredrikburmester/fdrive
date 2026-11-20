@@ -14,7 +14,7 @@ import {
   DataTableRow,
   PageSection,
 } from "@/components/shell/page-layout";
-import { RowsSkeleton, TruncatedCell } from "@/components/shell/page-rows";
+import { PHONE_TARGET, RowsSkeleton, TruncatedCell } from "@/components/shell/page-rows";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { describeApiError } from "@/lib/api/errors";
@@ -57,6 +57,7 @@ function OwnedGrantRow({ grant }: { grant: OwnedGrant }) {
         <AccessSelect
           value={grant.access}
           label={`Access for ${grant.username} to ${name}`}
+          className={PHONE_TARGET}
           disabled={busy}
           onChange={changeAccess}
         />
@@ -66,6 +67,7 @@ function OwnedGrantRow({ grant }: { grant: OwnedGrant }) {
           type="button"
           variant="ghost"
           size="sm"
+          className={PHONE_TARGET}
           aria-label={`Stop sharing ${name} with ${grant.username}`}
           disabled={busy}
           onClick={stopSharing}

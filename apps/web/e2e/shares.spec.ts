@@ -1,6 +1,6 @@
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { ManagedShare } from "@fdrive/contracts";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { homePath } from "./support/local-folder.js";
 import { loginAs } from "./support/login.js";
 import { listing, sidebar } from "./support/regions.js";
@@ -51,6 +51,19 @@ async function createLink(
   await ready.getByRole("button", { name: "Done" }).click();
   return url;
 }
+/** Chooses a link's row on the Shares page and returns the sheet that opens beside the rows. */
+async function openLinkSheet(page: Page, name: string): Promise<Locator> {
+  await page.getByRole("row").filter({ hasText: name }).getByText(name, { exact: true }).click();
+  const sheet = page.getByRole("region", { name, exact: true });
+  await expect(sheet.getByLabel("Link name", { exact: true })).toHaveValue(name);
+  return sheet;
+}
+/** Saves the sheet's changed settings and waits until the link has them. */
+async function saveLinkSettings(sheet: Locator) {
+  await sheet.getByRole("button", { name: "Save changes" }).click();
+  await expect(sheet.getByText("Changes saved", { exact: true })).toBeVisible();
+  await expect(sheet.getByRole("button", { name: "Save changes" })).toBeDisabled();
+}
 async function applyPassword(page: Page, password: string) {
   await page.getByLabel("Share password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Use password", exact: true }).click();
@@ -75,7 +88,7 @@ function publicRequests(page: Page): string[] {
   return forbidden;
 }
 
-test("single-file password is checked on explicit download; edit preserves, changes, removes, revokes", async ({
+test("single-file password is checked on explicit download; the link's sheet preserves, changes, removes, revokes", async ({
   page,
   browser,
 }) => {
@@ -117,11 +130,28 @@ test("single-file password is checked on explicit download; edit preserves, chan
         )
       ).toString(),
     ).toBe("Public hello 日本 100%");
-    await page.getByRole("button", { name: "Edit Protected file", exact: true }).click();
-    let edit = page.getByRole("dialog", { name: "Edit share link" });
+    // The link is edited in its sheet beside the rows: no dialog opens, and its row is marked.
+    let edit = await openLinkSheet(page, "Protected file");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("row").filter({ hasText: "Protected file" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(edit.getByText("Active", { exact: true })).toBeVisible();
+    await expect(edit.getByText("Password protected", { exact: true })).toBeVisible();
+    await expect(edit.getByLabel("Share link", { exact: true })).toHaveValue(url);
+    await expect(edit.getByText("/hello.txt", { exact: true })).toBeVisible();
+    await expect(edit.getByRole("button", { name: "Save changes" })).toBeDisabled();
     await edit.getByLabel("Link name", { exact: true }).fill("Preserved password");
     await edit.getByRole("button", { name: "Save changes" }).click();
-    await expect(edit).toBeHidden();
+    // The sheet stays open on the same link, under its new name.
+    edit = page.getByRole("region", { name: "Preserved password", exact: true });
+    await expect(edit.getByText("Changes saved", { exact: true })).toBeVisible();
+    await expect(edit.getByRole("button", { name: "Save changes" })).toBeDisabled();
+    await expect(page.getByRole("row").filter({ hasText: "Preserved password" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     await visitor.reload();
     expect(
       (
@@ -130,13 +160,12 @@ test("single-file password is checked on explicit download; edit preserves, chan
         )
       ).toString(),
     ).toContain("Public hello");
-    await page.getByRole("button", { name: "Edit Preserved password", exact: true }).click();
-    edit = page.getByRole("dialog", { name: "Edit share link" });
     await edit.getByRole("combobox", { name: "Password protection" }).click();
     await page.getByRole("option", { name: "Change password", exact: true }).click();
     await edit.getByLabel("New password", { exact: true }).fill("replacement-password");
-    await edit.getByRole("button", { name: "Save changes" }).click();
-    await expect(edit).toBeHidden();
+    await saveLinkSettings(edit);
+    // A saved password leaves the form with the save.
+    await expect(edit.getByLabel("New password", { exact: true })).toHaveCount(0);
     await visitor.reload();
     await applyPassword(visitor, "replacement-password");
     expect(
@@ -146,12 +175,16 @@ test("single-file password is checked on explicit download; edit preserves, chan
         )
       ).toString(),
     ).toContain("Public hello");
-    await page.getByRole("button", { name: "Edit Preserved password", exact: true }).click();
-    edit = page.getByRole("dialog", { name: "Edit share link" });
+    // Escape closes the sheet and returns to its row, and Enter on the row opens it again.
+    await page.keyboard.press("Escape");
+    await expect(edit).toBeHidden();
+    await expect(page.getByRole("row").filter({ hasText: "Preserved password" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(edit.getByLabel("Link name", { exact: true })).toHaveValue("Preserved password");
     await edit.getByRole("combobox", { name: "Password protection" }).click();
     await page.getByRole("option", { name: "Remove password", exact: true }).click();
-    await edit.getByRole("button", { name: "Save changes" }).click();
-    await expect(edit).toBeHidden();
+    await saveLinkSettings(edit);
+    await expect(edit.getByText("Password protected", { exact: true })).toHaveCount(0);
     await context.clearCookies();
     await visitor.reload();
     await expect(visitor.getByLabel("Share password")).toHaveCount(0);
@@ -162,11 +195,14 @@ test("single-file password is checked on explicit download; edit preserves, chan
         )
       ).toString(),
     ).toContain("Public hello");
-    await page.getByRole("button", { name: "Revoke Preserved password", exact: true }).click();
+    // Revoking is the sheet's last action, apart from the others, and still asks first.
+    await edit.getByRole("button", { name: "Revoke link", exact: true }).click();
     const revoke = page.getByRole("alertdialog");
     await expect(revoke).toContainText("original files remain");
     await revoke.getByRole("button", { name: "Revoke link" }).click();
     await expect(revoke).toBeHidden();
+    await expect(edit).toBeHidden();
+    await expect(page.getByRole("row").filter({ hasText: "Preserved password" })).toHaveCount(0);
     await visitor.reload();
     await expect(
       visitor.locator('[data-slot="card-title"]').filter({ hasText: "Share unavailable" }),

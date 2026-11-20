@@ -1,64 +1,52 @@
 "use client";
 
-import { TriangleAlertIcon } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { cn } from "cn";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { describeApiError } from "@/lib/api/errors";
-import { useSystemSurface } from "./system-section";
 
 export interface SystemErrorStateProps {
   /** The error thrown by the failed query, passed straight to `describeApiError`. */
   error: unknown;
   /** Re-runs the query, typically the `refetch` returned by the `useQuery` hook. */
   onRetry: () => void;
+  /** What could not be loaded, when it is less than the whole sheet: "Couldn't load the address". */
+  title?: string;
+  /**
+   * Stands as a row of its own among `SettingRow`s, with their hairline above it, where one
+   * setting failed to load and the rows around it did not.
+   */
+  row?: boolean;
+  className?: string;
 }
 
 /**
- * Shown in place of a System page's content when its query has failed, so a
- * failed or unparsable response is visibly distinct from the page still
- * loading and from data actually being ready. On a page it is one flat row;
- * in the setup walkthrough it is a card.
+ * Shown in place of a System sheet's content when its query has failed, so a
+ * failed or unparsable response is visibly distinct from the sheet still
+ * loading and from data actually being ready: what went wrong in the
+ * destructive colour, and a way to ask again. It has no box of its own, so it
+ * sits the same in a sheet and inside a card of the setup walkthrough.
  */
-export function SystemErrorState({ error, onRetry }: SystemErrorStateProps) {
-  const surface = useSystemSurface();
-  if (surface === "card") {
-    return (
-      <Card>
-        <CardContent>
-          <Alert variant="destructive">
-            <TriangleAlertIcon />
-            <AlertTitle>Couldn't load this page</AlertTitle>
-            <AlertDescription>{describeApiError(error)}</AlertDescription>
-          </Alert>
-          <div className="mt-4 flex justify-end">
-            <Button type="button" variant="outline" onClick={onRetry}>
-              Retry
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    );
-  }
+export function SystemErrorState({
+  error,
+  onRetry,
+  title = "Couldn't load this page",
+  row = false,
+  className,
+}: SystemErrorStateProps) {
   return (
     <div
       data-slot="system-error"
-      className="flex flex-wrap items-center gap-x-3 gap-y-2 border-border/60 border-b px-3 py-2.5 last:border-b-0"
+      className={cn(
+        "flex flex-wrap items-center justify-between gap-x-6 gap-y-3",
+        row && "border-border border-t py-4.5",
+        className,
+      )}
     >
-      <TriangleAlertIcon className="size-4 shrink-0 text-destructive" aria-hidden="true" />
-      <div role="alert" className="min-w-0 flex-1 basis-48">
-        <p className="font-medium text-destructive text-sm">Couldn't load this page</p>
-        <p className="text-muted-foreground text-xs [overflow-wrap:anywhere]">
-          {describeApiError(error)}
-        </p>
+      <div role="alert" className="min-w-0 flex-[1_1_16rem] text-destructive text-sm">
+        <p className="font-medium">{title}</p>
+        <p className="[overflow-wrap:anywhere]">{describeApiError(error)}</p>
       </div>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        className="max-md:min-h-11"
-        onClick={onRetry}
-      >
+      <Button type="button" variant="outline" className="max-md:min-h-11" onClick={onRetry}>
         Retry
       </Button>
     </div>
