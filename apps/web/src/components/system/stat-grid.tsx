@@ -1,32 +1,22 @@
 import { cn } from "cn";
 import { StatCard, type StatCardProps } from "./stat-card";
 
-const COLUMN_CLASSES: Record<2 | 3 | 4 | 5, string> = {
-  2: "grid-cols-2",
-  3: "grid-cols-2 md:grid-cols-3",
-  4: "grid-cols-2 md:grid-cols-4",
-  5: "grid-cols-2 md:grid-cols-3 lg:grid-cols-5",
-};
-
 export interface StatGridProps {
   stats: readonly StatCardProps[];
-  /** Widest column count; narrower viewports always fall back to two. */
-  columns?: 2 | 3 | 4 | 5;
   className?: string;
 }
 
 /**
- * The counts a System page reports, as a dense grid of cells divided by
- * hairlines. It belongs inside a `SystemSection`, edge to edge like a row.
+ * The headline counts of a System sheet, as one row of large numbers between two hairlines.
+ * It wraps where the sheet is narrow. Keep it to numbers: a name, a path or a state belongs in
+ * a `FactList` or a `StatusBadge`.
  */
-export function StatGrid({ stats, columns, className }: StatGridProps) {
-  const resolved = columns ?? (Math.min(Math.max(stats.length, 2), 5) as 2 | 3 | 4 | 5);
+export function StatGrid({ stats, className }: StatGridProps) {
   return (
     <dl
       data-slot="stat-grid"
       className={cn(
-        "grid overflow-hidden border-border/60 border-b last:border-b-0",
-        COLUMN_CLASSES[resolved],
+        "grid grid-cols-[repeat(auto-fit,minmax(120px,1fr))] gap-x-4 gap-y-5 border-border border-y py-5",
         className,
       )}
     >

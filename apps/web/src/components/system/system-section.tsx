@@ -37,19 +37,18 @@ export interface SystemSectionProps {
   children?: ReactNode;
   className?: string;
   /**
-   * Pads and stacks content that is not rows. Leave it off for `SettingRow`s, a `StatGrid`, a
-   * `SystemNote` or a `DataTable`, which bring their own edge padding and row borders.
+   * Stacks content that is not rows 12px apart. Leave it off for `SettingRow`s, a `StatGrid` or a
+   * `DataTable`, which bring their own hairlines.
    */
   padded?: boolean;
   contentClassName?: string;
 }
 
 /**
- * One titled block on a System page: a flat `PageSection` whose muted header
- * row carries the title, an optional description, and right-aligned actions,
- * with the section's rows under it. Every System page composes these, so
- * section spacing and the action alignment stay identical. Inside the setup
- * walkthrough the same block is a `Card`.
+ * One titled block of a System sheet: a small muted heading with an optional
+ * description and right-aligned actions, then the block's rows. Every System
+ * page composes these, so spacing and action alignment stay identical. Inside
+ * the setup walkthrough the same block is a `Card`.
  */
 export function SystemSection({
   title,
@@ -84,7 +83,7 @@ export function SystemSection({
   return (
     <PageSection title={title} description={description} actions={actions} className={className}>
       {children === undefined ? undefined : padded ? (
-        <div className={cn("flex flex-col gap-3 p-3 text-sm", contentClassName)}>{children}</div>
+        <div className={cn("flex flex-col gap-3 text-sm", contentClassName)}>{children}</div>
       ) : (
         children
       )}
@@ -93,15 +92,15 @@ export function SystemSection({
 }
 
 /**
- * Prose inside a section: an explanation, a caveat, a short list. Padded and
- * bordered like a row, in small muted text, and kept to a readable width.
+ * Prose inside a section: an explanation, a caveat, a short list. Muted text
+ * kept to a readable width.
  */
 export function SystemNote({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       data-slot="system-note"
       className={cn(
-        "flex flex-col gap-1.5 border-border/60 border-b px-3 py-2.5 text-muted-foreground text-xs last:border-b-0 [&>ol]:max-w-4xl [&>p]:max-w-4xl [&>ul]:max-w-4xl",
+        "flex flex-col gap-1.5 text-muted-foreground text-sm [&>ol]:max-w-prose [&>p]:max-w-prose [&>ul]:max-w-prose",
         className,
       )}
       {...props}
@@ -111,12 +110,12 @@ export function SystemNote({ className, ...props }: ComponentProps<"div">) {
 
 /** A line of page-level text outside any section, such as "Loading…". */
 export function SystemLine({ className, ...props }: ComponentProps<"p">) {
-  return <p className={cn("px-3 py-2.5 text-muted-foreground text-sm", className)} {...props} />;
+  return <p className={cn("text-muted-foreground text-sm", className)} {...props} />;
 }
 
 /**
  * A problem, said in the destructive colour. With `row` it stands as a row of
- * its own inside a section, padded and bordered like the rows around it.
+ * its own among `SettingRow`s, with their hairline above it.
  */
 export function SystemAlert({
   row = false,
@@ -128,7 +127,7 @@ export function SystemAlert({
       role="alert"
       className={cn(
         "text-destructive text-sm [overflow-wrap:anywhere]",
-        row && "border-border/60 border-b px-3 py-2.5 last:border-b-0",
+        row && "border-border border-t py-4.5",
         className,
       )}
       {...props}

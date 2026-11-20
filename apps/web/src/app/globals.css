@@ -5,6 +5,8 @@
 @source "../../node_modules/streamdown/dist/*.js";
 
 @custom-variant dark (&:is(.dark *));
+/* Inside a detail sheet (see docs/DESIGN.md): controls are larger and rows lose their side padding. */
+@custom-variant sheet (&:is([data-slot="detail-sheet"] *));
 
 @theme inline {
   --color-background: var(--background);
@@ -41,6 +43,19 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-panel: var(--panel);
+  --color-well: var(--well);
+  --color-raised: var(--raised);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-success: var(--success);
+  --color-success-dot: var(--success-dot);
+  --color-success-muted: var(--success-muted);
+  --color-on-success: var(--on-success);
+  --color-warning: var(--warning);
+  --color-warning-muted: var(--warning-muted);
+  --color-destructive-muted: var(--destructive-muted);
+  --color-switch-off: var(--switch-off);
+  --color-switch-thumb: var(--switch-thumb);
   --color-tag-red: var(--tag-red);
   --color-tag-orange: var(--tag-orange);
   --color-tag-yellow: var(--tag-yellow);
@@ -55,13 +70,17 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-float: 1.125rem;
+  --shadow-floating: var(--floating-shadow);
+  --shadow-segment: var(--segment-shadow);
 }
 
 /*
- * Apple-like theme: a neutral grey scale with a single blue accent (roughly
- * Apple's system blue) and hairline low-contrast borders. The sidebar is grey
- * only: a solid off-white (or near-black) panel whose hover and selected rows
- * are a step darker (or lighter), with no tint.
+ * The Quiet theme (docs/DESIGN.md): ink on a neutral ground, hairline borders
+ * and almost no color. `primary` is ink, not blue. Color means state: green for
+ * healthy and on, amber for attention, red for failed and for actions that
+ * delete. The one blue, `ring`, marks focus, selected files, drop targets and
+ * folder icons. The sidebar is grey only.
  */
 :root {
   --font-sans:
@@ -74,15 +93,16 @@
   --card-foreground: oklch(0.145 0 0);
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.585 0.208 260.5);
-  --primary-foreground: oklch(0.985 0 0);
+  --primary: var(--foreground);
+  --primary-foreground: var(--background);
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* 4.5:1 on muted, which the lighter grey before it missed. */
+  --muted-foreground: #595959;
   --accent: oklch(0.945 0.025 260.5);
   --accent-foreground: oklch(0.585 0.208 260.5);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: #b42318;
   --border: oklch(0.145 0 0 / 8%);
   --input: oklch(0.145 0 0 / 12%);
   --ring: oklch(0.585 0.208 260.5);
@@ -100,6 +120,26 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* The detail sheet's ground, one step off the page. */
+  --panel: #fafafa;
+  /* A segmented control's sunken track, and the chosen segment raised inside it. */
+  --well: #f0f0f0;
+  --raised: #ffffff;
+  /* Text on neutral badges. */
+  --subtle-foreground: #404040;
+  /* State. `*-muted` is a badge's ground, the plain name its text. */
+  --success: #166534;
+  --success-dot: #16a34a;
+  --success-muted: #dcfce7;
+  --on-success: #ffffff;
+  --warning: #854d0e;
+  --warning-muted: #fef3c7;
+  --destructive-muted: #fee4e2;
+  --switch-off: #8a8a8a;
+  --switch-thumb: #ffffff;
+  --floating-shadow: 0 24px 64px rgb(0 0 0 / 28%);
+  --segment-shadow: 0 1px 2px rgb(0 0 0 / 12%);
 
   /* Finder-like tag dots: a fixed, Apple-ish palette, tuned to read clearly
      on both light and dark surfaces without separate dark-mode values. */
@@ -119,8 +159,8 @@
   --card-foreground: oklch(0.97 0 0);
   --popover: oklch(0.195 0 0);
   --popover-foreground: oklch(0.97 0 0);
-  --primary: oklch(0.685 0.19 260.5);
-  --primary-foreground: oklch(0.145 0 0);
+  --primary: var(--foreground);
+  --primary-foreground: var(--background);
   --secondary: oklch(0.245 0 0);
   --secondary-foreground: oklch(0.97 0 0);
   --muted: oklch(0.245 0 0);
@@ -144,6 +184,22 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+
+  --panel: #111111;
+  --well: #0a0a0a;
+  --raised: #2a2a2a;
+  --subtle-foreground: #d4d4d4;
+  --success: #7ee787;
+  --success-dot: #7ee787;
+  --success-muted: #12261a;
+  --on-success: #0a0a0a;
+  --warning: #f2cc60;
+  --warning-muted: #2b2410;
+  --destructive-muted: #2d1412;
+  --switch-off: #6b6b6b;
+  --switch-thumb: #fafafa;
+  --floating-shadow: 0 24px 64px rgb(0 0 0 / 60%);
+  --segment-shadow: 0 0 #0000;
 }
 
 @layer base {

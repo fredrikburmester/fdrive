@@ -10,7 +10,10 @@ export function activitySections(meta: Record<string, unknown> | undefined): Sys
   return (meta?.systemActivity as SystemActivityId[] | undefined) ?? [];
 }
 
-/** Mounted only by the admin sidebar. Mutation keys remain available for admission checks. */
+/**
+ * Mounted by the admin sidebar's System row and by the System page's list of areas. Mutation
+ * keys remain available for admission checks.
+ */
 export function useSystemActivity() {
   const client = useQueryClient();
   const [accepted, setAccepted] = useState<{ sections: SystemActivityId[]; at: number }[]>([]);

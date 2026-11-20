@@ -19,7 +19,7 @@ export interface SegmentedControlProps<T extends string> {
 }
 
 /**
- * One choice out of a few, as a row of segments on a shared track with the chosen one raised.
+ * One choice out of a few, as a row of segments in a sunken well with the chosen one raised.
  * Exactly one segment is always pressed: pressing the chosen one again changes nothing.
  */
 export function SegmentedControl<T extends string>({
@@ -34,14 +34,13 @@ export function SegmentedControl<T extends string>({
   return (
     <ToggleGroup
       aria-label={label}
-      size="sm"
-      spacing={0.5}
+      spacing={1}
       value={[value]}
       onValueChange={(next: unknown[]) => {
         const chosen = options.find((option) => option === next[0]);
         if (chosen !== undefined) onChange(chosen);
       }}
-      className={cn("max-w-full flex-wrap rounded-lg bg-muted p-0.5", className)}
+      className={cn("max-w-full flex-wrap rounded-[10px] bg-well p-1", className)}
     >
       {options.map((option) => {
         const Icon: LucideIcon | undefined = icons?.[option];
@@ -49,7 +48,7 @@ export function SegmentedControl<T extends string>({
           <ToggleGroupItem
             key={option}
             value={option}
-            className="rounded-md border border-transparent px-3 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-xs dark:aria-pressed:border-input dark:aria-pressed:bg-input/30"
+            className="h-9 rounded-md px-3.5 font-medium text-muted-foreground hover:bg-transparent hover:text-foreground aria-pressed:bg-raised aria-pressed:text-foreground aria-pressed:shadow-segment"
           >
             {Icon !== undefined ? <Icon aria-hidden="true" /> : null}
             {labels[option]}
@@ -68,7 +67,7 @@ export interface ChoiceRowProps<T extends string> extends SegmentedControlProps<
 /** A setting with a few fixed choices: its label and one-line hint beside a segmented control. */
 export function ChoiceRow<T extends string>({ label, hint, ...control }: ChoiceRowProps<T>) {
   return (
-    <SettingRow label={label} description={hint}>
+    <SettingRow label={label} description={hint} align="end">
       <SegmentedControl label={label} {...control} />
     </SettingRow>
   );

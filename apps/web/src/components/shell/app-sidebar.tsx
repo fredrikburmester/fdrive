@@ -27,7 +27,7 @@ import { SidebarResizeHandle } from "@/components/shell/resizable-sidebar";
 import { SavedSearchesSection } from "@/components/shell/saved-searches-section";
 import { SharedWithMeItem } from "@/components/shell/shared-with-me-item";
 import { SIDEBAR_ROW, SidebarSectionLabel } from "@/components/shell/sidebar-section";
-import { SystemNav } from "@/components/shell/system-nav";
+import { isSystemRoute, SystemNav } from "@/components/shell/system-nav";
 import { TagsSection } from "@/components/shell/tags-section";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -58,7 +58,6 @@ import {
 } from "@/components/ui/sidebar";
 import { useLogout } from "@/lib/api/auth-queries";
 import { useSidebarSwipe } from "@/lib/sidebar-swipe";
-import { SYSTEM_SCOPE_CAPTION } from "@/lib/system/pages";
 
 const THEME_OPTIONS = [
   { value: "light", label: "Light", Icon: Sun },
@@ -76,10 +75,7 @@ export function isFilesRoute(pathname: string | null): boolean {
   return pathname === "/files" || (pathname?.startsWith("/files/") ?? false);
 }
 
-/** True when `pathname` is the System location or a path within it. */
-export function isSystemRoute(pathname: string | null): boolean {
-  return pathname === "/system" || (pathname?.startsWith("/system/") ?? false);
-}
+export { isSystemRoute };
 
 /** True when `pathname` is the Trash location. */
 export function isTrashRoute(pathname: string | null): boolean {
@@ -161,7 +157,7 @@ export function AppSidebar() {
         <TagsSection />
         <SavedSearchesSection />
         <RecentsSection />
-        {/* Shares and Trash sit at the bottom of the navigation, above System. */}
+        {/* Shares, Trash and, for administrators, System sit at the bottom of the navigation. */}
         <SidebarGroup className="py-0">
           <SidebarMenu>
             <SidebarMenuItem>
@@ -184,21 +180,9 @@ export function AppSidebar() {
                 <span>Trash</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {me?.isAdmin ? <SystemNav /> : null}
           </SidebarMenu>
         </SidebarGroup>
-        {me?.isAdmin ? (
-          <SidebarGroup className="py-0">
-            <SidebarSectionLabel>
-              System
-              <span className="ml-auto truncate font-normal text-sidebar-foreground/50">
-                {SYSTEM_SCOPE_CAPTION}
-              </span>
-            </SidebarSectionLabel>
-            <div className="mt-0.5">
-              <SystemNav />
-            </div>
-          </SidebarGroup>
-        ) : null}
       </SidebarContent>
       <SidebarFooter>
         <DropdownMenu>
