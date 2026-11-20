@@ -73,7 +73,7 @@ job completes its `archive.compress` or `archive.extract` operation.
 | `trash.empty` | Parent operation with bounded per-item `file.delete` children and exact counts. |
 | `file.open` | Explicit editor or document open; not proof of a save. `recents/touch` is client-reported. |
 | `file.preview` | Explicit preview gesture; separate from transport prefetch. |
-| `file.inspect` | Explicit Info or inspector action; a background `stat` does not emit it. |
+| `file.inspect` | Opening the Info panel on a file, or an explicit info request from a client; a panel that is already open records nothing as the selection changes, and a background `stat` does not emit it. |
 | `file.read` | Explicit MCP content read, including continuation requests. |
 | `file.download` | Explicit download of original bytes; the outcome describes server delivery, not a save to disk. |
 | `file.materialize` | Mac content download; no claim of a human open. |

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "sonner";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { describeApiError } from "@/lib/api/errors";
 import { officeStatus } from "@/lib/system/status";
@@ -12,7 +13,7 @@ import { StatGrid } from "./stat-grid";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemLine, SystemNote, SystemSection } from "./system-section";
 
 /**
  * Admin page: `System > Office`. Named `OfficeSystemPage` so it does not
@@ -52,72 +53,71 @@ export function OfficeSystemPage() {
       {query.isError ? (
         <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
       ) : query.data === undefined ? (
-        <p role="status">Loading Office settings…</p>
+        <SystemLine role="status">Loading Office settings…</SystemLine>
       ) : (
         <>
-          <SystemSection
-            title="Status"
-            description={
-              query.data.status === "ready"
-                ? `${product} is ready.`
-                : query.data.status === "starting"
-                  ? `${product} is starting. This resolves on its own once the container is up.`
-                  : query.data.status === "off"
-                    ? `${product} is turned off.`
-                    : `Unable to reach ${product}. Check its container and the setup guide.`
-            }
-          >
-            {status !== null ? <StatusBadge status={status} /> : null}
-            {addressMissing ? (
-              <p role="alert" className="text-sm text-destructive">
-                Set the fdrive server address first: the editor opens documents through it.
-              </p>
-            ) : null}
-            <p className="text-sm text-muted-foreground">
-              Close open documents before disabling the editor to avoid interrupting unsaved work.
-            </p>
-            <a
-              className="block text-sm underline"
-              href="https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md"
-              target="_blank"
-              rel="noreferrer"
+          <SystemSection title="Status">
+            <SettingRow
+              label={product}
+              description={
+                query.data.status === "ready"
+                  ? `${product} is ready.`
+                  : query.data.status === "starting"
+                    ? `${product} is starting. This resolves on its own once the container is up.`
+                    : query.data.status === "off"
+                      ? `${product} is turned off.`
+                      : `Unable to reach ${product}. Check its container and the setup guide.`
+              }
             >
-              Office setup instructions
-            </a>
+              {status !== null ? <StatusBadge status={status} /> : null}
+            </SettingRow>
+            {addressMissing ? (
+              <SystemAlert row>
+                Set the fdrive server address first: the editor opens documents through it.
+              </SystemAlert>
+            ) : null}
+            <SettingRow label="Editors" description="The users who may open documents for editing.">
+              {editors.length === 0 ? (
+                <p className="text-muted-foreground">Everyone opens documents view-only.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {editors.map((username) => (
+                    <Badge key={username} variant="secondary">
+                      {username}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </SettingRow>
+            <SystemNote>
+              <p>
+                Close open documents before disabling the editor to avoid interrupting unsaved work.
+              </p>
+              <a
+                className="self-start underline underline-offset-4"
+                href="https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Office setup instructions
+              </a>
+            </SystemNote>
           </SystemSection>
 
-          <StatGrid
-            stats={[
-              { label: "Product", value: product },
-              {
-                label: "Editing",
-                value: query.data.configuration.editingEnabled ? "On" : "Off",
-              },
-              { label: "Editors", value: editors.length.toLocaleString() },
-            ]}
-          />
-
-          <SystemSection
-            title="Editors"
-            description="The users who may open documents for editing."
-            contentClassName="flex-row flex-wrap gap-2"
-          >
-            {editors.length === 0 ? (
-              <p className="text-sm text-muted-foreground">Everyone opens documents view-only.</p>
-            ) : (
-              editors.map((username) => (
-                <Badge key={username} variant="secondary">
-                  {username}
-                </Badge>
-              ))
-            )}
+          <SystemSection title="Configuration">
+            <StatGrid
+              stats={[
+                { label: "Product", value: product },
+                {
+                  label: "Editing",
+                  value: query.data.configuration.editingEnabled ? "On" : "Off",
+                },
+                { label: "Editors", value: editors.length.toLocaleString() },
+              ]}
+            />
           </SystemSection>
 
-          {update.isError ? (
-            <div role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-              {describeApiError(update.error)}
-            </div>
-          ) : null}
+          {update.isError ? <SystemAlert row>{describeApiError(update.error)}</SystemAlert> : null}
         </>
       )}
 

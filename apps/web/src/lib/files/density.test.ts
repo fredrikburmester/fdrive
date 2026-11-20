@@ -23,10 +23,10 @@ function memoryStorage(initial: Record<string, string> = {}): StorageLike & {
 }
 
 describe("list density", () => {
-  it("defaults to comfortable, which keeps the original row height", () => {
-    expect(readListDensity(memoryStorage())).toBe(DEFAULT_LIST_DENSITY);
-    expect(ROW_HEIGHTS[DEFAULT_LIST_DENSITY]).toBe(36);
-    expect(ROW_HEIGHTS.compact).toBeLessThan(ROW_HEIGHTS.comfortable);
+  it("defaults to comfortable, whose rows are about twice as tall as compact's", () => {
+    expect(DEFAULT_LIST_DENSITY).toBe("comfortable");
+    expect(readListDensity(memoryStorage())).toBe("comfortable");
+    expect(ROW_HEIGHTS).toEqual({ comfortable: 64, compact: 36 });
   });
 
   it("round-trips a stored density and rejects unknown values", () => {
@@ -38,9 +38,10 @@ describe("list density", () => {
   });
 
   it("gives phones taller two-line rows that never drop below a 44px tap target", () => {
-    expect(listRowHeight("comfortable", false)).toBe(36);
-    expect(listRowHeight("compact", false)).toBe(28);
-    expect(listRowHeight("comfortable", true)).toBe(56);
-    expect(listRowHeight("compact", true)).toBe(44);
+    expect(listRowHeight("comfortable", false)).toBe(64);
+    expect(listRowHeight("compact", false)).toBe(36);
+    expect(listRowHeight("comfortable", true)).toBe(68);
+    expect(listRowHeight("compact", true)).toBe(56);
+    expect(listRowHeight("compact", true)).toBeGreaterThanOrEqual(44);
   });
 });

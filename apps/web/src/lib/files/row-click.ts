@@ -4,7 +4,8 @@ import { readJson, type StorageLike, writeJson } from "./storage";
  * What a plain (unmodified) click on a listing row or grid tile does:
  * "select" replaces the selection with that item, "toggle" adds or removes
  * it like its checkbox, "highlight" moves the keyboard focus to it without
- * changing the selection, and "open" opens it. Shift-click and Cmd/Ctrl-click
+ * changing the selection (the details panel still shows it, see
+ * `inspectedEntries`), and "open" opens it. Shift-click and Cmd/Ctrl-click
  * keep their range and toggle meaning in every mode, and Enter or a
  * double-click still opens in every mode but "open".
  */

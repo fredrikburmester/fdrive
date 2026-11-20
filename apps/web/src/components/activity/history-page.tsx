@@ -7,16 +7,31 @@ import {
   PersonalActivityOutcome,
   PersonalActivitySource,
 } from "@fdrive/contracts";
-import { baseName } from "@fdrive/core";
-import { Clock3, File, FolderOpen, HelpCircle } from "lucide-react";
+import { baseName, extensionOf } from "@fdrive/core";
+import { cn } from "cn";
+import { ChevronRightIcon, Clock3, HelpCircle, ListFilterIcon } from "lucide-react";
 import type { Route } from "next";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { Fragment, type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
+import { FileIcon } from "@/components/files/file-icon";
 import { PageHeader } from "@/components/shell/page-header";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageBar,
+  PageBody,
+  PageEmpty,
+  PageSection,
+} from "@/components/shell/page-layout";
+import { PHONE_TARGET, RowsSkeleton, TruncatedCell } from "@/components/shell/page-rows";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -25,14 +40,57 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { activityFile, activityRequest } from "@/lib/activity/api";
 import { activityLabels, activityPath, collapseActivity } from "@/lib/activity/history";
 import { useActivityFile, useActivityHistory } from "@/lib/activity/queries";
 import { useMe } from "@/lib/api/auth-queries";
 import { pathToHref, viewHref } from "@/lib/files/path-url";
+import { formatTime } from "@/lib/format";
 import { revealHref } from "@/lib/search/reveal";
+import { useFormatters } from "@/lib/use-format-preferences";
 import { EventMembers } from "./event-members";
+import {
+  activityFailed,
+  activityFolder,
+  activityItemName,
+  activityOrigin,
+  activityResult,
+  eventCountLabel,
+  groupByDay,
+} from "./history-rows";
 import { JourneyDetails } from "./journey-details";
+
+/** A link to another activity page, drawn like the buttons beside it. */
+const PAGE_LINK = cn(buttonVariants({ variant: "outline", size: "sm" }), PHONE_TARGET);
+
+/**
+ * The columns a narrow page drops, by the page's own width (`PageBody` is a size container):
+ * the result first shows from `@xl`, the location from `@2xl`, the client from `@4xl`.
+ */
+const OPTIONAL_COLUMN = {
+  location: "hidden @2xl:table-cell",
+  client: "hidden @4xl:table-cell",
+  result: "hidden @xl:table-cell",
+} as const;
+
+/**
+ * Empty cells under the optional columns, for a row whose one cell spans the columns that always
+ * show. CSS hides the optional ones, so a `colSpan` over all seven would add columns to a narrow
+ * table; spanning four and filling the rest keeps the row reaching the table's edge.
+ */
+function OptionalColumnFillers() {
+  return (
+    <>
+      <td className={OPTIONAL_COLUMN.location} />
+      <td className={OPTIONAL_COLUMN.client} />
+      <td className={OPTIONAL_COLUMN.result} />
+    </>
+  );
+}
+
+/** A filter control on a phone: a full-width 44px tap target; compact from `md` up. */
+const FILTER_CONTROL = "max-md:min-h-11 max-md:w-full md:h-7";
 
 function HistoryFilter({
   label,
@@ -47,7 +105,7 @@ function HistoryFilter({
 }) {
   return (
     <Select value={value} items={options} onValueChange={(value) => onChange(value ?? "all")}>
-      <SelectTrigger aria-label={label} className="min-h-11 w-full min-w-0">
+      <SelectTrigger aria-label={label} size="sm" className={cn("min-w-0", FILTER_CONTROL)}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -60,13 +118,100 @@ function HistoryFilter({
     </Select>
   );
 }
-function ActivityRow({ event }: { event: PersonalActivityEvent }) {
+
+/** What an observation leaves uncertain, shown in the row itself so it is never a click away. */
+function uncertaintyNotes(event: PersonalActivityEvent): string[] {
+  const notes: string[] = [];
+  if (event.class === "observation") {
+    notes.push("Detected outside a confirmed fdrive action. Who made this change is unknown.");
+  }
+  if (event.action === "observation.resolved") {
+    notes.push(
+      "The location can be read again. Whether this is the earlier file remains unknown; its new journey is under Files involved in the details.",
+    );
+  }
+  return notes;
+}
+
+/** The recorded facts of one event, as the label and value pairs of its details. */
+function eventFacts(event: PersonalActivityEvent, path: string | null): [string, ReactNode][] {
+  const facts: [string, ReactNode][] = [];
+  if (path) facts.push(["Path", path]);
+  if (event.before?.path && event.before.path !== path) facts.push(["From", event.before.path]);
+  facts.push(["When", new Date(event.sortAt).toLocaleString()]);
+  facts.push(["Client", event.source]);
+  facts.push(["Evidence", event.evidence.replaceAll("_", " ")]);
+  facts.push(["Recorded", new Date(event.recordedAt).toLocaleString()]);
+  if (event.lastConfirmedAt) {
+    facts.push(["Last confirmed", new Date(event.lastConfirmedAt).toLocaleString()]);
+  }
+  if (event.after?.size !== undefined) {
+    facts.push(["Size", `${event.after.size.toLocaleString()} bytes`]);
+  }
+  if (event.errorCode) facts.push(["Result", event.errorCode.replaceAll("_", " ")]);
+  if (event.after?.trashLeaf) facts.push(["Trash location", event.after.trashLeaf]);
+  for (const side of ["before", "after"] as const) {
+    const recorded = event[side];
+    if (!recorded) continue;
+    const values = [
+      recorded.tags && `Tags: ${recorded.tags.map((tag) => tag.name).join(", ") || "none"}`,
+      recorded.favorite !== undefined && `Favorite: ${recorded.favorite ? "yes" : "no"}`,
+      recorded.view && `Folder view: ${recorded.view}`,
+      recorded.permissions && `Share permissions: ${recorded.permissions.join(", ")}`,
+      recorded.expiresAt !== undefined &&
+        `Share expiry: ${recorded.expiresAt ? new Date(recorded.expiresAt).toLocaleString() : "none"}`,
+      recorded.completedCount !== undefined && `Completed: ${recorded.completedCount}`,
+      recorded.failedCount !== undefined && `Failed: ${recorded.failedCount}`,
+    ].filter(Boolean);
+    if (values.length) facts.push([side === "before" ? "Before" : "After", values.join(" · ")]);
+  }
+  if (event.firstAt && event.lastAt) {
+    facts.push([
+      "Time range",
+      `${new Date(event.firstAt).toLocaleTimeString()} – ${new Date(event.lastAt).toLocaleTimeString()}`,
+    ]);
+  }
+  return facts;
+}
+
+/**
+ * One event as a table row: when, what happened, the item and where it is, the client and the
+ * result. The chevron opens a second row with everything recorded about it and the ways on:
+ * open the file, show it in its folder, its journey, and its batch.
+ */
+function ActivityRows({
+  event,
+  mobile,
+  columns,
+  journeyFileId,
+}: {
+  event: PersonalActivityEvent;
+  mobile: boolean;
+  /** How many columns always show, for the details row to span. */
+  columns: number;
+  /** The file whose journey this page shows, which needs no link to itself. */
+  journeyFileId: string | undefined;
+}) {
   const { data: me } = useMe();
+  const { prefs } = useFormatters();
   const router = useRouter();
+  const detailsId = useId();
+  const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const path = activityPath(event);
-  const Icon =
-    event.class === "observation" ? HelpCircle : event.after?.kind === "dir" ? FolderOpen : File;
+  const name = path ? activityItemName(path) : null;
+  const folder = path ? activityFolder(path) : null;
+  const origin = path ? activityOrigin(event, path) : null;
+  const action = `${activityLabels[event.action]}${event.count > 1 ? ` ${event.count} times` : ""}`;
+  const when = new Date(event.sortAt);
+  const time = (
+    <time dateTime={event.sortAt} title={when.toLocaleString()} className="tabular-nums">
+      {formatTime(when, prefs.clock)}
+    </time>
+  );
+  const result = activityResult(event);
+  const failed = activityFailed(event);
+  const notes = uncertaintyNotes(event);
   async function open(kind: "file" | "reveal") {
     if (!event.fileId) return;
     setBusy(true);
@@ -89,158 +234,222 @@ function ActivityRow({ event }: { event: PersonalActivityEvent }) {
   }
   // History outlives the login that recorded it; only the signed-in login's files can open.
   const available = event.identityId === me?.identity.id;
+  const canOpen = event.fileId !== null && available && !busy;
+  const kind = event.after?.kind ?? event.before?.kind ?? "file";
+  const icon =
+    event.class === "observation" ? (
+      <HelpCircle className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+    ) : name === null ? null : (
+      <FileIcon kind={kind} ext={kind === "dir" ? "" : extensionOf(name)} mime={null} />
+    );
+  const toggle = (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-controls={expanded ? detailsId : undefined}
+      aria-label={`Details for ${action}${name ? ` ${name}` : ""}`}
+      onClick={() => setExpanded((open) => !open)}
+      className="relative flex size-4 items-center justify-center rounded-sm text-muted-foreground outline-none after:absolute after:-inset-2.5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <ChevronRightIcon
+        aria-hidden="true"
+        className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+      />
+    </button>
+  );
+  const noteLines = notes.map((note) => (
+    <p key={note} className="whitespace-normal text-muted-foreground text-xs">
+      {note}
+    </p>
+  ));
+  // A row with notes is taller than its neighbors, so its cells line up along their first line.
+  const top = notes.length > 0 ? "py-2 align-top" : undefined;
   return (
-    <li className="flex min-w-0 gap-3 border-b border-border py-4 last:border-0">
-      <div className="mt-1 flex size-9 shrink-0 items-center justify-center rounded-xl bg-muted">
-        <Icon className="size-4 text-muted-foreground" aria-hidden />
-      </div>
-      <div className="min-w-0 flex-1 space-y-1.5">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-sm font-medium">
-            {activityLabels[event.action]}
-            {event.count > 1 ? ` ${event.count} times` : ""}
-          </span>
-          <Badge
-            variant={
-              event.outcome === "failed" || event.outcome === "denied" ? "destructive" : "secondary"
-            }
-          >
-            {event.provisional ? "Recent" : (event.outcome ?? "Started")}
-          </Badge>
-        </div>
-        {path && <p className="break-all text-sm font-medium">{baseName(path) || "Home"}</p>}
-        {path && <p className="break-all text-xs text-muted-foreground">{path}</p>}
-        {event.before?.path && event.before.path !== path && (
-          <p className="break-all text-xs text-muted-foreground">From {event.before.path}</p>
-        )}
-        <p className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-muted-foreground">
-          <time dateTime={event.sortAt}>{new Date(event.sortAt).toLocaleString()}</time>
-          <span>{event.source}</span>
-        </p>
-        {event.class === "observation" && (
-          <p className="text-xs text-muted-foreground">
-            Detected outside a confirmed fdrive action. Who made this change is unknown.
-          </p>
-        )}
-        {event.action === "observation.resolved" && (
-          <p className="text-xs text-muted-foreground">
-            The location can be read again. Whether this is the earlier file remains unknown; its
-            new journey is listed below.
-          </p>
-        )}
-        {event.evidence === "client_reported" && (
-          <p className="text-xs text-muted-foreground">Reported by your client</p>
-        )}
-        {event.fileId && (
-          <div className="flex flex-wrap items-center gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="min-h-11"
-              disabled={busy || !available}
-              onClick={() => void open("file")}
+    <>
+      <DataTableRow
+        data-slot="activity-row"
+        data-state={expanded ? "selected" : undefined}
+        className={cn("data-[state=selected]:bg-muted/40", mobile && "h-14")}
+      >
+        <DataTableCell className={top}>
+          <div className="flex h-5 items-center">{toggle}</div>
+        </DataTableCell>
+        {mobile ? (
+          <DataTableCell className={top}>
+            <div className="flex min-w-0 flex-col gap-0.5">
+              <div className="flex min-w-0 items-baseline gap-1.5 text-[15px] leading-5">
+                <span className="shrink-0 font-medium">{action}</span>
+                {name && <span className="truncate">{name}</span>}
+              </div>
+              <div className="flex min-w-0 items-center gap-1 text-muted-foreground text-xs leading-4">
+                {time}
+                {folder && <span className="truncate">· {folder}</span>}
+                {result !== "success" && (
+                  <span className={cn("shrink-0", failed && "font-medium text-destructive")}>
+                    · {result}
+                  </span>
+                )}
+              </div>
+              {noteLines}
+            </div>
+          </DataTableCell>
+        ) : (
+          <>
+            <DataTableCell className={cn("text-muted-foreground text-xs leading-5", top)}>
+              {time}
+            </DataTableCell>
+            <TruncatedCell title={action} className={top}>
+              <span>{action}</span>
+            </TruncatedCell>
+            <DataTableCell className={top}>
+              <div className="flex min-w-0 items-center gap-2">
+                {icon}
+                {name === null ? (
+                  <span className="text-muted-foreground">--</span>
+                ) : canOpen ? (
+                  <button
+                    type="button"
+                    title="Open"
+                    onClick={() => void open("file")}
+                    className="min-w-0 truncate rounded-sm text-left outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {name}
+                  </button>
+                ) : (
+                  <span className="min-w-0 truncate" title={name}>
+                    {name}
+                  </span>
+                )}
+                {origin && (
+                  <span
+                    className="min-w-0 shrink-[2] truncate text-muted-foreground text-xs"
+                    title={event.before?.path}
+                  >
+                    from {origin}
+                  </span>
+                )}
+              </div>
+              {noteLines}
+            </DataTableCell>
+            <TruncatedCell
+              className={cn(
+                "text-muted-foreground text-xs leading-5",
+                OPTIONAL_COLUMN.location,
+                top,
+              )}
             >
-              Open
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="min-h-11"
-              disabled={busy || !available}
-              onClick={() => void open("reveal")}
+              {folder === null ? (
+                "--"
+              ) : canOpen ? (
+                <button
+                  type="button"
+                  title="Show in folder"
+                  onClick={() => void open("reveal")}
+                  className="max-w-full truncate rounded-sm align-bottom outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {folder}
+                </button>
+              ) : (
+                <span title={folder}>{folder}</span>
+              )}
+            </TruncatedCell>
+            <TruncatedCell
+              className={cn("text-muted-foreground text-xs leading-5", OPTIONAL_COLUMN.client, top)}
             >
-              Show in folder
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="min-h-11"
-              render={<Link href={`/activity/files/${event.fileId}` as Route} />}
-              nativeButton={false}
+              {event.source}
+            </TruncatedCell>
+            <TruncatedCell
+              className={cn(
+                "text-muted-foreground text-xs leading-5",
+                OPTIONAL_COLUMN.result,
+                failed && "font-medium text-destructive",
+                top,
+              )}
             >
-              File journey
-            </Button>
-          </div>
+              {result}
+            </TruncatedCell>
+          </>
         )}
-        {event.batchId && (
-          <Link
-            className="inline-flex min-h-11 items-center text-xs underline"
-            href={`/activity/batches/${event.batchId}` as Route}
-          >
-            View batch
-          </Link>
-        )}
-        <EventMembers event={event} />
-        <details className="text-xs text-muted-foreground">
-          <summary className="flex min-h-11 cursor-pointer items-center">Details</summary>
-          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 rounded-lg bg-muted p-3">
-            <dt>Evidence</dt>
-            <dd className="break-words">{event.evidence.replaceAll("_", " ")}</dd>
-            <dt>Recorded</dt>
-            <dd>{new Date(event.recordedAt).toLocaleString()}</dd>
-            {event.lastConfirmedAt && (
-              <>
-                <dt>Last confirmed</dt>
-                <dd>{new Date(event.lastConfirmedAt).toLocaleString()}</dd>
-              </>
-            )}
-            {event.after?.size !== undefined && (
-              <>
-                <dt>Size</dt>
-                <dd>{event.after.size.toLocaleString()} bytes</dd>
-              </>
-            )}
-            {event.errorCode && (
-              <>
-                <dt>Result</dt>
-                <dd>{event.errorCode.replaceAll("_", " ")}</dd>
-              </>
-            )}
-            {event.after?.trashLeaf && (
-              <>
-                <dt>Trash location</dt>
-                <dd className="break-all">{event.after.trashLeaf}</dd>
-              </>
-            )}
-            {(["before", "after"] as const).map((side) => {
-              const facts = event[side];
-              if (!facts) return null;
-              const values = [
-                facts.tags && `Tags: ${facts.tags.map((tag) => tag.name).join(", ") || "none"}`,
-                facts.favorite !== undefined && `Favorite: ${facts.favorite ? "yes" : "no"}`,
-                facts.view && `Folder view: ${facts.view}`,
-                facts.permissions && `Share permissions: ${facts.permissions.join(", ")}`,
-                facts.expiresAt !== undefined &&
-                  `Share expiry: ${facts.expiresAt ? new Date(facts.expiresAt).toLocaleString() : "none"}`,
-                facts.completedCount !== undefined && `Completed: ${facts.completedCount}`,
-                facts.failedCount !== undefined && `Failed: ${facts.failedCount}`,
-              ].filter(Boolean);
-              if (!values.length) return null;
-              return (
-                <div className="col-span-2 space-y-1" key={side}>
-                  <dt className="font-medium capitalize">{side}</dt>
-                  <dd className="break-all">{values.join(" · ")}</dd>
+      </DataTableRow>
+      {expanded && (
+        <DataTableRow
+          id={detailsId}
+          data-slot="activity-details"
+          className="bg-muted/20 hover:bg-muted/20"
+        >
+          <DataTableCell colSpan={columns} className="whitespace-normal py-3">
+            <div className="flex min-w-0 flex-col gap-3 pl-7.5 text-xs">
+              {(event.fileId || event.batchId) && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {event.fileId && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={PHONE_TARGET}
+                        disabled={!canOpen}
+                        onClick={() => void open("file")}
+                      >
+                        Open
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={PHONE_TARGET}
+                        disabled={!canOpen}
+                        onClick={() => void open("reveal")}
+                      >
+                        Show in folder
+                      </Button>
+                      {event.fileId !== journeyFileId && (
+                        <Link
+                          href={`/activity/files/${event.fileId}` as Route}
+                          className={PAGE_LINK}
+                        >
+                          File journey
+                        </Link>
+                      )}
+                    </>
+                  )}
+                  {event.batchId && (
+                    <Link
+                      href={`/activity/batches/${event.batchId}` as Route}
+                      className={PAGE_LINK}
+                    >
+                      View batch
+                    </Link>
+                  )}
                 </div>
-              );
-            })}
-            {event.firstAt && event.lastAt && (
-              <>
-                <dt>Time range</dt>
-                <dd>
-                  {new Date(event.firstAt).toLocaleTimeString()} –{" "}
-                  {new Date(event.lastAt).toLocaleTimeString()}
-                </dd>
-              </>
-            )}
-          </dl>
-        </details>
-      </div>
-    </li>
+              )}
+              {event.evidence === "client_reported" && (
+                <p className="text-muted-foreground">Reported by your client</p>
+              )}
+              <EventMembers event={event} />
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-1">
+                {eventFacts(event, path).map(([label, value]) => (
+                  <Fragment key={label}>
+                    <dt className="text-muted-foreground">{label}</dt>
+                    <dd className="break-all">{value}</dd>
+                  </Fragment>
+                ))}
+              </dl>
+            </div>
+          </DataTableCell>
+          {!mobile && <OptionalColumnFillers />}
+        </DataTableRow>
+      )}
+    </>
   );
 }
+
+type FilterKey = "action" | "source" | "outcome";
+
 export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: string }) {
+  const mobile = useIsMobile();
   const [filters, setFilters] = useState<Partial<PersonalActivityFilters>>({});
   const [search, setSearch] = useState("");
+  const [dates, setDates] = useState({ from: "", to: "" });
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const history = useActivityHistory(
     filters,
     fileId ? `/files/${fileId}/events` : batchId ? `/batches/${batchId}/events` : "",
@@ -269,230 +478,350 @@ export function HistoryPage({ fileId, batchId }: { fileId?: string; batchId?: st
   const events = collapseActivity(
     history.data?.pages.flatMap((page) => [...page.provisionalReads, ...page.items]) ?? [],
   );
-  function filter(key: "action" | "source" | "outcome", value: string) {
+  const days = groupByDay(events);
+  function filter(key: FilterKey, value: string) {
     setFilters((previous) => ({ ...previous, [key]: value === "all" ? undefined : value }));
   }
+  /** `from` starts its day and `to` ends it, both in the browser's time zone. */
+  function filterDate(key: "from" | "to", value: string) {
+    setDates((previous) => ({ ...previous, [key]: value }));
+    const time = key === "from" ? "T00:00:00" : "T23:59:59.999";
+    setFilters((previous) => ({
+      ...previous,
+      [key]: value ? new Date(`${value}${time}`).toISOString() : undefined,
+    }));
+  }
+  function clearFilters() {
+    setDates({ from: "", to: "" });
+    setFilters((previous) => (previous.q === undefined ? {} : { q: previous.q }));
+  }
+  const activeFilters = [
+    filters.action,
+    filters.source,
+    filters.outcome,
+    filters.from,
+    filters.to,
+  ].filter((value) => value !== undefined).length;
+  const title = fileId ? "File journey" : batchId ? "Batch" : "My activity";
+  // The columns that always show: the chevron and one of folded text on a phone; the chevron,
+  // time, action and item from `md` up. Group and details rows span these.
+  const columns = mobile ? 2 : 4;
   return (
     <>
       <PageHeader
         breadcrumbs={
-          <span className="truncate font-medium">{fileId ? "File journey" : "My activity"}</span>
+          <div className="flex min-w-0 items-center gap-1.5 text-sm">
+            {(fileId || batchId) && (
+              <>
+                <Link
+                  href="/activity"
+                  className="shrink-0 rounded-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  My activity
+                </Link>
+                <span aria-hidden="true" className="text-muted-foreground">
+                  /
+                </span>
+              </>
+            )}
+            <h1 className="truncate font-medium">{title}</h1>
+          </div>
         }
       />
-      <main className="mx-auto w-full max-w-4xl space-y-5 p-4 sm:p-6" data-slot="personal-activity">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {fileId ? "File journey" : "My activity"}
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">Your actions on your files.</p>
-        </div>
-        {fileId && <JourneySummary fileId={fileId} />}
-        {fileId && <JourneyDetails fileId={fileId} />}
-        {batchId && <p className="text-sm text-muted-foreground">Actions from this batch</p>}
-        {first?.batchSummary && (
-          <p className="text-sm">
-            {first.batchSummary.total} operations ·{" "}
-            {Object.entries(first.batchSummary.outcomes)
-              .map(([outcome, count]) => `${count} ${outcome}`)
-              .join(" · ")}
-          </p>
-        )}
-        <form
-          className="flex min-w-0 gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setFilters((prior) => ({ ...prior, q: search }));
-          }}
-        >
-          <Input
-            aria-label="Search activity by name or path"
-            placeholder="Search names and past locations…"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            className="min-h-11 min-w-0"
-          />
-          <Button type="submit" variant="secondary" className="min-h-11">
-            Search
-          </Button>
-        </form>
-        <details className="rounded-xl border px-3">
-          <summary className="flex min-h-11 cursor-pointer items-center text-sm">Filters</summary>
-          <div className="grid grid-cols-1 gap-2 min-[380px]:grid-cols-2 sm:grid-cols-3">
-            <HistoryFilter
-              label="Action"
-              value={filters.action ?? "all"}
-              onChange={(value) => filter("action", value)}
-              options={[
-                { value: "all", label: "All actions" },
-                ...PersonalActivityAction.options.map((action) => ({
-                  value: action,
-                  label: activityLabels[action],
-                })),
-              ]}
-            />
-            <HistoryFilter
-              label="Source"
-              value={filters.source ?? "all"}
-              onChange={(value) => filter("source", value)}
-              options={[
-                { value: "all", label: "All clients" },
-                ...PersonalActivitySource.options.map((source) => ({
-                  value: source,
-                  label: source,
-                })),
-              ]}
-            />
-            <HistoryFilter
-              label="Outcome"
-              value={filters.outcome ?? "all"}
-              onChange={(value) => filter("outcome", value)}
-              options={[
-                { value: "all", label: "All outcomes" },
-                ...PersonalActivityOutcome.options.map((outcome) => ({
-                  value: outcome,
-                  label: outcome,
-                })),
-              ]}
-            />
-          </div>
-          <div className="mt-3 mb-3 flex flex-wrap items-end gap-3">
-            <label htmlFor="activity-from" className="min-w-0 flex-1 text-xs text-muted-foreground">
-              From
-              <Input
-                type="date"
-                id="activity-from"
-                aria-label="Activity from date"
-                className="mt-1 min-h-11"
-                onChange={(event) =>
-                  setFilters((prior) => ({
-                    ...prior,
-                    from: event.target.value
-                      ? new Date(`${event.target.value}T00:00:00`).toISOString()
-                      : undefined,
-                  }))
-                }
-              />
-            </label>
-            <label
-              htmlFor="activity-through"
-              className="min-w-0 flex-1 text-xs text-muted-foreground"
+      <PageBody>
+        {/* `PageBody` is a size container: the table drops its least important columns when narrow. */}
+        <div data-slot="personal-activity" className="flex min-w-0 flex-1 flex-col">
+          {fileId && <JourneySummary fileId={fileId} />}
+          {fileId && <JourneyDetails fileId={fileId} />}
+          <PageBar>
+            {history.data !== undefined && (
+              <span className="text-foreground">
+                {eventCountLabel(events.length, history.hasNextPage)}
+              </span>
+            )}
+            {batchId && <span>Actions from this batch</span>}
+            {first?.batchSummary && (
+              <span>
+                {first.batchSummary.total} operations ·{" "}
+                {Object.entries(first.batchSummary.outcomes)
+                  .map(([outcome, count]) => `${count} ${outcome}`)
+                  .join(" · ")}
+              </span>
+            )}
+            <form
+              className="flex min-w-0 items-center gap-1.5 max-md:w-full"
+              onSubmit={(event) => {
+                event.preventDefault();
+                setFilters((prior) => ({ ...prior, q: search }));
+              }}
             >
-              Through
               <Input
-                type="date"
-                id="activity-through"
-                aria-label="Activity through date"
-                className="mt-1 min-h-11"
-                onChange={(event) =>
-                  setFilters((prior) => ({
-                    ...prior,
-                    to: event.target.value
-                      ? new Date(`${event.target.value}T23:59:59.999`).toISOString()
-                      : undefined,
-                  }))
-                }
+                aria-label="Search activity by name or path"
+                placeholder="Search names and past locations…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="min-w-0 max-md:min-h-11 max-md:flex-1 md:h-7 md:w-64"
               />
-            </label>
-          </div>
-        </details>
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            className="min-h-11"
-            disabled={exporting}
-            onClick={() => void exportHistory("json")}
-          >
-            Export JSON
-          </Button>
-          <Button
-            variant="outline"
-            className="min-h-11"
-            disabled={exporting}
-            onClick={() => void exportHistory("csv")}
-          >
-            Export CSV
-          </Button>
-          {exportUrl && (
-            <a href={exportUrl} className="inline-flex min-h-11 items-center text-sm underline">
-              Download export
-            </a>
+              <Button type="submit" variant="secondary" size="sm" className={PHONE_TARGET}>
+                Search
+              </Button>
+              {mobile && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className={PHONE_TARGET}
+                  aria-expanded={filtersOpen}
+                  onClick={() => setFiltersOpen((open) => !open)}
+                >
+                  <ListFilterIcon aria-hidden="true" />
+                  {activeFilters > 0 ? `Filters (${activeFilters})` : "Filters"}
+                </Button>
+              )}
+            </form>
+            {/* Its own line on a phone, right-aligned from `md` up. */}
+            <div className="flex max-w-full flex-wrap items-center gap-1.5 md:ml-auto">
+              {exportUrl && (
+                <a
+                  href={exportUrl}
+                  className={cn("inline-flex items-center px-1 underline", PHONE_TARGET)}
+                >
+                  Download export
+                </a>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={exporting}
+                onClick={() => void exportHistory("json")}
+              >
+                Export JSON
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                disabled={exporting}
+                onClick={() => void exportHistory("csv")}
+              >
+                Export CSV
+              </Button>
+            </div>
+          </PageBar>
+          {(!mobile || filtersOpen) && (
+            <PageBar data-slot="activity-filters">
+              <HistoryFilter
+                label="Action"
+                value={filters.action ?? "all"}
+                onChange={(value) => filter("action", value)}
+                options={[
+                  { value: "all", label: "All actions" },
+                  ...PersonalActivityAction.options.map((action) => ({
+                    value: action,
+                    label: activityLabels[action],
+                  })),
+                ]}
+              />
+              <HistoryFilter
+                label="Source"
+                value={filters.source ?? "all"}
+                onChange={(value) => filter("source", value)}
+                options={[
+                  { value: "all", label: "All clients" },
+                  ...PersonalActivitySource.options.map((source) => ({
+                    value: source,
+                    label: source,
+                  })),
+                ]}
+              />
+              <HistoryFilter
+                label="Outcome"
+                value={filters.outcome ?? "all"}
+                onChange={(value) => filter("outcome", value)}
+                options={[
+                  { value: "all", label: "All outcomes" },
+                  ...PersonalActivityOutcome.options.map((outcome) => ({
+                    value: outcome,
+                    label: outcome,
+                  })),
+                ]}
+              />
+              <label
+                htmlFor="activity-from"
+                className="flex min-w-0 items-center gap-1.5 max-md:w-full"
+              >
+                <span className="max-md:w-16">From</span>
+                <Input
+                  type="date"
+                  id="activity-from"
+                  aria-label="Activity from date"
+                  value={dates.from}
+                  className={cn("min-w-0 md:w-36", FILTER_CONTROL)}
+                  onChange={(event) => filterDate("from", event.target.value)}
+                />
+              </label>
+              <label
+                htmlFor="activity-through"
+                className="flex min-w-0 items-center gap-1.5 max-md:w-full"
+              >
+                <span className="max-md:w-16">Through</span>
+                <Input
+                  type="date"
+                  id="activity-through"
+                  aria-label="Activity through date"
+                  value={dates.to}
+                  className={cn("min-w-0 md:w-36", FILTER_CONTROL)}
+                  onChange={(event) => filterDate("to", event.target.value)}
+                />
+              </label>
+              {activeFilters > 0 && (
+                <Button variant="ghost" size="sm" className={PHONE_TARGET} onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              )}
+            </PageBar>
           )}
-        </div>
-        {history.isPending && (
-          <p role="status" className="text-sm text-muted-foreground">
-            Loading your activity…
-          </p>
-        )}
-        {history.isError && (
-          <div role="alert" className="text-sm text-destructive">
-            {history.error.message}
-            <Button
-              variant="ghost"
-              className="ml-2 min-h-11"
-              onClick={() => void history.refetch()}
+          {history.isPending && <RowsSkeleton label="Loading your activity…" />}
+          {history.isError && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-2 border-border/60 border-b px-3 py-2 text-destructive text-sm"
             >
-              Retry
-            </Button>
+              {history.error.message}
+              <Button
+                variant="outline"
+                size="sm"
+                className={PHONE_TARGET}
+                onClick={() => void history.refetch()}
+              >
+                Retry
+              </Button>
+            </div>
+          )}
+          {!history.isPending && !history.isError && !events.length && (
+            <PageEmpty
+              icon={Clock3}
+              title="No activity here yet"
+              description="New actions will appear here. Earlier Recents have no verified author and are not imported."
+            />
+          )}
+          {events.length > 0 && (
+            <DataTable className="table-fixed">
+              <DataTableHeader>
+                <DataTableRow>
+                  <DataTableHead className="w-9">
+                    <span className="sr-only">Details</span>
+                  </DataTableHead>
+                  {mobile ? (
+                    <DataTableHead>Activity</DataTableHead>
+                  ) : (
+                    <>
+                      <DataTableHead className="w-16">Time</DataTableHead>
+                      <DataTableHead className="w-48">Action</DataTableHead>
+                      <DataTableHead>Item</DataTableHead>
+                      <DataTableHead className={cn("w-[24%]", OPTIONAL_COLUMN.location)}>
+                        Location
+                      </DataTableHead>
+                      <DataTableHead className={cn("w-20", OPTIONAL_COLUMN.client)}>
+                        Client
+                      </DataTableHead>
+                      <DataTableHead className={cn("w-24", OPTIONAL_COLUMN.result)}>
+                        Result
+                      </DataTableHead>
+                    </>
+                  )}
+                </DataTableRow>
+              </DataTableHeader>
+              <DataTableBody>
+                {days.map((day) => (
+                  <Fragment key={day.key}>
+                    {/* `DataTableGroupRow` by hand, to end in the fillers a narrow table needs. */}
+                    <tr
+                      data-slot="table-group-row"
+                      className="border-border/60 border-b bg-muted/40"
+                    >
+                      <th
+                        colSpan={columns}
+                        scope="colgroup"
+                        className="h-8 px-3 text-left align-middle font-medium text-muted-foreground text-xs"
+                      >
+                        {day.label}
+                        <span className="ml-2 font-normal tabular-nums">{day.events.length}</span>
+                      </th>
+                      {!mobile && <OptionalColumnFillers />}
+                    </tr>
+                    {day.events.map((event) => (
+                      <ActivityRows
+                        key={event.id}
+                        event={event}
+                        mobile={mobile}
+                        columns={columns}
+                        journeyFileId={fileId}
+                      />
+                    ))}
+                  </Fragment>
+                ))}
+              </DataTableBody>
+            </DataTable>
+          )}
+          {history.hasNextPage && (
+            <div className="border-border/60 border-b">
+              <Button
+                variant="ghost"
+                className="h-9 w-full rounded-none text-muted-foreground text-xs max-md:h-11"
+                disabled={history.isFetchingNextPage}
+                onClick={() => void history.fetchNextPage()}
+              >
+                {history.isFetchingNextPage ? "Loading…" : "Load more"}
+              </Button>
+            </div>
+          )}
+          <div className="space-y-1 px-3 py-2 text-muted-foreground text-xs">
+            {first?.historyStartsAt && (
+              <p>
+                History starts {new Date(first.historyStartsAt).toLocaleDateString()}.{" "}
+                {first.retainedFrom
+                  ? `Retained from ${new Date(first.retainedFrom).toLocaleDateString()}.`
+                  : "Journey metadata is kept without an automatic cutoff."}
+              </p>
+            )}
+            <p>Changes made outside fdrive appear once the indexer notices them.</p>
           </div>
-        )}
-        {!history.isPending && !history.isError && !events.length && (
-          <div className="rounded-xl border border-dashed p-8 text-center">
-            <Clock3 className="mx-auto mb-3 size-6 text-muted-foreground" />
-            <p className="font-medium">No activity here yet</p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              New actions will appear here. Earlier Recents have no verified author and are not
-              imported.
-            </p>
-          </div>
-        )}
-        <ol>
-          {events.map((event) => (
-            <ActivityRow key={event.id} event={event} />
-          ))}
-        </ol>
-        {history.hasNextPage && (
-          <Button
-            className="min-h-11 w-full"
-            variant="outline"
-            disabled={history.isFetchingNextPage}
-            onClick={() => void history.fetchNextPage()}
-          >
-            {history.isFetchingNextPage ? "Loading…" : "Load more"}
-          </Button>
-        )}
-        {first?.historyStartsAt && (
-          <p className="text-xs text-muted-foreground">
-            History starts {new Date(first.historyStartsAt).toLocaleDateString()}.{" "}
-            {first.retainedFrom
-              ? `Retained from ${new Date(first.retainedFrom).toLocaleDateString()}.`
-              : "Journey metadata is kept without an automatic cutoff."}
-          </p>
-        )}
-        <p className="text-xs text-muted-foreground">
-          Changes made outside fdrive appear once the indexer notices them.
-        </p>
-      </main>
+        </div>
+      </PageBody>
     </>
   );
 }
+
+/** The file a journey page is about: its name, where it is now, and whether it can be opened. */
 function JourneySummary({ fileId }: { fileId: string }) {
   const summary = useActivityFile(fileId);
-  if (summary.isPending) return <p role="status">Finding the current location…</p>;
-  if (summary.isError) return <p role="alert">{summary.error.message}</p>;
+  if (summary.isPending) {
+    return (
+      <p role="status" className="border-border border-b px-3 py-2 text-muted-foreground text-xs">
+        Finding the current location…
+      </p>
+    );
+  }
+  if (summary.isError) {
+    return (
+      <p role="alert" className="border-border border-b px-3 py-2 text-destructive text-sm">
+        {summary.error.message}
+      </p>
+    );
+  }
   const file = summary.data;
   return (
-    <div className="rounded-xl border bg-muted/30 p-4">
-      <div className="flex flex-wrap justify-between gap-2">
-        <h2 className="break-all font-medium">{baseName(file.lastKnownPath)}</h2>
-        <Badge variant="secondary">{file.availability}</Badge>
-      </div>
-      <p className="mt-2 break-all text-sm text-muted-foreground">
-        {file.currentPath ?? file.lastKnownPath}
-      </p>
-      <p className="mt-1 text-xs text-muted-foreground">
+    <PageSection
+      title={<span className="break-all">{baseName(file.lastKnownPath)}</span>}
+      description={<span className="break-all">{file.currentPath ?? file.lastKnownPath}</span>}
+      actions={<Badge variant="secondary">{file.availability}</Badge>}
+    >
+      <p className="px-3 py-2 text-muted-foreground text-xs">
         {file.label && `${file.label} · `}Revision records describe changes; earlier file contents
         are not stored.
       </p>
-    </div>
+    </PageSection>
   );
 }

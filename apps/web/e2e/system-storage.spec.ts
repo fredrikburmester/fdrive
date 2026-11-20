@@ -1,11 +1,10 @@
 import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 
-/** The files folder's card on System > General. */
+/** The files folder's section on System > General. */
 function storageCard(page: Page) {
   return page
-    .getByRole("main")
-    .locator('[data-slot="card"]')
+    .locator('[data-slot="page-section"]')
     .filter({ hasText: "Folder on this server, set by FDRIVE_STORAGE_ROOT." });
 }
 

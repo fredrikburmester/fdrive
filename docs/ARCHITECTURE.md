@@ -228,6 +228,11 @@ worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
 - System pages are installation-wide and independent of the signed-in login, and every page
   header says so. System > General holds the server address, the files folder's name and
   health, and how long Trash keeps an item.
+- Settings holds the signed-in login's own preferences, one page per section under `/account`:
+  Appearance, Browsing, Formats, Password, Encryption and API tokens (`/account` opens the
+  first). A wide screen lists the sections beside the open one; on a phone `/account` is the
+  list and a section's URL is that section alone, decided in CSS from the URL. The routes keep
+  the `/account` prefix from when the page was called Account.
 - The admin sidebar shows live processing activity and percentages only for fixed workloads.
   Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
@@ -239,26 +244,32 @@ worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
   those defaults; moves/deletes update pins.
 - Browser preferences live under `fdrive.*` localStorage keys, are read through
   `useSyncExternalStore` hooks so every mounted consumer and other tabs update together, and
-  are set on the Account page or in the View menu: row click (`fdrive.list.rowClick`: select,
+  are set in Settings (`/account`) or in the View menu: row click (`fdrive.list.rowClick`: select,
   toggle selection, highlight or open; highlight moves the focus ring and range anchor without
   changing the selection; modified clicks, Enter and double-click keep their meaning), list
-  density (`fdrive.list.density`), size units (`fdrive.format.sizes`), date style
+  density (`fdrive.list.density`: 36px compact rows, or 64px comfortable rows with larger icons
+  and thumbnails, the default), size units (`fdrive.format.sizes`), date style
   (`fdrive.format.dates`) and clock (`fdrive.format.clock`). Components render sizes and dates
   through `useFormatters`, never the bare formatters, so a preference applies everywhere.
   The desktop sidebar's width (`fdrive.sidebar.width`) is one of them, set by dragging the
-  sidebar's edge. So is the file list design (`fdrive.list.design`): classic, or a beta with
-  folders that open in place, colored icons, a More button per row and checkboxes behind
-  Select. The listing's tree view and the sidebar's folder tree remember their open folders
+  sidebar's edge. So is the file list design (`fdrive.list.design`, set in Settings only):
+  classic, or a beta with folders that open in place, colored icons, a More button per row and
+  checkboxes behind Select. The details panel (`fdrive.inspector.open`) is open by default
+  where it fits beside the listing (1024px and up) and remembers a close; narrower windows
+  show it as a sheet that never opens by itself and is not stored. It shows the selection, or
+  the highlighted row when nothing is selected. The listing's tree view and the sidebar's folder tree remember their open folders
   apart (`fdrive.list.tree` and `fdrive.sidebar.tree`), and only the user opens a sidebar
   folder: navigating never expands it.
-- The AI chat is a bubble in the live activity dock's corner that opens a floating panel above
-  it, below the activity panel; on narrow screens the panel is a sheet. It is mounted in the
+- The AI chat is a sparkle button in the files toolbar (`ChatToggle`, rendered by the file
+  browser left of the details toggle) and an overlay under the page header at the top right
+  that ends above the live activity dock; on narrow screens the panel is a sheet. The overlay
+  is as tall as its content, so a new chat is only its header and composer. It is mounted in the
   shell layout, not inside the file browser, so it stays open between folders, and it renders
   only on folder pages, since the folder in view is what the assistant works on (sent as each
   message's `location`). Its open state, width and current chat are `fdrive.chat.open`,
   `fdrive.chat.width` and `fdrive.chat.current`, read through the same `useSyncExternalStore`
   pattern as the other browser preferences. Files and folders reach it by drag onto the panel
-  or bubble (the listings' internal `application/x-fdrive-paths` drag) or **Add to chat** from
+  or button (the listings' internal `application/x-fdrive-paths` drag) or **Add to chat** from
   a selection or row. Its transcript
   and composer are the trimmed AI Elements components under `components/ai-elements/`; the
   action cards and reference chips are fdrive's own.

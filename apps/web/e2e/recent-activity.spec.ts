@@ -77,6 +77,18 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   await expect(history.getByText("Renamed", { exact: true })).toBeVisible();
   await expect(history.getByText("Uploaded", { exact: true })).toBeVisible();
   await expect(history.getByText("Finding the current location…", { exact: true })).toHaveCount(0);
+  // The journey is a table of rows under the day they happened on; a row opens into what was
+  // recorded about it and closes again.
+  await expect(page.getByRole("heading", { name: "File journey", exact: true })).toBeVisible();
+  await expect(history.locator('[data-slot="table-group-row"]').first()).toContainText("Today");
+  await expect(history.getByRole("columnheader", { name: "Action", exact: true })).toBeVisible();
+  const renameDetails = history.getByRole("button", { name: /^Details for Renamed / });
+  await renameDetails.click();
+  const details = history.locator('[data-slot="activity-details"]');
+  await expect(details).toContainText(path);
+  await expect(details.getByRole("button", { name: "Show in folder", exact: true })).toBeEnabled();
+  await renameDetails.click();
+  await expect(details).toHaveCount(0);
   await history.getByText("Related files", { exact: true }).click();
   await expect(history.getByRole("link", { name: /copy.txt/ })).toBeVisible();
   await page.reload();

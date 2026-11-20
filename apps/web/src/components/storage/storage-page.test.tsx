@@ -74,8 +74,12 @@ describe("StoragePage", () => {
     expect(screen.getByText("Audio").closest("li")?.textContent).toContain("0 B");
     expect(screen.getByText(/Counted from the search index/)).toBeTruthy();
 
-    const trip = screen.getByText("trip.mov").closest("li") as HTMLElement;
-    expect(within(trip).getByText("/Videos")).toBeTruthy();
+    // The largest files are a table like the file list: name, folder, size, a way to it.
+    expect(screen.getByRole("columnheader", { name: "Folder" })).toBeTruthy();
+    const trip = screen.getByText("trip.mov").closest("tr") as HTMLElement;
+    // The folder has its own column, and sits under the name where a phone hides that column.
+    expect(within(trip).getAllByText("/Videos")).toHaveLength(2);
+    expect(trip.textContent).toContain("1.0 GB");
     expect(
       within(trip).getByRole("button", { name: "Reveal trip.mov in folder" }).getAttribute("href"),
     ).toBe("/files/Videos?select=trip.mov");
@@ -109,11 +113,18 @@ describe("StoragePage", () => {
     expect(
       screen.getByText("Identical files in your folder, most wasted space first."),
     ).toBeTruthy();
-    const group = screen.getByText(/^3 copies, 2\.0 MB/).closest("section") as HTMLElement;
-    expect(within(group).getAllByRole("listitem")).toHaveLength(3);
-    expect(screen.getByText(/^2 copies, 10 B/)).toBeTruthy();
+    // One table, each group titled by a row of its own, then a row per copy.
+    const table = screen.getByRole("table");
+    const rows = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((row) => row.textContent ?? "");
+    expect(rows).toHaveLength(7);
+    expect(rows[0]).toMatch(/^3 copies, 2\.0 MB wasted$/);
+    expect(rows.slice(1, 4).every((row) => row.startsWith("clip.mov"))).toBe(true);
+    expect(rows[4]).toMatch(/^2 copies, 10 B wasted$/);
     expect(
-      within(group)
+      screen
         .getAllByRole("button", { name: "Reveal clip.mov in folder" })
         .map((button) => button.getAttribute("href")),
     ).toEqual(["/files/a?select=clip.mov", "/files/b?select=clip.mov", "/files/c?select=clip.mov"]);
@@ -149,9 +160,11 @@ describe("StoragePage", () => {
   it("explains that the numbers need the search index", () => {
     renderPage({ data: { ...EMPTY, indexed: false } });
 
+    expect(screen.getByText("No storage numbers yet")).toBeTruthy();
     expect(screen.getByText(/does not cover your files yet/)).toBeTruthy();
     expect(screen.queryByText("Images")).toBeNull();
     expect(screen.queryByText("Duplicates")).toBeNull();
+    expect(screen.queryByRole("table")).toBeNull();
   });
 
   it("holds the space while loading and reports a failure", () => {

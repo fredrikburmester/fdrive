@@ -219,7 +219,7 @@ Administration is `apps/api/src/local/service.ts` behind
   home folder.
 
 A local login changes its own password with `POST /api/v1/auth/password`
-(Account > Password): the current password is checked like a sign-in, behind
+(Settings > Password): the current password is checked like a sign-in, behind
 the same limiter, the hash is replaced, and the account's other sessions end.
 
 Encryption keys are separate from the sign-in password: changing or resetting a password never

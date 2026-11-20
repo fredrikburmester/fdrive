@@ -2,13 +2,17 @@
 
 import { PublicUrlUpdateRequest } from "@fdrive/contracts";
 import { useState } from "react";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { describeApiError } from "@/lib/api/errors";
 import { useSystemPublicUrl, useUpdatePublicUrl } from "@/lib/api/public-url-queries";
 import { SystemErrorState } from "./system-error-state";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemLine, SystemSection, useSystemSurface } from "./system-section";
+
+const ADDRESS_NOTE =
+  "Document editing is told this is where fdrive lives, and links from connected assistants point here. Behind an HTTPS reverse proxy this must be the https:// address.";
 
 /**
  * The address everyone opens fdrive at. Prefilled from the browser's own
@@ -27,6 +31,7 @@ export function PublicUrlCard({
   const [draft, setDraft] = useState<string | null>(null);
   const saved = query.data;
   const value = draft ?? saved?.url ?? (saved ? window.location.origin : "");
+  const card = useSystemSurface() === "card";
   const busy = disabled || update.isPending;
   const parsed = saved
     ? PublicUrlUpdateRequest.safeParse({ revision: saved.revision, url: value })
@@ -46,6 +51,50 @@ export function PublicUrlCard({
       },
     });
   }
+  const input = (
+    <Input
+      id="public-url"
+      type="url"
+      className={card ? undefined : "min-w-0 max-w-sm flex-1 basis-56 max-md:min-h-11"}
+      value={value}
+      disabled={busy}
+      onChange={(event) => setDraft(event.target.value)}
+    />
+  );
+  const saveButton = (
+    <Button
+      className={card ? undefined : "max-md:min-h-11"}
+      disabled={busy || !parsed?.success}
+      onClick={save}
+    >
+      {update.isPending ? "Saving…" : onContinue ? "Save and continue" : "Save server address"}
+    </Button>
+  );
+  const problems = (
+    <>
+      {draft !== null && !parsed?.success ? (
+        <SystemAlert className={card ? undefined : "mt-1.5"}>
+          Enter an address such as https://drive.example.com or http://192.168.1.10:8090, without a
+          path.
+        </SystemAlert>
+      ) : null}
+      {update.isError ? (
+        <SystemAlert className={card ? undefined : "mt-1.5"}>
+          {describeApiError(update.error)}
+          <Button
+            variant="link"
+            onClick={() => {
+              setDraft(null);
+              update.reset();
+              void query.refetch();
+            }}
+          >
+            Reload saved address
+          </Button>
+        </SystemAlert>
+      ) : null}
+    </>
+  );
   return (
     <SystemSection
       title="Server address"
@@ -56,61 +105,37 @@ export function PublicUrlCard({
         <>
           <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
           {onContinue ? (
-            <Button variant="outline" disabled={busy} onClick={onContinue}>
-              Continue without changing the address
-            </Button>
-          ) : null}
-        </>
-      ) : saved ? (
-        <>
-          <Field>
-            <FieldLabel htmlFor="public-url">Server address</FieldLabel>
-            <Input
-              id="public-url"
-              type="url"
-              value={value}
-              disabled={busy}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <FieldDescription>
-              Document editing is told this is where fdrive lives, and links from connected
-              assistants point here. Behind an HTTPS reverse proxy this must be the https://
-              address.
-            </FieldDescription>
-          </Field>
-          {draft !== null && !parsed?.success ? (
-            <p role="alert" className="text-sm text-destructive">
-              Enter an address such as https://drive.example.com or http://192.168.1.10:8090,
-              without a path.
-            </p>
-          ) : null}
-          {update.isError ? (
-            <div role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-              {describeApiError(update.error)}
-              <Button
-                variant="link"
-                onClick={() => {
-                  setDraft(null);
-                  update.reset();
-                  void query.refetch();
-                }}
-              >
-                Reload saved address
+            <div className={card ? "contents" : "px-3 py-2.5"}>
+              <Button variant="outline" disabled={busy} onClick={onContinue}>
+                Continue without changing the address
               </Button>
             </div>
           ) : null}
-          <div className="flex justify-end">
-            <Button disabled={busy || !parsed?.success} onClick={save}>
-              {update.isPending
-                ? "Saving…"
-                : onContinue
-                  ? "Save and continue"
-                  : "Save server address"}
-            </Button>
-          </div>
         </>
-      ) : (
+      ) : saved ? (
+        card ? (
+          <>
+            <Field>
+              <FieldLabel htmlFor="public-url">Server address</FieldLabel>
+              {input}
+              <FieldDescription>{ADDRESS_NOTE}</FieldDescription>
+            </Field>
+            {problems}
+            <div className="flex justify-end">{saveButton}</div>
+          </>
+        ) : (
+          <SettingRow label="Server address" htmlFor="public-url" description={ADDRESS_NOTE}>
+            <div className="flex flex-wrap items-center gap-2">
+              {input}
+              {saveButton}
+            </div>
+            {problems}
+          </SettingRow>
+        )
+      ) : card ? (
         <p role="status">Loading server address…</p>
+      ) : (
+        <SystemLine role="status">Loading server address…</SystemLine>
       )}
     </SystemSection>
   );

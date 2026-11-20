@@ -24,10 +24,14 @@ function row(page: Page, username: string) {
 
 /** Opens the row's Actions menu and picks `item`. */
 async function act(page: Page, username: string, item: string): Promise<void> {
-  await dismissActivityPanel(page);
-  await row(page, username)
-    .getByRole("button", { name: `Actions for ${username}` })
-    .click();
+  // The activity panel can show a moment after the page loads, over the row's button at the
+  // right edge of the table, so dismissing it is retried along with the click.
+  await expect(async () => {
+    await dismissActivityPanel(page);
+    await row(page, username)
+      .getByRole("button", { name: `Actions for ${username}` })
+      .click({ timeout: 2_000 });
+  }).toPass();
   await page.getByRole("menuitem", { name: item, exact: true }).click();
 }
 
@@ -57,7 +61,7 @@ test("an administrator adds a user who signs in to a folder of their own, then r
   await page.goto("/files");
   await sidebar(page).getByRole("link", { name: "Users", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/users$/);
-  await expect(page.getByRole("heading", { name: "Users" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
   // alice is listed as herself; nobody can disable or remove themselves.
   const alice = row(page, "alice");
   await expect(alice.getByText("You", { exact: true })).toBeVisible();

@@ -2,13 +2,14 @@
 
 /**
  * From Vercel's AI Elements registry (`@ai-elements/conversation`), trimmed
- * for fdrive: the download button and its AI SDK message type are gone. A
- * scrolling log that sticks to the bottom while a reply streams in.
+ * for fdrive: the download button, its AI SDK message type and the empty
+ * state are gone. A scrolling log that sticks to the bottom while a reply
+ * streams in.
  */
 
 import { cn } from "cn";
 import { ArrowDownIcon } from "lucide-react";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps } from "react";
 import { useCallback } from "react";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { Button } from "@/components/ui/button";
@@ -29,39 +30,6 @@ export type ConversationContentProps = ComponentProps<typeof StickToBottom.Conte
 
 export const ConversationContent = ({ className, ...props }: ConversationContentProps) => (
   <StickToBottom.Content className={cn("flex flex-col gap-6 p-4", className)} {...props} />
-);
-
-export type ConversationEmptyStateProps = ComponentProps<"div"> & {
-  title?: string;
-  description?: string;
-  icon?: ReactNode;
-};
-
-export const ConversationEmptyState = ({
-  className,
-  title = "No messages yet",
-  description = "Start a conversation to see messages here",
-  icon,
-  children,
-  ...props
-}: ConversationEmptyStateProps) => (
-  <div
-    className={cn(
-      "flex size-full flex-col items-center justify-center gap-3 p-8 text-center",
-      className,
-    )}
-    {...props}
-  >
-    {children ?? (
-      <>
-        {icon && <div className="text-muted-foreground">{icon}</div>}
-        <div className="space-y-1">
-          <h3 className="font-medium text-sm">{title}</h3>
-          {description && <p className="text-muted-foreground text-sm">{description}</p>}
-        </div>
-      </>
-    )}
-  </div>
 );
 
 export type ConversationScrollButtonProps = ComponentProps<typeof Button>;

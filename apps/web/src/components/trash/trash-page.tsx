@@ -9,13 +9,23 @@ import {
 import { isRoot, joinPath, parentPath, splitSegments } from "@fdrive/core";
 import { decryptName } from "@fdrive/crypto";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Loader2, LockIcon } from "lucide-react";
+import { Loader2, LockIcon, Trash2Icon, TriangleAlertIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { DestinationPicker } from "@/components/files/destination-picker";
-import { EmptyState } from "@/components/files/empty-state";
-import { ErrorState } from "@/components/files/error-state";
 import { PageHeader } from "@/components/shell/page-header";
+import {
+  DataTable,
+  DataTableBody,
+  DataTableCell,
+  DataTableHead,
+  DataTableHeader,
+  DataTableRow,
+  PageBar,
+  PageBody,
+  PageEmpty,
+} from "@/components/shell/page-layout";
+import { PHONE_TARGET, RowsSkeleton, RowText, TruncatedCell } from "@/components/shell/page-rows";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,15 +38,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { apiClient } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 import { useTrashSettings } from "@/lib/api/trash-settings-queries";
@@ -47,6 +49,7 @@ import { useDefaultView } from "@/lib/files/use-default-view";
 import {
   emptiedToastMessage,
   emptyTrashConfirmDescription,
+  itemCountLabel,
   originalFolderLabel,
   purgeConfirmDescription,
   purgedToastMessage,
@@ -202,6 +205,7 @@ type ConfirmAction =
 export function TrashPage() {
   const { formatBytes, formatDate } = useFormatters();
   const [viewMode] = useDefaultView();
+  const mobile = useIsMobile();
   const trash = useTrash();
   const restore = useTrashRestore();
   const purge = useTrashPurge();
@@ -336,79 +340,97 @@ export function TrashPage() {
   // busy state in the picker instead, while the toolbar is merely disabled.
   const restoringSelection = restore.isPending && restoreTargetEntry === null;
 
+  const totalSize = entries.reduce((sum, entry) => sum + entry.size, 0);
+  const selectAllLabel = allSelected ? "Deselect all" : "Select all";
+  const selectAll = (
+    <Checkbox
+      checked={allSelected}
+      indeterminate={someSelected}
+      onCheckedChange={toggleSelectAll}
+      aria-label={selectAllLabel}
+    />
+  );
+
   return (
     <>
-      <PageHeader breadcrumbs={<span className="font-medium">Trash</span>} />
-      <main className="mx-auto w-full max-w-6xl space-y-5 p-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Trash</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Files and folders you delete stay here until you restore them or delete them
-            permanently.{retention === null ? null : ` ${retention}`}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={selected.size === 0 || restore.isPending}
-            aria-busy={restoringSelection}
-            onClick={handleRestoreSelected}
-          >
-            {restoringSelection && <Loader2 className="animate-spin" aria-hidden="true" />}
-            {restoringSelection ? "Restoring…" : "Restore"}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={selectedEntries.length !== 1 || restore.isPending}
-            onClick={() => {
-              const only = selectedEntries[0];
-              if (only !== undefined) {
-                setRestoreTargetEntry(only);
-              }
-            }}
-          >
-            Restore to
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={selected.size === 0}
-            onClick={() => setConfirmAction({ kind: "purge", ids: [...selected] })}
-          >
-            Delete permanently
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="ml-auto"
-            disabled={entries.length === 0}
-            onClick={() => setConfirmAction({ kind: "empty" })}
-          >
-            Empty Trash
-          </Button>
-        </div>
+      <PageHeader breadcrumbs={<h1 className="truncate font-medium text-sm">Trash</h1>} />
+      <PageBody>
+        <PageBar>
+          {trash.data !== undefined && (
+            <span className="text-foreground">
+              {selected.size > 0 ? `${selected.size} selected` : itemCountLabel(entries.length)}
+            </span>
+          )}
+          {entries.length > 0 && <span>{formatBytes(totalSize)}</span>}
+          {retention !== null && <span>{retention}</span>}
+          {/* Two by two on a phone, where four buttons side by side would not fit. */}
+          <div className="flex items-center gap-1.5 max-md:grid max-md:w-full max-md:grid-cols-2 md:ml-auto">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={PHONE_TARGET}
+              disabled={selected.size === 0 || restore.isPending}
+              aria-busy={restoringSelection}
+              onClick={handleRestoreSelected}
+            >
+              {restoringSelection && <Loader2 className="animate-spin" aria-hidden="true" />}
+              {restoringSelection ? "Restoring…" : "Restore"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={PHONE_TARGET}
+              disabled={selectedEntries.length !== 1 || restore.isPending}
+              onClick={() => {
+                const only = selectedEntries[0];
+                if (only !== undefined) {
+                  setRestoreTargetEntry(only);
+                }
+              }}
+            >
+              Restore to
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={PHONE_TARGET}
+              disabled={selected.size === 0}
+              onClick={() => setConfirmAction({ kind: "purge", ids: [...selected] })}
+            >
+              Delete permanently
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className={PHONE_TARGET}
+              disabled={entries.length === 0}
+              onClick={() => setConfirmAction({ kind: "empty" })}
+            >
+              Empty Trash
+            </Button>
+          </div>
+        </PageBar>
 
         {trash.isLoading ? (
-          <div className="space-y-2">
-            {Array.from({ length: 6 }, (_, index) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: a static, never-reordered list of placeholder rows
-              <Skeleton key={index} className="h-10 w-full" />
-            ))}
-          </div>
+          <RowsSkeleton label="Loading Trash…" />
         ) : trash.isError ? (
-          <ErrorState
-            message={describeFsError(trash.error, "Could not load the trash.")}
-            onRetry={() => trash.refetch()}
+          <PageEmpty
+            icon={TriangleAlertIcon}
+            title="Could not load Trash"
+            description={describeFsError(trash.error, "Could not load the trash.")}
+            action={
+              <Button variant="outline" size="sm" onClick={() => trash.refetch()}>
+                Try again
+              </Button>
+            }
           />
         ) : entries.length === 0 ? (
-          <EmptyState
+          <PageEmpty
+            icon={Trash2Icon}
             title="Trash is empty"
             description="Items you delete show up here until you restore them or delete them permanently."
           />
@@ -416,37 +438,38 @@ export function TrashPage() {
           <>
             {viewMode === "grid" ? (
               <>
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <Checkbox
-                    checked={allSelected}
-                    indeterminate={someSelected}
-                    onCheckedChange={toggleSelectAll}
-                    aria-label={allSelected ? "Deselect all" : "Select all"}
-                  />
-                  <span>{selected.size > 0 ? `${selected.size} selected` : "Select all"}</span>
+                <div className="flex h-9 items-center gap-3 border-border border-b px-3 text-muted-foreground text-xs">
+                  {selectAll}
+                  <span>{selectAllLabel}</span>
                 </div>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-slot="trash-grid">
+                <div
+                  className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]"
+                  data-slot="trash-grid"
+                >
                   {entries.map((entry) => {
                     const deletedAt = new Date(entry.deletedAt);
                     const label = labelOf(entry);
                     return (
-                      <div key={entry.id} className="min-w-0 rounded-lg border p-3">
-                        <div className="flex items-start gap-2">
-                          <Checkbox
-                            checked={selected.has(entry.id)}
-                            onCheckedChange={(checked) => toggleOne(entry.id, checked)}
-                            aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
-                          />
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate font-medium">
-                              <TrashName label={label} />
-                            </p>
-                            <p className="truncate text-xs text-muted-foreground">{label.folder}</p>
-                          </div>
-                        </div>
-                        <div className="mt-3 flex justify-between gap-2 text-xs text-muted-foreground">
-                          <span>{formatBytes(entry.size)}</span>
-                          <span title={deletedAt.toLocaleString()}>{formatDate(deletedAt)}</span>
+                      <div
+                        key={entry.id}
+                        data-state={selected.has(entry.id) ? "selected" : undefined}
+                        className="flex min-w-0 items-start gap-3 border-border/60 border-r border-b px-3 py-2.5 hover:bg-muted/60 data-[state=selected]:bg-primary/10"
+                      >
+                        <Checkbox
+                          className="mt-0.5"
+                          checked={selected.has(entry.id)}
+                          onCheckedChange={(checked) => toggleOne(entry.id, checked)}
+                          aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm">
+                            <TrashName label={label} />
+                          </p>
+                          <p className="truncate text-muted-foreground text-xs">{label.folder}</p>
+                          <p className="mt-1 flex justify-between gap-2 text-muted-foreground text-xs">
+                            <span>{formatBytes(entry.size)}</span>
+                            <span title={deletedAt.toLocaleString()}>{formatDate(deletedAt)}</span>
+                          </p>
                         </div>
                       </div>
                     );
@@ -456,63 +479,82 @@ export function TrashPage() {
             ) : (
               // Trash has no live directory paths to resolve. Tree therefore intentionally
               // uses the same flat rows as list, while the shared global default still selects it.
-              <Table data-slot={viewMode === "tree" ? "trash-tree" : "trash-list"}>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={allSelected}
-                        indeterminate={someSelected}
-                        onCheckedChange={toggleSelectAll}
-                        aria-label={allSelected ? "Deselect all" : "Select all"}
-                      />
-                    </TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Original folder</TableHead>
-                    <TableHead className="text-right">Size</TableHead>
-                    <TableHead>Deleted</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
+              <DataTable
+                data-slot={viewMode === "tree" ? "trash-tree" : "trash-list"}
+                className="table-fixed"
+              >
+                <DataTableHeader>
+                  <DataTableRow>
+                    <DataTableHead className="w-9">{selectAll}</DataTableHead>
+                    <DataTableHead>Name</DataTableHead>
+                    {!mobile && (
+                      <>
+                        <DataTableHead className="w-[32%]">Original folder</DataTableHead>
+                        <DataTableHead className="w-24 text-right">Size</DataTableHead>
+                        <DataTableHead className="w-32">Deleted</DataTableHead>
+                      </>
+                    )}
+                  </DataTableRow>
+                </DataTableHeader>
+                <DataTableBody>
                   {entries.map((entry) => {
                     const deletedAt = new Date(entry.deletedAt);
                     const label = labelOf(entry);
+                    const name = <TrashName label={label} />;
                     return (
-                      <TableRow key={entry.id}>
-                        <TableCell>
+                      <DataTableRow
+                        key={entry.id}
+                        data-state={selected.has(entry.id) ? "selected" : undefined}
+                        className={mobile ? "h-14" : undefined}
+                      >
+                        <DataTableCell>
                           <Checkbox
                             checked={selected.has(entry.id)}
                             onCheckedChange={(checked) => toggleOne(entry.id, checked)}
                             aria-label={`Select ${label.name ?? ENCRYPTED_ITEM}`}
                           />
-                        </TableCell>
-                        <TableCell className="font-medium">
-                          <TrashName label={label} />
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">{label.folder}</TableCell>
-                        <TableCell className="text-right text-muted-foreground">
-                          {formatBytes(entry.size)}
-                        </TableCell>
-                        <TableCell
-                          className="text-muted-foreground"
-                          title={deletedAt.toLocaleString()}
-                        >
-                          {formatDate(deletedAt)}
-                        </TableCell>
-                      </TableRow>
+                        </DataTableCell>
+                        {mobile ? (
+                          <DataTableCell>
+                            <RowText
+                              name={name}
+                              detail={`${label.folder} · ${formatBytes(entry.size)} · ${formatDate(deletedAt)}`}
+                            />
+                          </DataTableCell>
+                        ) : (
+                          <>
+                            <TruncatedCell title={label.name ?? undefined}>{name}</TruncatedCell>
+                            <TruncatedCell
+                              title={label.folder}
+                              className="text-muted-foreground text-xs"
+                            >
+                              {label.folder}
+                            </TruncatedCell>
+                            <DataTableCell className="text-right text-muted-foreground text-xs">
+                              {formatBytes(entry.size)}
+                            </DataTableCell>
+                            <DataTableCell
+                              className="text-muted-foreground text-xs"
+                              title={deletedAt.toLocaleString()}
+                            >
+                              {formatDate(deletedAt)}
+                            </DataTableCell>
+                          </>
+                        )}
+                      </DataTableRow>
                     );
                   })}
-                </TableBody>
-              </Table>
+                </DataTableBody>
+              </DataTable>
             )}
             {trash.data?.truncated === true && (
-              <p className="text-xs text-muted-foreground">
+              <p className="border-border/60 border-b px-3 py-2 text-muted-foreground text-xs">
                 Showing the first {entries.length} items.
               </p>
             )}
           </>
         )}
-      </main>
+      </PageBody>
 
       {restoreTargetEntry !== null && (
         <DestinationPicker

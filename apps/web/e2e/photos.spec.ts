@@ -8,6 +8,9 @@ test("Photos shows a photo under the month it was taken and opens it in the view
   await page.goto("/files");
   await page.getByRole("link", { name: "Photos", exact: true }).click();
   await expect(page).toHaveURL(/\/photos$/);
+  // The bar under the header counts what the grid holds; a month's strip titles its photos.
+  await expect(page.getByText(/^\d+\+? photos?$/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "May 2024", exact: true })).toBeVisible();
 
   await page
     .getByRole("region", { name: "May 2024" })

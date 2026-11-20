@@ -38,15 +38,13 @@ test("a user finds two identical files under Duplicates and moves one to Trash",
   try {
     await loginAs(page, "storage_dupes", "storage-dupes-test-password");
     await page.goto("/storage");
-    const duplicates = page
-      .locator('[data-slot="card"]')
-      .filter({ has: page.getByText("Duplicates", { exact: true }) });
+    const duplicates = page.locator('[data-section="duplicates"]');
+    const copies = duplicates.locator('[data-slot="storage-file"]');
     await expect(duplicates.getByText(/^2 copies, 22 B wasted$/)).toBeVisible();
-    await expect(duplicates.getByRole("listitem")).toHaveCount(2);
+    await expect(copies).toHaveCount(2);
     await expect(duplicates.getByText("notes.txt")).toHaveCount(0);
 
-    await duplicates
-      .getByRole("listitem")
+    await copies
       .filter({ hasText: "/Backup" })
       .getByRole("button", { name: "Move beach.txt to Trash" })
       .click();

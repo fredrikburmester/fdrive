@@ -47,7 +47,7 @@ const ACCESS_HELP = {
   full: "Organize, create and edit files, and move items to and from Trash.",
 };
 
-/** Account page dialog: name a new API token for the signed-in login and pick when it expires. */
+/** Settings > API tokens dialog: name a new API token for the signed-in login and pick when it expires. */
 export function CreateTokenDialog({ open, onOpenChange, onCreated }: CreateTokenDialogProps) {
   const [name, setName] = useState("");
   const [expiryValue, setExpiryValue] = useState(DEFAULT_EXPIRY_OPTION_VALUE);

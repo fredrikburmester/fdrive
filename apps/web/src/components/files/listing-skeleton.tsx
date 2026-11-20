@@ -18,6 +18,12 @@ const TILE_KEYS = Array.from({ length: TILE_COUNT }, (_, index) => `skeleton-til
  */
 const NAME_WIDTHS = ["w-1/3", "w-1/2", "w-2/5", "w-1/4", "w-3/5"];
 
+/** The icon stub of a list row, as large as the real row's icon at that density. */
+const ICON_STUBS: Record<ListDensity, { desktop: string; phone: string }> = {
+  comfortable: { desktop: "size-10 rounded-md", phone: "size-10 rounded-md" },
+  compact: { desktop: "size-4 rounded-sm", phone: "size-8 rounded-sm" },
+};
+
 export type ListingSkeletonVariant = "list" | "grid";
 
 export interface ListingSkeletonProps {
@@ -31,7 +37,7 @@ export interface ListingSkeletonProps {
 
 /**
  * Placeholder shown while a folder's listing is loading. Mirrors the real
- * list's row layout and height (`listRowHeight`, two lines on phones) or, in `"grid"`, the
+ * list's row layout, height (`listRowHeight`, two lines on phones) and icon size or, in `"grid"`, the
  * grid's tile size (`GRID_TILES[gridSize]`), so the loading state fills the
  * listing area exactly like real content instead of a narrower, fixed-width
  * block.
@@ -46,6 +52,7 @@ export function ListingSkeleton({
 
 function ListSkeleton({ density }: { density: ListDensity }) {
   const mobile = useIsMobile();
+  const iconStub = ICON_STUBS[density][mobile ? "phone" : "desktop"];
   return (
     <div data-slot="listing-skeleton-list" aria-hidden="true">
       {ROW_KEYS.map((key, index) => (
@@ -56,7 +63,7 @@ function ListSkeleton({ density }: { density: ListDensity }) {
           style={{ height: listRowHeight(density, mobile) }}
         >
           <Skeleton className="size-4 shrink-0 rounded-sm" />
-          <Skeleton className={cn("shrink-0 rounded-sm", mobile ? "size-8" : "size-4")} />
+          <Skeleton className={cn("shrink-0", iconStub)} />
           {mobile ? (
             <div className="flex min-w-0 flex-1 flex-col gap-1.5">
               <Skeleton className={cn("h-4", NAME_WIDTHS[index % NAME_WIDTHS.length])} />

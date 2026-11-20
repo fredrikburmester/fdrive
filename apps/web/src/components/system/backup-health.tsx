@@ -1,12 +1,12 @@
 "use client";
 import { BackupRehearsal, type BackupsResponse } from "@fdrive/contracts";
 import { useId } from "react";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { backupClient } from "@/lib/api/backup-queries";
 import { useFormatters } from "@/lib/use-format-preferences";
-import { SystemSection } from "./system-section";
+import { SystemNote, SystemSection } from "./system-section";
 
 const date = (value: string) => new Date(value).toLocaleString();
 
@@ -98,22 +98,24 @@ export function BackupHealth({
         title="Backup health"
         description="Full coverage, delivery verification and restore rehearsals are tracked separately."
       >
-        <p className="text-sm">
+        <SettingRow label="Last complete snapshot">
           {complete
-            ? `Last complete snapshot: ${date(complete.createdAt)} · ${Math.max(0, Math.floor((now - Date.parse(complete.createdAt)) / 3_600_000))} hours ago`
+            ? `${date(complete.createdAt)} · ${Math.max(0, Math.floor((now - Date.parse(complete.createdAt)) / 3_600_000))} hours ago`
             : "No complete snapshot recorded yet."}
-        </p>
+        </SettingRow>
         {data.nextRunAt && (
-          <p className="text-sm">Next installation backup: {date(data.nextRunAt)}</p>
+          <SettingRow label="Next installation backup">{date(data.nextRunAt)}</SettingRow>
         )}
         {alerts.length > 0 && (
-          <ul className="space-y-2 text-sm" aria-label="Backup health notices">
-            {alerts.map((alert) => (
-              <li key={alert} className="break-words">
-                {alert}
-              </li>
-            ))}
-          </ul>
+          <SettingRow label="Notices" className="@2xl:items-start">
+            <ul className="max-w-3xl space-y-1.5" aria-label="Backup health notices">
+              {alerts.map((alert) => (
+                <li key={alert} className="break-words">
+                  {alert}
+                </li>
+              ))}
+            </ul>
+          </SettingRow>
         )}
         {data.destinations.map((destination) => {
           const delivered = data.runs.find(
@@ -134,11 +136,16 @@ export function BackupHealth({
             destination.nextRunAt &&
             Date.parse(destination.nextRunAt) < now - 15 * 60_000;
           return (
-            <div key={destination.id} className="min-w-0 space-y-1 border-t pt-3 text-sm">
-              <p className="break-words font-medium">
-                {destination.name}
-                {!destination.enabled && " · paused"}
-              </p>
+            <SettingRow
+              key={destination.id}
+              className="@2xl:items-start"
+              label={
+                <span className="break-words">
+                  {destination.name}
+                  {!destination.enabled && " · paused"}
+                </span>
+              }
+            >
               <p>
                 {delivered
                   ? `Last full delivery: ${date(delivered.createdAt)}`
@@ -151,47 +158,55 @@ export function BackupHealth({
                 <p className="text-destructive">Delivery overdue by more than 15 minutes.</p>
               )}
               {delivery?.error && <p className="break-words text-destructive">{delivery.error}</p>}
-            </div>
+            </SettingRow>
           );
         })}
-        <p className="text-xs text-muted-foreground">
-          Downloaded archives are only protected after you save them independently. History here
-          does not confirm possession or override a bucket's own lifecycle rules.
-        </p>
+        <SystemNote>
+          <p>
+            Downloaded archives are only protected after you save them independently. History here
+            does not confirm possession or override a bucket's own lifecycle rules.
+          </p>
+        </SystemNote>
       </SystemSection>
       <SystemSection
         title="Storage estimate"
         description="How big one backup is and how much room your retention settings could take. Only fdrive's own data is backed up, not the files folder."
+        actions={
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || !unlocked || data.estimate?.state === "pending"}
+            onClick={() => void act(() => backupClient.estimate())}
+          >
+            {data.estimate?.state === "pending" ? "Estimating…" : "Estimate backup size"}
+          </Button>
+        }
       >
-        <Button
-          variant="outline"
-          disabled={busy || !unlocked || data.estimate?.state === "pending"}
-          onClick={() => void act(() => backupClient.estimate())}
-        >
-          {data.estimate?.state === "pending" ? "Estimating…" : "Estimate backup size"}
-        </Button>
-        {data.estimate?.error && <p className="text-sm text-destructive">{data.estimate.error}</p>}
+        {data.estimate?.error && (
+          <p className="border-border/60 border-b px-3 py-2.5 text-destructive text-sm last:border-b-0">
+            {data.estimate.error}
+          </p>
+        )}
         {estimate && (
           <>
-            <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
-              {estimateRows(estimate).map(([label, bytes, hint]) => (
-                <div key={label} className="min-w-0">
-                  <dt className="text-muted-foreground">{label}</dt>
-                  <dd className="font-medium">{formatBytes(Number(bytes))}</dd>
-                  <dd className="text-xs text-muted-foreground">{hint}</dd>
-                </div>
-              ))}
-            </dl>
-            <p className="text-xs text-muted-foreground">
-              Estimated {date(estimate.estimatedAt)}. Every backup is a full copy, not just the
-              changes since the last one. Pinned backups, bucket versioning and object lock add to
-              the stored total; provider fees and retries are not included.
-            </p>
-            {estimate.coverage.map((gap) => (
-              <p key={gap} className="break-words text-sm text-destructive">
-                {gap}
-              </p>
+            {estimateRows(estimate).map(([label, bytes, hint]) => (
+              <SettingRow key={label} label={label} className="@2xl:items-start">
+                <p className="font-medium tabular-nums">{formatBytes(Number(bytes))}</p>
+                <p className="max-w-3xl text-muted-foreground text-xs">{hint}</p>
+              </SettingRow>
             ))}
+            <SystemNote>
+              <p>
+                Estimated {date(estimate.estimatedAt)}. Every backup is a full copy, not just the
+                changes since the last one. Pinned backups, bucket versioning and object lock add to
+                the stored total; provider fees and retries are not included.
+              </p>
+              {estimate.coverage.map((gap) => (
+                <p key={gap} className="break-words text-destructive text-sm">
+                  {gap}
+                </p>
+              ))}
+            </SystemNote>
           </>
         )}
       </SystemSection>
@@ -199,68 +214,75 @@ export function BackupHealth({
         title="Restore rehearsal"
         description="A practice restore that proves a backup can actually be decrypted and imported. It runs on a separate machine, so this installation is never touched."
       >
-        <p className="text-sm">
-          {data.rehearsal
-            ? `Last successful rehearsal: ${date(data.rehearsal.completedAt)} · ${data.rehearsal.tableCount} tables · ${data.rehearsal.blobCount} recovery files restored`
-            : "No backup has been test-restored yet. Until one is, you only know the backups were uploaded, not that they can be restored."}
-        </p>
-        {data.rehearsal && (
-          <p className="break-all text-xs text-muted-foreground">
-            Snapshot {rehearsed ? `from ${date(rehearsed.createdAt)} · ` : ""}
-            {data.rehearsal.snapshotId}
+        <SettingRow label="Last rehearsal" className="@2xl:items-start">
+          <p className="max-w-3xl">
+            {data.rehearsal
+              ? `Last successful rehearsal: ${date(data.rehearsal.completedAt)} · ${data.rehearsal.tableCount} tables · ${data.rehearsal.blobCount} recovery files restored`
+              : "No backup has been test-restored yet. Until one is, you only know the backups were uploaded, not that they can be restored."}
           </p>
-        )}
-        <p className="text-sm text-muted-foreground">
-          Why separately: a restore needs an empty database and your private recovery key. This
-          server's database is in use, and it deliberately never holds the private key.
-        </p>
-        <ol className="list-decimal space-y-2 pl-5 text-sm">
-          <li>
-            On another machine, or a throwaway container with no access to your files folder, set up
-            the same fdrive version with a new empty database.
-          </li>
-          <li>
-            Copy a backup there (download one from History, or fetch it from a destination) along
-            with your saved recovery key file. The command below is filled in for your latest
-            complete backup.
-          </li>
-          <li>
-            Run the rehearsal. It restores into the empty database under a new identity and never
-            contacts your files folder or backup destinations.
-            <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
-              {`node dist/main.js backup rehearse \\\n  --file BACKUP.fdrive.age \\\n  --key-file recovery-key.txt \\\n  --snapshot ${complete?.id ?? "SNAPSHOT_ID"} \\\n  --state-dir /tmp/fdrive-rehearsal`}
-            </pre>
-          </li>
-          <li>
-            If it prints a report ending in <code className="font-mono">"result": "passed"</code>,
-            save that output as a <code className="font-mono">.json</code> file and upload it below.
-            Then delete the test database and directory, since they contain your restored data.
-          </li>
-        </ol>
-        <Label htmlFor={id}>Rehearsal report (.json)</Label>
-        <Input
-          id={id}
-          type="file"
-          accept=".json,application/json"
-          disabled={busy || !unlocked}
-          onChange={(event) => {
-            const file = event.currentTarget.files?.[0];
-            event.currentTarget.value = "";
-            if (file)
-              void act(async () => {
-                if (file.size > 64 * 1024)
-                  throw Error("Rehearsal reports must be smaller than 64 KiB");
-                await backupClient.recordRehearsal(
-                  BackupRehearsal.parse(JSON.parse(await file.text())),
-                );
-              });
-          }}
-        />
-        <p className="text-xs text-muted-foreground">
-          fdrive checks that the report belongs to this installation and one of its backups, then
-          records your result. The monthly reminder above clears for 30 days. “Verify bytes” in
-          History only confirms the encrypted file is intact; it can't prove a restore works.
-        </p>
+          {data.rehearsal && (
+            <p className="break-all text-muted-foreground text-xs">
+              Snapshot {rehearsed ? `from ${date(rehearsed.createdAt)} · ` : ""}
+              {data.rehearsal.snapshotId}
+            </p>
+          )}
+        </SettingRow>
+        <SystemNote>
+          <p>
+            Why separately: a restore needs an empty database and your private recovery key. This
+            server's database is in use, and it deliberately never holds the private key.
+          </p>
+          <ol className="list-decimal space-y-2 pl-5 text-foreground text-sm">
+            <li>
+              On another machine, or a throwaway container with no access to your files folder, set
+              up the same fdrive version with a new empty database.
+            </li>
+            <li>
+              Copy a backup there (download one from History, or fetch it from a destination) along
+              with your saved recovery key file. The command below is filled in for your latest
+              complete backup.
+            </li>
+            <li>
+              Run the rehearsal. It restores into the empty database under a new identity and never
+              contacts your files folder or backup destinations.
+              <pre className="mt-2 overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs">
+                {`node dist/main.js backup rehearse \\\n  --file BACKUP.fdrive.age \\\n  --key-file recovery-key.txt \\\n  --snapshot ${complete?.id ?? "SNAPSHOT_ID"} \\\n  --state-dir /tmp/fdrive-rehearsal`}
+              </pre>
+            </li>
+            <li>
+              If it prints a report ending in <code className="font-mono">"result": "passed"</code>,
+              save that output as a <code className="font-mono">.json</code> file and upload it
+              below. Then delete the test database and directory, since they contain your restored
+              data.
+            </li>
+          </ol>
+        </SystemNote>
+        <SettingRow label="Rehearsal report (.json)" htmlFor={id} className="@2xl:items-start">
+          <Input
+            id={id}
+            className="max-w-sm"
+            type="file"
+            accept=".json,application/json"
+            disabled={busy || !unlocked}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              event.currentTarget.value = "";
+              if (file)
+                void act(async () => {
+                  if (file.size > 64 * 1024)
+                    throw Error("Rehearsal reports must be smaller than 64 KiB");
+                  await backupClient.recordRehearsal(
+                    BackupRehearsal.parse(JSON.parse(await file.text())),
+                  );
+                });
+            }}
+          />
+          <p className="mt-1.5 max-w-3xl text-muted-foreground text-xs">
+            fdrive checks that the report belongs to this installation and one of its backups, then
+            records your result. The monthly reminder above clears for 30 days. “Verify bytes” in
+            History only confirms the encrypted file is intact; it can't prove a restore works.
+          </p>
+        </SettingRow>
       </SystemSection>
     </>
   );

@@ -2,7 +2,6 @@
 
 import type { Chat, ChatActionRequest, ChatMessage } from "@fdrive/contracts";
 import { baseName } from "@fdrive/core";
-import { MessageSquareIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { MouseEvent } from "react";
 import { useMemo } from "react";
@@ -10,11 +9,9 @@ import { toast } from "sonner";
 import {
   Conversation,
   ConversationContent,
-  ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
-import { Suggestion } from "@/components/ai-elements/suggestion";
 import {
   Tool,
   ToolContent,
@@ -26,7 +23,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import {
-  CHAT_SUGGESTIONS,
   hrefForPath,
   isThinking,
   knownPaths,
@@ -44,19 +40,16 @@ export interface ChatTranscriptProps {
   /** The card whose decision is on its way, if any. */
   readonly actingOn: string | null;
   readonly onAct: (actionId: string, request: ChatActionRequest) => Promise<void>;
-  readonly onSuggestion: (text: string) => void;
   /** Sends the last message again after a failed reply. */
   readonly onRetry: () => void;
 }
 
-/** The conversation: the person's messages with what they attached, and the assistant's text, tool calls and cards. */
-export function ChatTranscript({
-  chat,
-  actingOn,
-  onAct,
-  onSuggestion,
-  onRetry,
-}: ChatTranscriptProps) {
+/**
+ * The conversation: the person's messages with what they attached, and the
+ * assistant's text, tool calls and cards. Nothing at all before the first
+ * message, so a new chat is just the header and the message box.
+ */
+export function ChatTranscript({ chat, actingOn, onAct, onRetry }: ChatTranscriptProps) {
   const router = useRouter();
   const known = useMemo(() => (chat === null ? new Set<string>() : knownPaths(chat)), [chat]);
 
@@ -89,32 +82,11 @@ export function ChatTranscript({
     router.push(target as Parameters<typeof router.push>[0]);
   }
 
-  if (chat === null || chat.messages.length === 0) {
-    return (
-      <ConversationEmptyState
-        icon={<MessageSquareIcon className="size-6" />}
-        title="Ask about your files"
-        description="Ask about the folder you have open, or drop files and folders here."
-      >
-        <MessageSquareIcon className="size-6 text-muted-foreground" />
-        <div className="space-y-1">
-          <h3 className="font-medium text-sm">Ask about your files</h3>
-          <p className="text-muted-foreground text-sm">
-            Ask about the folder you have open, or drop files and folders here.
-          </p>
-        </div>
-        {/* Wrap rather than the registry's scrolling row: the panel is too narrow for one line. */}
-        <div className="flex max-w-full flex-wrap justify-center gap-2">
-          {CHAT_SUGGESTIONS.map((suggestion) => (
-            <Suggestion key={suggestion} suggestion={suggestion} onClick={onSuggestion} />
-          ))}
-        </div>
-      </ConversationEmptyState>
-    );
-  }
+  if (chat === null || chat.messages.length === 0) return null;
 
   return (
-    <Conversation className="min-h-0">
+    // A flex column, so the scroller inside shrinks with a panel that has only a maximum height.
+    <Conversation className="flex min-h-0 flex-col border-b">
       <ConversationContent onClickCapture={onClickCapture}>
         {chat.messages.map((message) =>
           message.role === "user" ? (

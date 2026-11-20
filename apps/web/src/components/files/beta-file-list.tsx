@@ -12,12 +12,7 @@ import { useCoarsePointer } from "@/hooks/use-coarse-pointer";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { endDragSession, getActiveDragPaths, startDragSession, writeDownloadUrl } from "@/lib/dnd";
 import { isBackgroundClick } from "@/lib/files/background-click";
-import {
-  DEFAULT_LIST_DENSITY,
-  type ListDensity,
-  listRowHeight,
-  ROW_HEIGHTS,
-} from "@/lib/files/density";
+import { DEFAULT_LIST_DENSITY, type ListDensity, listRowHeight } from "@/lib/files/density";
 import {
   apiClient,
   INTERNAL_DND_TYPE,
@@ -45,15 +40,73 @@ import type { ClickModifierKeys, FileListProps } from "./file-list";
 
 const FILE_LIST_HEADER_HEIGHT = 36;
 
-/** The icon column on a desktop row: as wide as a thumbnail, so names line up either way. */
-const ICON_SLOT_PX = 24;
-/** The space between a desktop row's icon and its name (`gap-2.5`). */
-const ICON_GAP_PX = 10;
+/**
+ * A row's icon column: the box, the kind icon inside it (with a lighter line where it is
+ * drawn large), and the thumbnail that fills the box.
+ */
+interface RowIcon {
+  readonly slot: string;
+  readonly icon: string;
+  readonly iconStroke?: number;
+  readonly thumbnail: string;
+}
 
-/** Indent per tree level on a desktop row: a child's icon sits under its parent's name. */
-const TREE_INDENT_PX = ICON_SLOT_PX + ICON_GAP_PX;
-/** Indent per tree level on a phone or touch screen, where a chevron column leads each row. */
-const TOUCH_TREE_INDENT_PX = 20;
+/**
+ * How a desktop row fills its height at one density. The icon column is as wide as a
+ * thumbnail, so names line up with or without thumbnails, and a tree level indents by that
+ * column plus the gap after it, so a child's icon sits under its parent's name.
+ */
+interface DesktopRow extends RowIcon {
+  /** The icon column's width, in pixels. */
+  readonly slotPx: number;
+  /** The space between the columns of a row, in pixels; `gap` is its class. */
+  readonly gapPx: number;
+  readonly gap: string;
+  /** The name's text size; sizes and dates stay small at every density. */
+  readonly name: string;
+  /** The chevron that takes a folder's icon's place on hover, in tree view. */
+  readonly chevron: string;
+}
+
+/** "compact" is the list as it was before rows got taller; "comfortable" fills a 64px row. */
+const DESKTOP_ROWS: Record<ListDensity, DesktopRow> = {
+  comfortable: {
+    slotPx: 40,
+    gapPx: 12,
+    gap: "gap-3",
+    slot: "size-10",
+    icon: "size-7",
+    iconStroke: 1.5,
+    thumbnail: "size-10 rounded-md",
+    name: "text-[15px]",
+    chevron: "size-5",
+  },
+  compact: {
+    slotPx: 24,
+    gapPx: 10,
+    gap: "gap-2.5",
+    slot: "size-6",
+    icon: "size-[18px]",
+    thumbnail: "size-6 rounded-xs",
+    name: "",
+    chevron: "size-4",
+  },
+};
+
+/** A phone row's icon column, next to two lines of text. */
+const PHONE_ICONS: Record<ListDensity, RowIcon> = {
+  comfortable: { slot: "size-10", icon: "size-6", thumbnail: "size-10 rounded-md" },
+  compact: { slot: "size-8", icon: "size-5", thumbnail: "size-8 rounded-sm" },
+};
+
+/**
+ * The chevron column that leads each tree row on a phone or touch screen: its box, its icon
+ * and the indent per tree level, in pixels.
+ */
+const TOUCH_TREE: Record<ListDensity, { box: string; icon: string; indentPx: number }> = {
+  comfortable: { box: "size-5", icon: "size-4", indentPx: 24 },
+  compact: { box: "size-4", icon: "size-3.5", indentPx: 20 },
+};
 
 /** Shown while the row is hovered or the control has keyboard focus. */
 const REVEAL_ON_HOVER = "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100";
@@ -63,16 +116,16 @@ const LIST_THUMBNAIL_SIZE = 256;
 /**
  * A list row's icon: a thumbnail when `showThumbnail` is true and `wantsThumbnail` accepts the
  * file, else (or once that image fails to load) the entry's colored `FileIcon`. It fills the
- * row's icon column: 24px on desktop, 32px on phones (`mobile`), next to two lines of text.
+ * row's icon column, whose size follows the density (`sizes`).
  */
 function ListRowIcon({
   entry,
   showThumbnail,
-  mobile,
+  sizes,
 }: {
   entry: FsEntry;
   showThumbnail: boolean;
-  mobile: boolean;
+  sizes: RowIcon;
 }) {
   const [errored, setErrored] = useState(false);
 
@@ -82,7 +135,8 @@ function ListRowIcon({
         kind={entry.kind}
         ext={entry.ext}
         mime={entry.mime}
-        className={mobile ? "size-5" : "size-[18px]"}
+        className={sizes.icon}
+        strokeWidth={sizes.iconStroke}
       />
     );
   }
@@ -94,7 +148,7 @@ function ListRowIcon({
       alt=""
       loading="lazy"
       decoding="async"
-      className={cn("shrink-0 object-cover", mobile ? "size-8 rounded-sm" : "size-6 rounded-xs")}
+      className={cn("shrink-0 object-cover", sizes.thumbnail)}
       onError={() => setErrored(true)}
     />
   );
@@ -105,7 +159,7 @@ function ListRowIcon({
  * under that ancestor's icon. Every row draws its own full-height pieces, so consecutive rows
  * of one folder join into one line.
  */
-function TreeGuides({ depth }: { depth: number }) {
+function TreeGuides({ depth, row }: { depth: number; row: DesktopRow }) {
   if (depth === 0) {
     return null;
   }
@@ -116,7 +170,7 @@ function TreeGuides({ depth }: { depth: number }) {
       aria-hidden="true"
       data-slot="tree-guide"
       className="pointer-events-none absolute inset-y-0 w-px bg-border"
-      style={{ left: level * TREE_INDENT_PX + ICON_SLOT_PX / 2 }}
+      style={{ left: level * (row.slotPx + row.gapPx) + row.slotPx / 2 }}
     />
   ));
 }
@@ -199,7 +253,12 @@ export function BetaFileList({
   const [selecting, setSelecting] = useState(false);
   const hoverControls = !mobile && !touch;
   const isTreeRow = treeDepths !== undefined;
-  const treeIndent = hoverControls ? TREE_INDENT_PX : TOUCH_TREE_INDENT_PX;
+  const row = DESKTOP_ROWS[density];
+  const icons: RowIcon = mobile ? PHONE_ICONS[density] : row;
+  const touchTree = TOUCH_TREE[density];
+  const treeIndent = hoverControls ? row.slotPx + row.gapPx : touchTree.indentPx;
+  // A phone row keeps its own spacing: its text is two lines at every density.
+  const gap = mobile ? "gap-2.5" : row.gap;
   const rowHeight = listRowHeight(density, mobile);
   const { formatBytes, formatDate } = useFormatters();
   const parentRef = useRef<HTMLDivElement>(null);
@@ -334,11 +393,12 @@ export function BetaFileList({
       <div
         data-selection-exclude
         className={cn(
-          "group/row sticky top-0 z-10 flex h-9 items-center gap-2.5 bg-background/95 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75",
+          "group/row sticky top-0 z-10 flex h-9 items-center bg-background/95 text-muted-foreground text-xs backdrop-blur supports-backdrop-filter:bg-background/75",
+          gap,
           hoverControls ? "pr-3 pl-5" : "border-border border-b px-3",
         )}
       >
-        {isTreeRow && !hoverControls && <span className="size-4 shrink-0" />}
+        {isTreeRow && !hoverControls && <span className={cn("shrink-0", touchTree.box)} />}
         {selecting && (
           <Checkbox
             checked={allSelected}
@@ -351,7 +411,7 @@ export function BetaFileList({
           <span className="flex-1">{itemCountLabel(entries.length)}</span>
         ) : (
           <>
-            <span className="flex-1" style={{ paddingLeft: ICON_SLOT_PX + ICON_GAP_PX }}>
+            <span className="flex-1" style={{ paddingLeft: row.slotPx + row.gapPx }}>
               Name
             </span>
             <span className="w-20 text-right">Size</span>
@@ -394,10 +454,7 @@ export function BetaFileList({
             paddingLeft: hoverControls ? 12 : 12 + depth * treeIndent,
           };
           const indentStyle = hoverControls ? { paddingLeft: depth * treeIndent } : undefined;
-          const iconSlot = cn(
-            "relative flex shrink-0 items-center justify-center",
-            mobile ? "size-8" : "size-6",
-          );
+          const iconSlot = cn("relative flex shrink-0 items-center justify-center", icons.slot);
           if (isLink(entry)) {
             // Shown so its name stays visible, and nothing more: no menu, no
             // selection, no drag, nothing to open.
@@ -408,31 +465,35 @@ export function BetaFileList({
                 aria-disabled="true"
                 title={LINK_TITLE}
                 className={cn(
-                  "absolute flex items-center gap-2.5 pr-1 text-muted-foreground text-sm",
+                  "absolute flex items-center pr-1 text-muted-foreground text-sm",
+                  gap,
                   hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
                 )}
                 style={rowStyle}
               >
-                {isTreeRow && !hoverControls && <span className="size-4 shrink-0" />}
+                {isTreeRow && !hoverControls && <span className={cn("shrink-0", touchTree.box)} />}
                 {selecting && <span className="size-4 shrink-0" />}
                 <div
-                  className="relative flex min-w-0 flex-1 items-center gap-2.5 self-stretch opacity-60"
+                  className={cn(
+                    "relative flex min-w-0 flex-1 items-center self-stretch opacity-60",
+                    gap,
+                  )}
                   style={indentStyle}
                 >
-                  {hoverControls && <TreeGuides depth={depth} />}
+                  {hoverControls && <TreeGuides depth={depth} row={row} />}
                   <span className={iconSlot}>
                     <ListRowIcon
                       key={entry.path}
                       entry={entry}
                       showThumbnail={showThumbnails}
-                      mobile={mobile}
+                      sizes={icons}
                     />
                   </span>
                   {mobile ? (
                     <RowText name={entry.name} detail={formatDate(new Date(entry.modifiedAt))} />
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className={cn("min-w-0 flex-1 truncate", row.name)}>{entry.name}</span>
                       <span className="w-20 shrink-0 text-right text-xs">--</span>
                       <span className="w-28 shrink-0 text-xs">
                         {formatDate(new Date(entry.modifiedAt))}
@@ -498,7 +559,8 @@ export function BetaFileList({
                   if (inRow(event)) onEntryDoubleClick(entry);
                 }}
                 className={cn(
-                  "group/row absolute flex items-center gap-2.5 pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
+                  "group/row absolute flex items-center pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
+                  gap,
                   hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
                   hoverControls && joinsAbove && "rounded-t-none",
                   hoverControls && joinsBelow && "rounded-b-none",
@@ -515,17 +577,21 @@ export function BetaFileList({
                       onDoubleClick={(event) => event.stopPropagation()}
                       aria-label={expandLabel}
                       aria-expanded={isExpandedFolder}
-                      className="flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                      className={cn(
+                        "flex shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground",
+                        touchTree.box,
+                      )}
                     >
                       <ChevronRightIcon
                         className={cn(
-                          "size-3.5 transition-transform",
+                          "transition-transform",
+                          touchTree.icon,
                           isExpandedFolder && "rotate-90",
                         )}
                       />
                     </button>
                   ) : (
-                    <span className="size-4 shrink-0" />
+                    <span className={cn("shrink-0", touchTree.box)} />
                   ))}
                 {selecting && (
                   <Checkbox
@@ -548,10 +614,10 @@ export function BetaFileList({
                   draggable
                   onDragStart={(event) => handleDragStart(event, entry)}
                   onDragEnd={handleDragEnd}
-                  className="relative flex min-w-0 flex-1 items-center gap-2.5 self-stretch"
+                  className={cn("relative flex min-w-0 flex-1 items-center self-stretch", gap)}
                   style={indentStyle}
                 >
-                  {hoverControls && <TreeGuides depth={depth} />}
+                  {hoverControls && <TreeGuides depth={depth} row={row} />}
                   <span className={iconSlot}>
                     <span
                       className={cn(
@@ -563,7 +629,7 @@ export function BetaFileList({
                         key={entry.path}
                         entry={entry}
                         showThumbnail={showThumbnails}
-                        mobile={mobile}
+                        sizes={icons}
                       />
                     </span>
                     {chevronOverIcon && (
@@ -578,7 +644,8 @@ export function BetaFileList({
                       >
                         <ChevronRightIcon
                           className={cn(
-                            "size-4 transition-transform",
+                            "transition-transform",
+                            row.chevron,
                             isExpandedFolder && "rotate-90",
                           )}
                         />
@@ -608,7 +675,7 @@ export function BetaFileList({
                     </>
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                      <span className={cn("min-w-0 flex-1 truncate", row.name)}>{entry.name}</span>
                       {sharedBy !== null && (
                         <span className="shrink-0 text-muted-foreground text-xs">{sharedBy}</span>
                       )}

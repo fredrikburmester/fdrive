@@ -43,3 +43,10 @@ it("lets a caller's class win, as the sidebar's muted favorites do", () => {
   expect(iconClass(container)).toContain("text-muted-foreground");
   expect(iconClass(container)).not.toContain("text-primary");
 });
+
+it("keeps lucide's line weight unless a caller asks for a lighter one", () => {
+  const plain = render(<FileIcon kind="dir" ext="" mime={null} />);
+  expect(plain.container.querySelector("svg")?.getAttribute("stroke-width")).toBe("2");
+  const light = render(<FileIcon kind="dir" ext="" mime={null} strokeWidth={1.5} />);
+  expect(light.container.querySelector("svg")?.getAttribute("stroke-width")).toBe("1.5");
+});

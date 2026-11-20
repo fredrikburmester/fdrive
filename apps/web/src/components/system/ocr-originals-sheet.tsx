@@ -64,7 +64,14 @@ export function OcrOriginalsSheet({ disabled }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false);
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <Button type="button" variant="outline" disabled={disabled} onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="max-md:min-h-11"
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
         <Archive />
         Manage
       </Button>

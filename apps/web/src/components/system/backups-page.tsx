@@ -5,6 +5,7 @@ import { Decrypter, generateIdentity, identityToRecipient } from "age-encryption
 import { Download, LoaderCircle, Plus, ShieldCheck } from "lucide-react";
 import { type ReactNode, useId, useState } from "react";
 import { toast } from "sonner";
+import { SettingActions, SettingRow } from "@/components/shell/page-layout";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,7 +25,6 @@ import {
   Field as FormField,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
@@ -40,7 +40,7 @@ import { formatBytes, type SizeUnits } from "@/lib/format";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { BackupHealth } from "./backup-health";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemLine, SystemNote, SystemSection } from "./system-section";
 
 function OwnerUnlock({
   act,
@@ -55,30 +55,30 @@ function OwnerUnlock({
   const [password, setPassword] = useState("");
   const id = useId();
   return (
-    <form
-      className="grid max-w-lg gap-3"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void act(async () => {
-          await backupClient.unlock(password);
-          setPassword("");
-          onUnlocked();
-        });
-      }}
-    >
-      {/* Lets password managers fill the signed-in user's own password. */}
-      <input
-        type="text"
-        name="username"
-        autoComplete="username"
-        value={me?.identity.username ?? ""}
-        readOnly
-        hidden
-      />
-      <FormField>
-        <FieldLabel htmlFor={id}>Current password</FieldLabel>
+    <SettingRow label="Current password" htmlFor={id} description="The password you sign in with.">
+      <form
+        className="flex flex-wrap items-center gap-2"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void act(async () => {
+            await backupClient.unlock(password);
+            setPassword("");
+            onUnlocked();
+          });
+        }}
+      >
+        {/* Lets password managers fill the signed-in user's own password. */}
+        <input
+          type="text"
+          name="username"
+          autoComplete="username"
+          value={me?.identity.username ?? ""}
+          readOnly
+          hidden
+        />
         <Input
           id={id}
+          className="min-w-0 max-w-sm flex-1 basis-56"
           type="password"
           autoComplete="current-password"
           maxLength={1024}
@@ -86,21 +86,28 @@ function OwnerUnlock({
           disabled={busy}
           onChange={(event) => setPassword(event.target.value)}
         />
-        <FieldDescription>The password you sign in with.</FieldDescription>
-      </FormField>
-      <Button type="submit" disabled={busy || password.length === 0}>
-        Unlock backups
-      </Button>
-    </form>
+        <Button type="submit" disabled={busy || password.length === 0}>
+          Unlock backups
+        </Button>
+      </form>
+    </SettingRow>
   );
 }
-function Field({ label, children }: { label: string; children: (id: string) => ReactNode }) {
+/** One field of a form as a row: its label on the left, the control given its id beside it. */
+function FieldRow({
+  label,
+  description,
+  children,
+}: {
+  label: string;
+  description?: ReactNode;
+  children: (id: string) => ReactNode;
+}) {
   const id = useId();
   return (
-    <div className="min-w-0 space-y-2">
-      <Label htmlFor={id}>{label}</Label>
+    <SettingRow label={label} htmlFor={id} description={description}>
       {children(id)}
-    </div>
+    </SettingRow>
   );
 }
 function saveText(text: string, filename: string) {
@@ -115,6 +122,8 @@ function size(value: string, units: SizeUnits) {
   return formatBytes(Number(value), { units });
 }
 type Act = (work: () => Promise<unknown>) => Promise<void>;
+/** Text fields stop at a readable width instead of stretching across the window. */
+const FIELD_WIDTH = "max-w-sm";
 const frequencyLabels: Record<BackupSchedule["frequency"], string> = {
   manual: "Only when I click Back up now",
   hourly: "Every hour",
@@ -164,89 +173,86 @@ function ScheduleFields({
   const timed = value.frequency === "daily" || value.frequency === "weekly";
   const note = frequencyNote(value.frequency);
   return (
-    <div className="grid gap-6">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <FormField>
-          <FieldLabel htmlFor={`${id}-frequency`}>How often to back up</FieldLabel>
-          <Select
-            value={value.frequency}
-            onValueChange={(frequency) => {
-              if (frequency)
-                onChange({ ...value, frequency: frequency as BackupSchedule["frequency"] });
-            }}
-          >
-            <SelectTrigger id={`${id}-frequency`}>
-              <SelectValue>{frequencyLabels[value.frequency]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {(["manual", "hourly", "daily", "weekly"] as const).map((frequency) => (
-                <SelectItem key={frequency} value={frequency}>
-                  {frequencyLabels[frequency]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </FormField>
-        <FormField>
-          <FieldLabel htmlFor={`${id}-timezone`}>Timezone</FieldLabel>
+    <>
+      <SettingRow label="How often to back up" htmlFor={`${id}-frequency`}>
+        <Select
+          value={value.frequency}
+          onValueChange={(frequency) => {
+            if (frequency)
+              onChange({ ...value, frequency: frequency as BackupSchedule["frequency"] });
+          }}
+        >
+          <SelectTrigger id={`${id}-frequency`} className="w-full max-w-sm">
+            <SelectValue>{frequencyLabels[value.frequency]}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {(["manual", "hourly", "daily", "weekly"] as const).map((frequency) => (
+              <SelectItem key={frequency} value={frequency}>
+                {frequencyLabels[frequency]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </SettingRow>
+      <SettingRow
+        label="Timezone"
+        htmlFor={`${id}-timezone`}
+        description="An IANA name, such as Europe/Stockholm. Also decides where days and months begin."
+      >
+        <Input
+          id={`${id}-timezone`}
+          className="max-w-sm"
+          value={value.timezone}
+          onChange={(event) => onChange({ ...value, timezone: event.target.value })}
+        />
+      </SettingRow>
+      {timed && (
+        <SettingRow
+          label="Hour of day (0–23)"
+          htmlFor={`${id}-hour`}
+          description="Pick a quiet hour; uploads wait while a backup is captured."
+        >
           <Input
-            id={`${id}-timezone`}
-            value={value.timezone}
-            onChange={(event) => onChange({ ...value, timezone: event.target.value })}
+            id={`${id}-hour`}
+            className="w-28"
+            type="number"
+            min={0}
+            max={23}
+            value={value.hour}
+            onChange={(event) => onChange({ ...value, hour: Number(event.target.value) })}
           />
-          <FieldDescription>
-            An IANA name, such as Europe/Stockholm. Also decides where days and months begin.
-          </FieldDescription>
-        </FormField>
-        {timed && (
-          <FormField>
-            <FieldLabel htmlFor={`${id}-hour`}>Hour of day (0–23)</FieldLabel>
-            <Input
-              id={`${id}-hour`}
-              type="number"
-              min={0}
-              max={23}
-              value={value.hour}
-              onChange={(event) => onChange({ ...value, hour: Number(event.target.value) })}
-            />
-            <FieldDescription>
-              Pick a quiet hour; uploads wait while a backup is captured.
-            </FieldDescription>
-          </FormField>
-        )}
-      </div>
-      <div className="grid gap-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium">How many backups to keep</p>
-          <p className="text-sm text-muted-foreground">
-            This thins out old backups; it doesn't add backups. fdrive keeps the newest backup from
-            each of the most recent days, weeks and months that have one, plus the latest and any
-            pinned backup, and deletes the rest. There is no monthly schedule because a daily or
-            weekly backup already serves as its month's copy.
-          </p>
-          {note && <p className="text-sm text-muted-foreground">{note}</p>}
-          {retentionNote && <p className="text-sm text-muted-foreground">{retentionNote}</p>}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {retentionPeriods.map(([period, label, unit, min, max]) => (
-            <FormField key={period}>
-              <FieldLabel htmlFor={`${id}-${period}`}>{label}</FieldLabel>
-              <Input
-                id={`${id}-${period}`}
-                type="number"
-                min={min}
-                max={max}
-                value={value[period]}
-                onChange={(event) => onChange({ ...value, [period]: Number(event.target.value) })}
-              />
-              <FieldDescription>
-                One from each of the last {value[period]} {unit}.
-              </FieldDescription>
-            </FormField>
-          ))}
-        </div>
-      </div>
-    </div>
+        </SettingRow>
+      )}
+      <SystemNote>
+        <p className="font-medium text-foreground text-sm">How many backups to keep</p>
+        <p>
+          This thins out old backups; it doesn't add backups. fdrive keeps the newest backup from
+          each of the most recent days, weeks and months that have one, plus the latest and any
+          pinned backup, and deletes the rest. There is no monthly schedule because a daily or
+          weekly backup already serves as its month's copy.
+        </p>
+        {note && <p>{note}</p>}
+        {retentionNote && <p>{retentionNote}</p>}
+      </SystemNote>
+      {retentionPeriods.map(([period, label, unit, min, max]) => (
+        <SettingRow
+          key={period}
+          label={label}
+          htmlFor={`${id}-${period}`}
+          description={`One from each of the last ${value[period]} ${unit}.`}
+        >
+          <Input
+            id={`${id}-${period}`}
+            className="w-28"
+            type="number"
+            min={min}
+            max={max}
+            value={value[period]}
+            onChange={(event) => onChange({ ...value, [period]: Number(event.target.value) })}
+          />
+        </SettingRow>
+      ))}
+    </>
   );
 }
 function DestinationPolicy({
@@ -270,47 +276,47 @@ function DestinationPolicy({
   return (
     <form
       aria-label={`Schedule for ${name}`}
-      className="grid basis-full gap-4 border-t pt-4"
+      className="border-border/60 border-t bg-muted/20"
       onSubmit={(event) => {
         event.preventDefault();
         void onSave(inherit ? null : policy);
       }}
     >
-      <div className="space-y-1">
-        <p className="text-sm font-medium">Schedule for {name}</p>
-        <p className="text-sm text-muted-foreground">
-          When fdrive sends a new backup here, and how many old backups to keep here.
-        </p>
+      <SystemNote>
+        <p className="font-medium text-foreground text-sm">Schedule for {name}</p>
+        <p>When fdrive sends a new backup here, and how many old backups to keep here.</p>
+      </SystemNote>
+      <div className="border-border/60 border-b px-3 py-2.5">
+        <RadioGroup
+          value={inherit ? "installation" : "custom"}
+          onValueChange={(choice) => setInherit(choice === "installation")}
+        >
+          <FormField orientation="horizontal">
+            <RadioGroupItem id={`${id}-installation`} value="installation" />
+            <FieldContent>
+              <FieldLabel htmlFor={`${id}-installation`}>
+                Same as the installation schedule
+              </FieldLabel>
+              <FieldDescription>
+                {describeSchedule(installation)}, {describeRetention(installation)}. Follows any
+                change you make under Schedule and retention.
+              </FieldDescription>
+            </FieldContent>
+          </FormField>
+          <FormField orientation="horizontal">
+            <RadioGroupItem id={`${id}-custom`} value="custom" />
+            <FieldContent>
+              <FieldLabel htmlFor={`${id}-custom`}>
+                A separate schedule for this destination
+              </FieldLabel>
+              <FieldDescription>
+                For destinations that need different timing, such as hourly to a nearby server and
+                weekly to cloud storage.
+              </FieldDescription>
+            </FieldContent>
+          </FormField>
+        </RadioGroup>
       </div>
-      <RadioGroup
-        value={inherit ? "installation" : "custom"}
-        onValueChange={(choice) => setInherit(choice === "installation")}
-      >
-        <FormField orientation="horizontal">
-          <RadioGroupItem id={`${id}-installation`} value="installation" />
-          <FieldContent>
-            <FieldLabel htmlFor={`${id}-installation`}>
-              Same as the installation schedule
-            </FieldLabel>
-            <FieldDescription>
-              {describeSchedule(installation)}, {describeRetention(installation)}. Follows any
-              change you make under Schedule and retention.
-            </FieldDescription>
-          </FieldContent>
-        </FormField>
-        <FormField orientation="horizontal">
-          <RadioGroupItem id={`${id}-custom`} value="custom" />
-          <FieldContent>
-            <FieldLabel htmlFor={`${id}-custom`}>
-              A separate schedule for this destination
-            </FieldLabel>
-            <FieldDescription>
-              For destinations that need different timing, such as hourly to a nearby server and
-              weekly to cloud storage.
-            </FieldDescription>
-          </FieldContent>
-        </FormField>
-      </RadioGroup>
       {!inherit && (
         <ScheduleFields
           value={policy}
@@ -318,14 +324,14 @@ function DestinationPolicy({
           retentionNote="A backup shared with another destination stays until neither needs it."
         />
       )}
-      <div className="flex flex-wrap justify-end gap-2">
-        <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
-          Cancel
-        </Button>
+      <SettingActions>
         <Button type="submit" disabled={busy}>
           Save destination schedule
         </Button>
-      </div>
+        <Button type="button" variant="ghost" disabled={busy} onClick={onCancel}>
+          Cancel
+        </Button>
+      </SettingActions>
     </form>
   );
 }
@@ -356,101 +362,114 @@ function Destinations({
       title="Destinations"
       description="Copy each backup to an S3-compatible bucket, such as AWS S3 or Backblaze B2."
       actions={
-        <Button variant="outline" disabled={!unlocked || busy} onClick={() => setAdding(!adding)}>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={!unlocked || busy}
+          onClick={() => setAdding(!adding)}
+        >
           <Plus />
           Add destination
         </Button>
       }
     >
       {data.destinations.length === 0 && (
-        <p className="text-sm text-muted-foreground">
+        <SystemLine className="border-border/60 border-b last:border-b-0">
           No remote destinations. You can still download a local backup.
-        </p>
+        </SystemLine>
       )}
       {data.destinations.map((item) => (
         <div
           key={item.id}
-          className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border p-3"
+          data-slot="backup-destination"
+          className="border-border/60 border-b last:border-b-0"
         >
-          <div className="min-w-0">
-            <p className="font-medium break-words">{item.name}</p>
-            <p className="break-all text-xs text-muted-foreground">{item.location}</p>
-            {item.retainedProbe && (
-              <p className="break-all text-xs text-muted-foreground">
-                Bucket retention keeps the test object {item.retainedProbe.name} until{" "}
-                {new Date(item.retainedProbe.retentionUntil).toLocaleString()}.
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-2 px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-2 font-medium text-sm">
+                <span className="break-words">{item.name}</span>
+                <Badge variant="secondary">{item.enabled ? "Enabled" : "Paused"}</Badge>
               </p>
-            )}
-            <Badge variant="secondary">{item.enabled ? "Enabled" : "Paused"}</Badge>
-            <p className="text-xs text-muted-foreground">
-              {(() => {
-                const latest = data.runs.find(
-                  (run) =>
-                    !run.coverage.length &&
-                    run.deliveries.some(
-                      (delivery) =>
-                        delivery.destinationId === item.id && delivery.state === "complete",
-                    ),
-                );
-                return latest
-                  ? `Last complete copy: ${new Date(latest.createdAt).toLocaleString()}`
-                  : "No complete copy yet";
-              })()}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {item.testedAt
-                ? `Last tested: ${new Date(item.testedAt).toLocaleString()}`
-                : "Not tested yet"}
-            </p>
-            <p className="break-words text-xs text-muted-foreground">
-              {item.schedule
-                ? `Own schedule: ${describeSchedule(item.schedule)}`
-                : `Installation schedule: ${describeSchedule(data.schedule)}`}
-              {(item.schedule ? item.nextRunAt : data.nextRunAt) &&
-                ` · next ${new Date((item.schedule ? item.nextRunAt : data.nextRunAt) as string).toLocaleString()}`}
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={busy || !unlocked}
-              onClick={() =>
-                void act(async () => {
-                  setTesting(item.id);
-                  try {
-                    await backupClient.testDestination(item.id);
-                    toast.success(`${item.name} passed the test`, {
-                      description: "fdrive wrote, read back and removed a test object.",
-                    });
-                  } catch (reason) {
-                    toast.error(`${item.name} failed the test`, {
-                      description: reason instanceof Error ? reason.message : undefined,
-                    });
-                    throw reason;
-                  } finally {
-                    setTesting(null);
-                  }
-                })
-              }
-            >
-              {testing === item.id && <LoaderCircle className="animate-spin" />}
-              Test
-            </Button>
-            <Button
-              variant="outline"
-              disabled={busy || !unlocked || !data.keyConfirmed}
-              aria-expanded={editing === item.id}
-              onClick={() => setEditing(editing === item.id ? null : item.id)}
-            >
-              Edit schedule
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={busy || !unlocked}
-              onClick={() => void act(() => backupClient.removeDestination(item.id))}
-            >
-              Remove destination
-            </Button>
+              <p className="break-all text-muted-foreground text-xs">{item.location}</p>
+              {item.retainedProbe && (
+                <p className="break-all text-muted-foreground text-xs">
+                  Bucket retention keeps the test object {item.retainedProbe.name} until{" "}
+                  {new Date(item.retainedProbe.retentionUntil).toLocaleString()}.
+                </p>
+              )}
+              <p className="text-muted-foreground text-xs">
+                {(() => {
+                  const latest = data.runs.find(
+                    (run) =>
+                      !run.coverage.length &&
+                      run.deliveries.some(
+                        (delivery) =>
+                          delivery.destinationId === item.id && delivery.state === "complete",
+                      ),
+                  );
+                  return latest
+                    ? `Last complete copy: ${new Date(latest.createdAt).toLocaleString()}`
+                    : "No complete copy yet";
+                })()}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                {item.testedAt
+                  ? `Last tested: ${new Date(item.testedAt).toLocaleString()}`
+                  : "Not tested yet"}
+              </p>
+              <p className="break-words text-muted-foreground text-xs">
+                {item.schedule
+                  ? `Own schedule: ${describeSchedule(item.schedule)}`
+                  : `Installation schedule: ${describeSchedule(data.schedule)}`}
+                {(item.schedule ? item.nextRunAt : data.nextRunAt) &&
+                  ` · next ${new Date((item.schedule ? item.nextRunAt : data.nextRunAt) as string).toLocaleString()}`}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !unlocked}
+                onClick={() =>
+                  void act(async () => {
+                    setTesting(item.id);
+                    try {
+                      await backupClient.testDestination(item.id);
+                      toast.success(`${item.name} passed the test`, {
+                        description: "fdrive wrote, read back and removed a test object.",
+                      });
+                    } catch (reason) {
+                      toast.error(`${item.name} failed the test`, {
+                        description: reason instanceof Error ? reason.message : undefined,
+                      });
+                      throw reason;
+                    } finally {
+                      setTesting(null);
+                    }
+                  })
+                }
+              >
+                {testing === item.id && <LoaderCircle className="animate-spin" />}
+                Test
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !unlocked || !data.keyConfirmed}
+                aria-expanded={editing === item.id}
+                onClick={() => setEditing(editing === item.id ? null : item.id)}
+              >
+                Edit schedule
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy || !unlocked}
+                onClick={() => void act(() => backupClient.removeDestination(item.id))}
+              >
+                Remove destination
+              </Button>
+            </div>
           </div>
           {editing === item.id && (
             <DestinationPolicy
@@ -471,7 +490,7 @@ function Destinations({
       ))}
       {adding && (
         <form
-          className="grid gap-4 rounded-lg border p-4 sm:grid-cols-2"
+          aria-label="New destination"
           onSubmit={(event) => {
             event.preventDefault();
             void act(async () => {
@@ -491,82 +510,118 @@ function Destinations({
             });
           }}
         >
-          <div className="flex flex-wrap gap-2 sm:col-span-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setEndpoint("https://s3.amazonaws.com");
-                setRegion("us-east-1");
-              }}
-            >
-              AWS S3
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                setEndpoint("https://s3.us-west-004.backblazeb2.com");
-                setRegion("us-west-004");
-              }}
-            >
-              Backblaze B2
-            </Button>
-          </div>
-          <Field label="Name">
-            {(id) => (
-              <Input id={id} value={name} onChange={(e) => setName(e.target.value)} required />
-            )}
-          </Field>
-          <Field label="S3 endpoint">
+          <SettingRow label="Preset" description="Fills in the endpoint and region of a provider.">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEndpoint("https://s3.amazonaws.com");
+                  setRegion("us-east-1");
+                }}
+              >
+                AWS S3
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEndpoint("https://s3.us-west-004.backblazeb2.com");
+                  setRegion("us-west-004");
+                }}
+              >
+                Backblaze B2
+              </Button>
+            </div>
+          </SettingRow>
+          <FieldRow label="Name">
             {(id) => (
               <Input
                 id={id}
+                className={FIELD_WIDTH}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            )}
+          </FieldRow>
+          <FieldRow label="S3 endpoint">
+            {(id) => (
+              <Input
+                id={id}
+                className={FIELD_WIDTH}
                 type="url"
                 value={endpoint}
                 onChange={(e) => setEndpoint(e.target.value)}
                 required
               />
             )}
-          </Field>
-          <Field label="Region">
-            {(id) => (
-              <Input id={id} value={region} onChange={(e) => setRegion(e.target.value)} required />
-            )}
-          </Field>
-          <Field label="Bucket">
-            {(id) => (
-              <Input id={id} value={bucket} onChange={(e) => setBucket(e.target.value)} required />
-            )}
-          </Field>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={pathStyle}
-              onChange={(event) => setPathStyle(event.target.checked)}
-            />
-            Use path-style addressing
-          </label>
-          <Field label="Access key ID">
+          </FieldRow>
+          <FieldRow label="Region">
             {(id) => (
               <Input
                 id={id}
+                className={FIELD_WIDTH}
+                value={region}
+                onChange={(e) => setRegion(e.target.value)}
+                required
+              />
+            )}
+          </FieldRow>
+          <FieldRow label="Bucket">
+            {(id) => (
+              <Input
+                id={id}
+                className={FIELD_WIDTH}
+                value={bucket}
+                onChange={(e) => setBucket(e.target.value)}
+                required
+              />
+            )}
+          </FieldRow>
+          <FieldRow
+            label="Use path-style addressing"
+            description="For servers that take the bucket in the path, such as MinIO."
+          >
+            {(id) => (
+              <input
+                id={id}
+                type="checkbox"
+                // Stays a square where the page gives every other input a 44px tap target.
+                className="size-4 max-md:size-5 max-md:min-h-5!"
+                checked={pathStyle}
+                onChange={(event) => setPathStyle(event.target.checked)}
+              />
+            )}
+          </FieldRow>
+          <FieldRow label="Access key ID">
+            {(id) => (
+              <Input
+                id={id}
+                className={FIELD_WIDTH}
                 value={accessKeyId}
                 onChange={(e) => setAccessKeyId(e.target.value)}
                 autoComplete="off"
                 required
               />
             )}
-          </Field>
-          <Field label="Key prefix">
-            {(id) => (
-              <Input id={id} value={prefix} onChange={(e) => setPrefix(e.target.value)} required />
-            )}
-          </Field>
-          <Field label="Secret access key">
+          </FieldRow>
+          <FieldRow label="Key prefix">
             {(id) => (
               <Input
                 id={id}
+                className={FIELD_WIDTH}
+                value={prefix}
+                onChange={(e) => setPrefix(e.target.value)}
+                required
+              />
+            )}
+          </FieldRow>
+          <FieldRow label="Secret access key">
+            {(id) => (
+              <Input
+                id={id}
+                className={FIELD_WIDTH}
                 type="password"
                 value={secret}
                 onChange={(e) => setSecret(e.target.value)}
@@ -574,14 +629,18 @@ function Destinations({
                 required
               />
             )}
-          </Field>
-          <p className="text-sm text-muted-foreground sm:col-span-2">
-            Use a private bucket with dedicated credentials; scheduled backups run unattended. Keep
-            a copy of those credentials outside fdrive for disaster recovery.
-          </p>
-          <Button disabled={busy} type="submit">
-            Test and save
-          </Button>
+          </FieldRow>
+          <SystemNote>
+            <p>
+              Use a private bucket with dedicated credentials; scheduled backups run unattended.
+              Keep a copy of those credentials outside fdrive for disaster recovery.
+            </p>
+          </SystemNote>
+          <SettingActions>
+            <Button disabled={busy} type="submit">
+              Test and save
+            </Button>
+          </SettingActions>
         </form>
       )}
     </SystemSection>
@@ -632,6 +691,7 @@ export function BackupsPage() {
             </span>
           )}
           <Button
+            size="sm"
             disabled={busy || !unlocked || !data?.keyConfirmed}
             onClick={() =>
               void act(() =>
@@ -648,16 +708,13 @@ export function BackupsPage() {
         </>
       }
     >
-      <div className="contents max-sm:[&_button]:min-h-11 max-sm:[&_input]:min-h-11 max-sm:[&_a[data-slot=button]]:min-h-11">
+      <div className="contents max-md:[&_button]:min-h-11 max-md:[&_input]:min-h-11 max-md:[&_a[data-slot=button]]:min-h-11">
         {(error || query.error) && (
-          <p
-            role="alert"
-            className="break-words rounded-lg border border-destructive/40 p-4 text-sm text-destructive"
-          >
+          <SystemAlert row className="break-words border-destructive/40 bg-destructive/5">
             {error || query.error?.message}
-          </p>
+          </SystemAlert>
         )}
-        {query.isPending && <p role="status">Loading backups…</p>}
+        {query.isPending && <SystemLine role="status">Loading backups…</SystemLine>}
         {data && (
           <>
             <SystemSection
@@ -665,7 +722,7 @@ export function BackupsPage() {
               description="Confirm your password to manage sensitive backups for the next ten minutes."
             >
               {unlocked ? (
-                <p className="text-sm">Backup controls unlocked.</p>
+                <SystemLine className="text-foreground">Backup controls unlocked.</SystemLine>
               ) : (
                 <OwnerUnlock act={act} busy={busy} onUnlocked={() => setUnlocked(true)} />
               )}
@@ -676,11 +733,10 @@ export function BackupsPage() {
               description="Keep this key somewhere independent of fdrive. It is required to decrypt your backups."
             >
               {data.keyConfirmed && !rotating ? (
-                <>
-                  <Badge variant="secondary">Recovery key confirmed</Badge>
-                  <p className="break-all font-mono text-xs text-muted-foreground">
-                    {data.recipient}
-                  </p>
+                <SettingRow
+                  label={<Badge variant="secondary">Recovery key confirmed</Badge>}
+                  description={<span className="break-all font-mono">{data.recipient}</span>}
+                >
                   <Button
                     variant="outline"
                     disabled={busy || !unlocked}
@@ -694,66 +750,71 @@ export function BackupsPage() {
                   >
                     Rotate recovery key
                   </Button>
-                </>
+                </SettingRow>
               ) : (
                 <>
-                  <Button
-                    variant="outline"
-                    disabled={!unlocked || busy}
-                    onClick={() =>
-                      void act(async () => {
-                        const identity = await generateIdentity();
-                        const recipient = await identityToRecipient(identity);
-                        const result = await backupClient.key(recipient);
-                        saveText(
-                          `# fdrive recovery key\n# Installation: ${data.installationId}\n# Recipient: ${recipient}\n# Store destination access credentials separately.\n# Destinations: ${data.destinations.map((item) => `${item.name}: ${item.location}`).join("; ") || "Browser download only"}\n# Restore: use the same fdrive release, a new empty database and a new master key.\n# Inspect offline: node dist/main.js backup inspect --file BACKUP.fdrive.age --key-file THIS_FILE\n# Set private key file permissions to 600. Use /restore with a host recovery token, or the backup restore CLI.\n# Restore starts paused. Review the files folder binding and reauthenticate before resuming.\n${identity}\n`,
-                          "fdrive-recovery-key.txt",
-                        );
-                        setChallenge(result.challenge);
-                      })
-                    }
+                  <SettingRow
+                    label="New recovery key"
+                    description="Made in this browser and saved as a file. fdrive never holds the private key."
                   >
-                    <Download />
-                    Create and download recovery key
-                  </Button>
+                    <Button
+                      variant="outline"
+                      disabled={!unlocked || busy}
+                      onClick={() =>
+                        void act(async () => {
+                          const identity = await generateIdentity();
+                          const recipient = await identityToRecipient(identity);
+                          const result = await backupClient.key(recipient);
+                          saveText(
+                            `# fdrive recovery key\n# Installation: ${data.installationId}\n# Recipient: ${recipient}\n# Store destination access credentials separately.\n# Destinations: ${data.destinations.map((item) => `${item.name}: ${item.location}`).join("; ") || "Browser download only"}\n# Restore: use the same fdrive release, a new empty database and a new master key.\n# Inspect offline: node dist/main.js backup inspect --file BACKUP.fdrive.age --key-file THIS_FILE\n# Set private key file permissions to 600. Use /restore with a host recovery token, or the backup restore CLI.\n# Restore starts paused. Review the files folder binding and reauthenticate before resuming.\n${identity}\n`,
+                            "fdrive-recovery-key.txt",
+                          );
+                          setChallenge(result.challenge);
+                        })
+                      }
+                    >
+                      <Download />
+                      Create and download recovery key
+                    </Button>
+                  </SettingRow>
                   {challenge && (
-                    <>
-                      <Field label="Paste the saved recovery key to confirm">
-                        {(id) => (
+                    <FieldRow label="Paste the saved recovery key to confirm">
+                      {(id) => (
+                        <div className="flex max-w-xl flex-col items-start gap-2">
                           <Textarea
                             id={id}
                             value={key}
                             onChange={(event) => setKey(event.target.value)}
                             autoComplete="off"
                           />
-                        )}
-                      </Field>
-                      <Button
-                        disabled={busy || !key}
-                        onClick={() =>
-                          void act(async () => {
-                            const identity = key
-                              .split(/\r?\n/)
-                              .map((line) => line.trim())
-                              .find((line) => line.startsWith("AGE-SECRET-KEY-"));
-                            if (!identity)
-                              throw Error("Paste the private key from the downloaded file");
-                            const decrypt = new Decrypter();
-                            decrypt.addIdentity(identity);
-                            const proof = await decrypt.decrypt(
-                              Uint8Array.from(atob(challenge), (c) => c.charCodeAt(0)),
-                              "text",
-                            );
-                            await backupClient.confirm(proof);
-                            setKey("");
-                            setChallenge("");
-                            setRotating(false);
-                          })
-                        }
-                      >
-                        Confirm saved key
-                      </Button>
-                    </>
+                          <Button
+                            disabled={busy || !key}
+                            onClick={() =>
+                              void act(async () => {
+                                const identity = key
+                                  .split(/\r?\n/)
+                                  .map((line) => line.trim())
+                                  .find((line) => line.startsWith("AGE-SECRET-KEY-"));
+                                if (!identity)
+                                  throw Error("Paste the private key from the downloaded file");
+                                const decrypt = new Decrypter();
+                                decrypt.addIdentity(identity);
+                                const proof = await decrypt.decrypt(
+                                  Uint8Array.from(atob(challenge), (c) => c.charCodeAt(0)),
+                                  "text",
+                                );
+                                await backupClient.confirm(proof);
+                                setKey("");
+                                setChallenge("");
+                                setRotating(false);
+                              })
+                            }
+                          >
+                            Confirm saved key
+                          </Button>
+                        </div>
+                      )}
+                    </FieldRow>
                   )}
                 </>
               )}
@@ -761,32 +822,38 @@ export function BackupsPage() {
             <SystemSection
               title="Download options"
               description="Local downloads expire after 24 hours unless kept. File changes wait only while a backup takes its database snapshot."
-            >
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  disabled={busy || !unlocked || !data.keyConfirmed}
-                  onClick={() =>
-                    void act(() => backupClient.create({ destinationIds: [], metadataOnly: false }))
-                  }
-                >
-                  Prepare local download
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={busy || !unlocked || !data.keyConfirmed}
-                  onClick={() =>
-                    setConfirmation({
-                      description:
-                        "Create a partial backup of database records only? Recovery files are excluded and this backup will show incomplete coverage.",
-                      action: () => backupClient.create({ destinationIds: [], metadataOnly: true }),
-                    })
-                  }
-                >
-                  Database only
-                </Button>
-              </div>
-            </SystemSection>
+              actions={
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={busy || !unlocked || !data.keyConfirmed}
+                    onClick={() =>
+                      void act(() =>
+                        backupClient.create({ destinationIds: [], metadataOnly: false }),
+                      )
+                    }
+                  >
+                    Prepare local download
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={busy || !unlocked || !data.keyConfirmed}
+                    onClick={() =>
+                      setConfirmation({
+                        description:
+                          "Create a partial backup of database records only? Recovery files are excluded and this backup will show incomplete coverage.",
+                        action: () =>
+                          backupClient.create({ destinationIds: [], metadataOnly: true }),
+                      })
+                    }
+                  >
+                    Database only
+                  </Button>
+                </>
+              }
+            />
             <Destinations data={data} act={act} busy={busy} unlocked={unlocked} />
             {selected && (
               <SystemSection
@@ -798,18 +865,17 @@ export function BackupsPage() {
                 }
               >
                 <form
-                  className="grid gap-6"
                   onSubmit={(event) => {
                     event.preventDefault();
                     void act(() => backupClient.schedule(selected));
                   }}
                 >
                   <ScheduleFields value={selected} onChange={setSchedule} />
-                  <div className="flex justify-end">
+                  <SettingActions>
                     <Button type="submit" disabled={busy || !unlocked || !data.keyConfirmed}>
                       Save schedule
                     </Button>
-                  </div>
+                  </SettingActions>
                 </form>
               </SystemSection>
             )}
@@ -817,46 +883,51 @@ export function BackupsPage() {
               title="Backup history"
               description="A complete backup includes all declared sources. Partial backups list missing coverage."
             >
-              {data.runs.length === 0 && (
-                <p className="text-sm text-muted-foreground">No backups yet.</p>
-              )}
+              {data.runs.length === 0 && <SystemLine>No backups yet.</SystemLine>}
               {data.runs.map((run) => (
-                <div key={run.id} className="min-w-0 space-y-3 rounded-lg border p-4">
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <p className="font-medium">{new Date(run.createdAt).toLocaleString()}</p>
-                    <Badge variant="secondary">
-                      {run.state}
-                      {run.pinned ? " · pinned" : ""}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {size(run.bytes, prefs.sizes)}
-                    {run.verifiedAt
-                      ? ` · Bytes verified ${new Date(run.verifiedAt).toLocaleString()}`
-                      : ""}
-                  </p>
-                  {run.verificationError && (
-                    <p className="text-sm text-destructive">{run.verificationError}</p>
-                  )}
-                  {run.error && <p className="text-sm text-destructive">{run.error}</p>}
-                  {[...new Set(run.coverage)].map((item) => (
-                    <p key={item} className="break-words text-sm">
-                      {item}
+                <div
+                  key={run.id}
+                  data-slot="backup-run"
+                  className="flex min-w-0 flex-wrap items-start justify-between gap-x-6 gap-y-2 border-border/60 border-b px-3 py-2.5 last:border-b-0"
+                >
+                  <div className="min-w-0 space-y-1">
+                    <p className="flex flex-wrap items-center gap-2 font-medium text-sm">
+                      {new Date(run.createdAt).toLocaleString()}
+                      <Badge variant="secondary">
+                        {run.state}
+                        {run.pinned ? " · pinned" : ""}
+                      </Badge>
                     </p>
-                  ))}
-                  {run.deliveries.map((delivery) => (
-                    <p key={delivery.destinationId} className="break-words text-sm">
-                      {delivery.name}: {delivery.state}
-                      {delivery.error ? ` — ${delivery.error}` : ""}
-                      {delivery.retentionUntil
-                        ? ` · Locked until ${new Date(delivery.retentionUntil).toLocaleString()}`
+                    <p className="text-muted-foreground text-xs">
+                      {size(run.bytes, prefs.sizes)}
+                      {run.verifiedAt
+                        ? ` · Bytes verified ${new Date(run.verifiedAt).toLocaleString()}`
                         : ""}
                     </p>
-                  ))}
-                  <div className="flex flex-wrap gap-2">
+                    {run.verificationError && (
+                      <p className="text-destructive text-sm">{run.verificationError}</p>
+                    )}
+                    {run.error && <p className="text-destructive text-sm">{run.error}</p>}
+                    {[...new Set(run.coverage)].map((item) => (
+                      <p key={item} className="break-words text-sm">
+                        {item}
+                      </p>
+                    ))}
+                    {run.deliveries.map((delivery) => (
+                      <p key={delivery.destinationId} className="break-words text-sm">
+                        {delivery.name}: {delivery.state}
+                        {delivery.error ? ` — ${delivery.error}` : ""}
+                        {delivery.retentionUntil
+                          ? ` · Locked until ${new Date(delivery.retentionUntil).toLocaleString()}`
+                          : ""}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
                     {run.downloadable && (
                       <Button
                         variant="outline"
+                        size="sm"
                         disabled={!unlocked}
                         nativeButton={false}
                         render={<a href={backupClient.downloadUrl(run.id)} />}
@@ -867,6 +938,7 @@ export function BackupsPage() {
                     )}
                     <Button
                       variant="outline"
+                      size="sm"
                       disabled={
                         busy ||
                         !unlocked ||
@@ -879,6 +951,7 @@ export function BackupsPage() {
                     </Button>
                     <Button
                       variant="outline"
+                      size="sm"
                       disabled={busy || !unlocked}
                       onClick={() => void act(() => backupClient.pin(run.id, !run.pinned))}
                     >
@@ -887,6 +960,7 @@ export function BackupsPage() {
                     {["queued", "capturing", "transferring"].includes(run.state) ? (
                       <Button
                         variant="ghost"
+                        size="sm"
                         disabled={busy || !unlocked}
                         onClick={() => void act(() => backupClient.cancel(run.id))}
                       >
@@ -896,6 +970,7 @@ export function BackupsPage() {
                       <>
                         <Button
                           variant="ghost"
+                          size="sm"
                           disabled={busy || !unlocked || run.pinned}
                           onClick={() =>
                             setConfirmation({
@@ -910,6 +985,7 @@ export function BackupsPage() {
                         {run.state === "partial" && run.downloadable && (
                           <Button
                             variant="outline"
+                            size="sm"
                             disabled={busy || !unlocked}
                             onClick={() => void act(() => backupClient.retry(run.id))}
                           >
@@ -925,14 +1001,23 @@ export function BackupsPage() {
             <SystemSection
               title="Restore an installation"
               description="Use a fresh fdrive installation or the backup restore command to inspect an archive before replacing any data."
+              actions={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  nativeButton={false}
+                  render={<a href="/restore" />}
+                >
+                  Open restore
+                </Button>
+              }
             >
-              <p className="text-sm text-muted-foreground">
-                Have your recovery key and destination credentials ready. The files folder needs its
-                own backup.
-              </p>
-              <Button variant="outline" nativeButton={false} render={<a href="/restore" />}>
-                Open restore
-              </Button>
+              <SystemNote>
+                <p>
+                  Have your recovery key and destination credentials ready. The files folder needs
+                  its own backup.
+                </p>
+              </SystemNote>
             </SystemSection>
           </>
         )}

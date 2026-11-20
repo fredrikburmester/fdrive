@@ -222,4 +222,79 @@ test.describe("file controls ux", () => {
     const reloadedCheckboxItem = page.getByRole("menuitemcheckbox", { name: /Show thumbnails/ });
     await expect(reloadedCheckboxItem).toHaveAttribute("aria-checked", "true");
   });
+
+  test("the details panel is open by default on a wide window, and closing it sticks", async ({
+    page,
+  }) => {
+    // A choice saved while the panel started closed does not count: the new default shows once.
+    await page.addInitScript(() => localStorage.setItem("fdrive.inspector", "false"));
+    await createSandbox(page);
+    const panel = page.getByRole("complementary", { name: "Info" });
+    await expect(panel.getByText("No selection", { exact: true })).toBeVisible();
+
+    // The upload becomes the selection, which the panel describes.
+    await uploadFiles(page, [{ name: "notes.txt", mimeType: "text/plain", contents: "hello" }]);
+    await expect(panel.getByText("notes.txt", { exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(panel.getByText("Kind", { exact: true })).toBeVisible();
+
+    await panel.getByRole("button", { name: "Close info" }).click();
+    await expect(panel).toHaveCount(0);
+    await page.reload();
+    await expect(fileListRow(page, "notes.txt")).toBeVisible();
+    await expect(panel).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Toggle details" }).click();
+    await expect(panel).toBeVisible();
+    await page.reload();
+    await expect(panel.getByText("No selection", { exact: true })).toBeVisible();
+  });
+
+  test("on a narrow window the details panel never opens by itself", async ({ page }) => {
+    await page.setViewportSize({ width: 900, height: 720 });
+    await createSandbox(page);
+    await uploadFiles(page, [{ name: "notes.txt", mimeType: "text/plain", contents: "hello" }]);
+    await expect(fileListRow(page, "notes.txt")).toBeVisible({ timeout: 15_000 });
+    const sheet = page.getByRole("dialog", { name: "Info" });
+    const panel = page.getByRole("complementary", { name: "Info" });
+    await expect(sheet).toHaveCount(0);
+    await expect(panel).toHaveCount(0);
+
+    // It is a sheet here, opened when asked for.
+    await page.getByRole("button", { name: "Toggle details" }).click();
+    await expect(sheet.getByText("notes.txt", { exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+
+    // Closing the sheet is not a choice about the side panel, which a wide window still opens;
+    // narrowing the window closes it again rather than covering the listing with a sheet.
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await expect(panel).toBeVisible();
+    await page.setViewportSize({ width: 900, height: 720 });
+    await expect(panel).toHaveCount(0);
+    await expect(sheet).toHaveCount(0);
+  });
+
+  test("list rows are roomy by default, and Compact in the View menu brings back the tighter rows", async ({
+    page,
+  }) => {
+    const sandbox = await createSandbox(page);
+    await uploadFiles(page, [{ name: "notes.txt", mimeType: "text/plain", contents: "hello" }]);
+    const row = page.locator(`[data-path="/${sandbox}/notes.txt"]`);
+    await expect(row).toBeVisible({ timeout: 15_000 });
+    const rowHeight = async () => (await row.boundingBox())?.height;
+    await expect.poll(rowHeight).toBe(64);
+
+    await page.getByRole("button", { name: "View", exact: true }).click();
+    await expect(page.getByRole("menuitemradio", { name: "Comfortable" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await page.getByRole("menuitemradio", { name: "Compact" }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(rowHeight).toBe(36);
+
+    await page.reload();
+    await expect(row).toBeVisible();
+    await expect.poll(rowHeight).toBe(36);
+  });
 });

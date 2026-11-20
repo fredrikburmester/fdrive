@@ -185,7 +185,7 @@ public struct DesktopEncryptionKey: Codable, Sendable, Equatable {
 
 /// Why an encrypted folder does not open on this Mac.
 public enum EncryptionLock {
-    public static let noKey = "Encrypted folders are locked on this Mac. Turn on encryption in fdrive under Account › Encryption, then choose Reconnect in FDrive."
+    public static let noKey = "Encrypted folders are locked on this Mac. Turn on encryption in fdrive under Settings › Encryption, then choose Reconnect in FDrive."
     public static let unseen = "FDrive has not read this encrypted folder's key yet. Open the folder in Finder, then try again."
     public static let foreign = "This encrypted folder was not made with your key, so FDrive does not open it."
     public static let unlisted = "The server did not say this folder is encrypted, so FDrive does not list it. Choose Refresh, or update fdrive."
@@ -204,7 +204,7 @@ public enum AccountKeys {
     /// random nonce the server picked for this pairing. The approving browser computes it from
     /// the recipient it encrypts the account key to, so a recipient swapped in shows another code.
     public static func pairingCode(_ deviceRecipient: String, nonce: String) -> String { keyCode(deviceRecipient + "\n" + nonce) }
-    /// The fingerprint Account › Encryption shows for the account key.
+    /// The fingerprint Settings › Encryption shows for the account key.
     public static func fingerprint(_ accountRecipient: String) -> String { keyCode(accountRecipient) }
     /// The account identity as an age file to a device recipient, base64.
     public static func deviceKey(for account: AgeIdentity, to device: AgeRecipient) throws -> String {

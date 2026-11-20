@@ -2,9 +2,10 @@
 
 import type { SystemStorage } from "@fdrive/contracts";
 import { useState } from "react";
+import { SettingRow } from "@/components/shell/page-layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { describeApiError } from "@/lib/api/errors";
@@ -14,7 +15,7 @@ import { LOCAL_FOLDER_NOTE, storageNameError, storageRenamePatch } from "@/lib/s
 import { PublicUrlCard } from "./public-url-card";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemSection } from "./system-section";
+import { SystemAlert, SystemSection } from "./system-section";
 import { TrashSettingsCard } from "./trash-settings-card";
 
 /** The files folder's name, and why fdrive cannot use it when it cannot. */
@@ -36,36 +37,36 @@ function StorageCard({ storage }: { storage: SystemStorage }) {
       title="Storage"
       description={LOCAL_FOLDER_NOTE}
       {...(storage.healthy ? {} : { actions: <Badge variant="destructive">Unavailable</Badge> })}
-      contentClassName="gap-4"
     >
-      {storage.healthy ? null : (
-        <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-          {storage.detail}
-        </p>
-      )}
-      <Field>
-        <FieldLabel htmlFor={field}>Name</FieldLabel>
-        <Input
-          id={field}
-          value={value}
-          maxLength={120}
-          disabled={update.isPending}
-          aria-invalid={error !== null}
-          onChange={(event) => setDraft(event.target.value)}
-        />
-        <FieldDescription>Shown under each username and in Finder.</FieldDescription>
-        {error === null ? null : <FieldError>{error}</FieldError>}
-      </Field>
-      {update.isError ? (
-        <p role="alert" className="text-sm text-destructive [overflow-wrap:anywhere]">
-          {describeApiError(update.error)}
-        </p>
-      ) : null}
-      <div className="flex justify-end">
-        <Button disabled={update.isPending || patch === null} onClick={save}>
-          {update.isPending ? "Saving…" : "Save name"}
-        </Button>
-      </div>
+      {storage.healthy ? null : <SystemAlert row>{storage.detail}</SystemAlert>}
+      <SettingRow
+        label="Name"
+        htmlFor={field}
+        description="Shown under each username and in Finder."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            id={field}
+            className="min-w-0 max-w-sm flex-1 basis-56 max-md:min-h-11"
+            value={value}
+            maxLength={120}
+            disabled={update.isPending}
+            aria-invalid={error !== null}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <Button
+            className="max-md:min-h-11"
+            disabled={update.isPending || patch === null}
+            onClick={save}
+          >
+            {update.isPending ? "Saving…" : "Save name"}
+          </Button>
+        </div>
+        {error === null ? null : <FieldError className="mt-1.5">{error}</FieldError>}
+        {update.isError ? (
+          <SystemAlert className="mt-1.5">{describeApiError(update.error)}</SystemAlert>
+        ) : null}
+      </SettingRow>
     </SystemSection>
   );
 }
@@ -77,7 +78,11 @@ function StorageSettings() {
     return <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />;
   }
   if (query.data === undefined) {
-    return <Skeleton className="h-40 w-full" />;
+    return (
+      <div className="border-border border-b px-3 py-2.5">
+        <Skeleton className="h-8 w-full max-w-md" />
+      </div>
+    );
   }
   return <StorageCard storage={query.data} />;
 }

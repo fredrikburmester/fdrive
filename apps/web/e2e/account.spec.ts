@@ -1,17 +1,156 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+
+/** The list of Settings sections (`SettingsNav` in `components/account/settings-nav.tsx`). */
+function settingsNav(page: Page): Locator {
+  return page.getByRole("navigation", { name: "Settings sections" });
+}
+
+/** The header's title: the open section on a wide screen, "Settings" over the list on a phone. */
+function title(page: Page, name: string): Locator {
+  return page.getByRole("heading", { level: 1, name, exact: true });
+}
+
+test("each Settings section opens at its own URL, and reload and Back keep their place", async ({
+  page,
+}) => {
+  await page.goto("/account");
+
+  // /account itself lands on the first section, with the list beside it.
+  await expect(title(page, "Appearance")).toBeVisible();
+  await expect(settingsNav(page).getByRole("link", { name: "Appearance" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "File list" })).toBeVisible();
+
+  const sections = [
+    ["Browsing", "browsing", page.getByRole("group", { name: "Row click" })],
+    ["Formats", "formats", page.getByRole("group", { name: "Sizes" })],
+    ["Password", "password", page.getByLabel("Current password")],
+    [
+      "Encryption",
+      "encryption",
+      page.getByRole("heading", { level: 2, name: "Encryption", exact: true }),
+    ],
+    ["API tokens", "tokens", page.getByRole("button", { name: "Create token" })],
+    ["Appearance", "appearance", page.getByRole("group", { name: "Theme" })],
+  ] as const;
+  for (const [name, path, content] of sections) {
+    const link = settingsNav(page).getByRole("link", { name, exact: true });
+    await link.click();
+    await expect(page).toHaveURL(new RegExp(`/account/${path}$`));
+    await expect(title(page, name)).toBeVisible();
+    await expect(link).toHaveAttribute("aria-current", "page");
+    await expect(content).toBeVisible();
+  }
+
+  // A section's URL opens that section directly, and survives a reload.
+  await page.goto("/account/formats");
+  await expect(title(page, "Formats")).toBeVisible();
+  await page.reload();
+  await expect(title(page, "Formats")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Dates" })).toBeVisible();
+
+  // Back returns to the section before, not out of Settings.
+  await settingsNav(page).getByRole("link", { name: "Password", exact: true }).click();
+  await expect(title(page, "Password")).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/account\/formats$/);
+  await expect(title(page, "Formats")).toBeVisible();
+
+  // The header's trail leads back to /account.
+  await page
+    .getByRole("navigation", { name: "breadcrumb" })
+    .getByRole("link", { name: "Settings", exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(title(page, "Appearance")).toBeVisible();
+});
+
+test("the theme chosen in Settings applies at once and survives a reload", async ({ page }) => {
+  await page.goto("/account/appearance");
+  const theme = page.getByRole("group", { name: "Theme" });
+  await expect(theme.getByRole("button", { name: "System" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+
+  await theme.getByRole("button", { name: "Dark" }).click();
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  await expect(theme.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Dark at any time of day.")).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  await expect(theme.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+
+  await theme.getByRole("button", { name: "Light" }).click();
+  await expect(page.locator("html")).not.toHaveClass(/\bdark\b/);
+  await expect(theme.getByRole("button", { name: "Light" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+});
+
+test("on a phone the section list is a screen of its own, and a section has a way back", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/account");
+
+  // The list alone, under a plain "Settings" title: no section shows with it.
+  await expect(title(page, "Settings")).toBeVisible();
+  for (const name of [
+    "Appearance",
+    "Browsing",
+    "Formats",
+    "Password",
+    "Encryption",
+    "API tokens",
+  ]) {
+    await expect(settingsNav(page).getByRole("link", { name, exact: true })).toBeVisible();
+  }
+  await expect(page.getByRole("group", { name: "Theme" })).toBeHidden();
+  await expect(page.getByRole("link", { name: "Back to Settings" })).toHaveCount(0);
+
+  // A section opens as its own page, without the list, and fits the screen.
+  await settingsNav(page).getByRole("link", { name: "Formats", exact: true }).click();
+  await expect(page).toHaveURL(/\/account\/formats$/);
+  await expect(title(page, "Formats")).toBeVisible();
+  await expect(page.getByRole("group", { name: "Sizes" })).toBeVisible();
+  await expect(settingsNav(page)).toBeHidden();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    ),
+  ).toBeLessThanOrEqual(1);
+
+  await page.getByRole("link", { name: "Back to Settings" }).click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(title(page, "Settings")).toBeVisible();
+  await expect(settingsNav(page).getByRole("link", { name: "Formats", exact: true })).toBeVisible();
+
+  // Appearance, the section a wide screen shows on /account, opens from the list here.
+  await settingsNav(page).getByRole("link", { name: "Appearance", exact: true }).click();
+  await expect(page).toHaveURL(/\/account\/appearance$/);
+  await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
+});
 
 test("alice creates an API token, sees it once, the list shows it, and can revoke it", async ({
   page,
 }, testInfo) => {
   await page.goto("/files");
 
-  // Reach /account through the sidebar footer menu, not by direct navigation,
-  // so this also proves the "Account" item is wired up.
+  // Reach Settings through the sidebar footer menu, not by direct navigation,
+  // so this also proves the "Settings" item is wired up.
   await page.getByRole("button", { name: "alice" }).click();
-  await page.getByRole("menuitem", { name: "Account" }).click();
+  await page.getByRole("menuitem", { name: "Settings" }).click();
   await expect(page).toHaveURL(/\/account$/);
+  await settingsNav(page).getByRole("link", { name: "API tokens", exact: true }).click();
+  await expect(page).toHaveURL(/\/account\/tokens$/);
 
-  await expect(page.getByText("API tokens", { exact: true })).toBeVisible();
+  await expect(title(page, "API tokens")).toBeVisible();
   await expect(page.getByText("No tokens yet.")).toBeVisible();
 
   const tokenName = `Playwright ${Date.now()}`;

@@ -252,6 +252,7 @@ export function OfficeSettingsCard({
     <SystemSection
       title={product}
       description="Open documents, spreadsheets, and presentations in your browser."
+      padded
       contentClassName="gap-4"
     >
       {query.isError ? (

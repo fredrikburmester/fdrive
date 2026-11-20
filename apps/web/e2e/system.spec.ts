@@ -138,12 +138,12 @@ test("alice (admin) sees the Thumbnails page's count and can rebuild via the fak
   await expect(page.getByText("Loading…")).toBeHidden({ timeout: 15_000 });
   await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
 
-  // The "Thumbnails" stat card: matched by its exact label so this hits neither
-  // the page's own "Thumbnails" heading nor the Status card's prose.
-  const thumbnailsCard = page
-    .locator('[data-slot="card"]')
+  // The "Thumbnails" stat: matched by its exact label so this hits neither
+  // the page's own "Thumbnails" heading nor the Status section's prose.
+  const thumbnailsStat = page
+    .locator('[data-slot="stat"]')
     .filter({ has: page.getByText("Thumbnails", { exact: true }) });
-  await expect(thumbnailsCard).toBeVisible();
+  await expect(thumbnailsStat).toBeVisible();
 
   await page.getByRole("button", { name: "Rebuild" }).click();
   const dialog = page.getByRole("dialog");

@@ -20,7 +20,7 @@ export default async function ShellLayout({ children }: { children: ReactNode })
           <SidebarInset className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto">
             {children}
           </SidebarInset>
-          {/* In the live activity dock, outside the page, so it stays open between folders. */}
+          {/* Outside the page, so it stays open between folders; the files toolbar's sparkle opens it. */}
           <ChatPanel />
         </ResizableSidebarProvider>
       </ShellRuntime>

@@ -3,14 +3,6 @@ import { baseName, extensionOf, joinPath, parentPath } from "@fdrive/core";
 import { pathFromFilesPathname, pathToHref } from "@/lib/files/path-url";
 import { parseSelectParam, revealTarget } from "@/lib/files/reveal";
 
-/** Starter prompts for an empty chat. */
-export const CHAT_SUGGESTIONS = [
-  "What are these files about?",
-  "Is this a duplicate of another file?",
-  "Can I remove these files?",
-  "Where should these go?",
-] as const;
-
 /** Where a cited path leads: the folder itself, or the parent folder with the file selected. */
 export function hrefForPath(path: string, kind: "file" | "dir" | "unknown" = "unknown"): string {
   const name = baseName(path);
@@ -101,7 +93,7 @@ export function proposalPaths(proposal: ChatActionProposal): string[] {
   }
 }
 
-/** What the chat is doing, for the panel header and the activity pill. */
+/** What the chat is doing, for the panel header and the toolbar button. */
 export function chatStatusLabel(state: ChatState): string | null {
   switch (state) {
     case "running":

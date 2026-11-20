@@ -130,7 +130,7 @@ test.describe("mobile layout (390x844 and 320px)", () => {
     expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
       false,
     );
-    await expect.poll(async () => (await row.boundingBox())?.height).toBe(56);
+    await expect.poll(async () => (await row.boundingBox())?.height).toBe(68);
     await removeSandbox(page, sandbox);
   });
 

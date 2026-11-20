@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * The expiry choices offered on the account page's "create token" dialog:
+ * The expiry choices offered on the settings page's "create token" dialog:
  * 30 days, 90 days, 365 days, or omitted entirely for a token that never
  * expires.
  */
@@ -31,7 +31,7 @@ export const ApiTokenAccess = z.object({
 export type ApiTokenAccess = z.infer<typeof ApiTokenAccess>;
 
 /**
- * One API token as listed on the account page. Never carries the secret
+ * One API token as listed on the settings page. Never carries the secret
  * itself, only `POST /api/v1/account/tokens` does that, and only once.
  */
 export const ApiTokenSummary = z.object({

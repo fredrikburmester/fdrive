@@ -2,8 +2,10 @@ import type { SystemImageSearchResponse } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
 
 async function checkHeader(page: Page, title: string, actions: string[]) {
-  const heading = page.getByRole("heading", { name: title, exact: true });
-  const header = heading.locator("../..");
+  // The page's name is the last step of the header's trail, and its heading.
+  await expect(page.getByRole("heading", { level: 1, name: title, exact: true })).toBeVisible();
+  // The bar under the header: the description, the caption and the actions.
+  const header = page.locator('[data-slot="page-bar"]');
   const updated = header.getByText(/^Last updated /);
   await expect(updated).toBeVisible();
   const bounds = await header.boundingBox();

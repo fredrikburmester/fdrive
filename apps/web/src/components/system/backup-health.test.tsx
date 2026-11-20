@@ -96,7 +96,9 @@ it("shows overdue and failed destinations separately from another full copy and 
   state.workerSeenAt = old;
   const act = vi.fn(async (work) => work());
   render(<BackupHealth data={state} busy={false} unlocked act={act} />);
-  expect(screen.getByText(/Last complete snapshot:/)).toBeTruthy();
+  // A detail row: the label on the left, when it was taken beside it.
+  const snapshot = screen.getByText("Last complete snapshot").closest('[data-slot="setting-row"]');
+  expect(snapshot?.textContent).toMatch(/hours ago$/);
   expect(screen.getByText(/Last full delivery:/)).toBeTruthy();
   expect(screen.getByText("Credential expired")).toBeTruthy();
   expect(screen.getByText("Delivery overdue by more than 15 minutes.")).toBeTruthy();
