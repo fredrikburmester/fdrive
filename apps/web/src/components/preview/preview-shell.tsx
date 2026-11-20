@@ -37,7 +37,7 @@ import { editHref } from "@/lib/editor/route";
 import { useEncryptedView } from "@/lib/encryption/listing";
 import { useDecryptedFile } from "@/lib/encryption/use-decrypted-file";
 import { isEditableTarget } from "@/lib/keyboard";
-import { apiClient, pathToHref, queryKeys, useTouchRecent, viewHref } from "@/lib/preview/deps";
+import { apiClient, queryKeys, returnHref, useTouchRecent, viewHref } from "@/lib/preview/deps";
 import { previewKindFor } from "@/lib/preview/kind";
 import { siblingNavigation } from "@/lib/preview/siblings";
 import { skeletonKindFor } from "@/lib/preview/skeleton";
@@ -49,6 +49,9 @@ const EDITABLE_KINDS = new Set(["text", "code", "markdown"]);
 
 export interface PreviewShellProps {
   readonly path: string;
+  /** The folder the file was opened from when that is above its own, from the route's `?from=`;
+   * Back returns there (see `returnHref`). */
+  readonly from?: string | null;
 }
 
 function capitalize(word: string): string {
@@ -172,7 +175,7 @@ function TopBarAction({
 /** A stable empty listing, so a folder still loading never re-runs its decryption. */
 const NO_ENTRIES: readonly FsEntry[] = [];
 
-function PreviewShellContent({ path }: PreviewShellProps) {
+function PreviewShellContent({ path, from = null }: PreviewShellProps) {
   const router = useRouter();
   const [infoOpen, setInfoOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -212,9 +215,11 @@ function PreviewShellContent({ path }: PreviewShellProps) {
     apiClient.downloadUrl(path),
   );
   const siblings = siblingNavigation(shownEntries ?? listQuery.data?.entries ?? [], path);
-  const backHref = pathToHref(parent);
-  const prevHref = siblings.prev !== null ? viewHref(siblings.prev) : undefined;
-  const nextHref = siblings.next !== null ? viewHref(siblings.next) : undefined;
+  // Back returns to the folder the file was opened from, which in a tree can be above its own,
+  // with the file selected there. Stepping through siblings and editing keep that folder.
+  const backHref = returnHref(path, from);
+  const prevHref = siblings.prev !== null ? viewHref(siblings.prev, from) : undefined;
+  const nextHref = siblings.next !== null ? viewHref(siblings.next, from) : undefined;
   const entry = encrypted ? shown : entryQuery.data;
   const isEditable = !encrypted && entry !== undefined && EDITABLE_KINDS.has(previewKindFor(entry));
 
@@ -234,22 +239,22 @@ function PreviewShellContent({ path }: PreviewShellProps) {
         return;
       }
       if (event.key === "ArrowLeft" && siblings.prev !== null) {
-        router.push(toRoute(viewHref(siblings.prev)));
+        router.push(toRoute(viewHref(siblings.prev, from)));
         return;
       }
       if (event.key === "ArrowRight" && siblings.next !== null) {
-        router.push(toRoute(viewHref(siblings.next)));
+        router.push(toRoute(viewHref(siblings.next, from)));
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "e" && isEditable) {
         event.preventDefault();
-        router.push(toRoute(editHref(path)));
+        router.push(toRoute(editHref(path, from)));
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [router, backHref, siblings.prev, siblings.next, isEditable, path, actionsOpen]);
+  }, [router, backHref, siblings.prev, siblings.next, isEditable, path, from, actionsOpen]);
 
   const decryptedUrl = decrypted.status === "ready" ? decrypted.url : null;
   const downloadUrl = encrypted ? (decryptedUrl ?? "") : apiClient.downloadUrl(path);
@@ -281,7 +286,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
 
           {isEditable && (
             <div className="hidden sm:flex">
-              <TopBarAction label="Edit" shortcut="⌘E" route={editHref(path)}>
+              <TopBarAction label="Edit" shortcut="⌘E" route={editHref(path, from)}>
                 <SquarePenIcon />
                 <span className="sr-only">Edit</span>
               </TopBarAction>
@@ -361,7 +366,7 @@ function PreviewShellContent({ path }: PreviewShellProps) {
               {isEditable && (
                 <DropdownMenuItem
                   className="min-h-11 gap-3 px-3"
-                  render={<Link href={toRoute(editHref(path))} />}
+                  render={<Link href={toRoute(editHref(path, from))} />}
                 >
                   <SquarePenIcon />
                   Edit
@@ -456,6 +461,6 @@ function PreviewShellContent({ path }: PreviewShellProps) {
  * (provided by `src/app/providers.tsx`), so its queries share the same
  * cache as the file browser's.
  */
-export function PreviewShell({ path }: PreviewShellProps) {
-  return <PreviewShellContent path={path} />;
+export function PreviewShell({ path, from = null }: PreviewShellProps) {
+  return <PreviewShellContent path={path} from={from} />;
 }

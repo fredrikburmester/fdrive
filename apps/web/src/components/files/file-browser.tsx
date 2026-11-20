@@ -521,7 +521,10 @@ export function FileBrowser({
       router.push(toRoute(officeHref(entry.path, "view")));
       return;
     }
-    router.push(toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path)));
+    // A tree shows files of folders below this one; the viewer's Back returns here.
+    router.push(
+      toRoute(entry.kind === "dir" ? pathToHref(entry.path) : viewHref(entry.path, path)),
+    );
   }
 
   function handleEntryClick(entry: FsEntry, modifiers: ClickModifierKeys) {
@@ -1036,7 +1039,7 @@ export function FileBrowser({
       case "quickLook": {
         const entry = displayEntries.find((candidate) => candidate.path === selection.focus);
         if (entry !== undefined) {
-          router.push(toRoute(viewHref(entry.path)));
+          router.push(toRoute(viewHref(entry.path, path)));
         }
         break;
       }

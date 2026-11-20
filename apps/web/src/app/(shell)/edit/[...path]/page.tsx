@@ -3,6 +3,7 @@ import { segmentsToPath } from "@/lib/editor/deps";
 
 interface EditPageProps {
   readonly params: Promise<{ path: string[] }>;
+  readonly searchParams: Promise<{ from?: string | string[] }>;
 }
 
 /**
@@ -10,9 +11,10 @@ interface EditPageProps {
  * back into a normalized fs path and hands off to the client
  * `EditorShell`, so the browser's back button and deep links both work.
  */
-export default async function EditPage({ params }: EditPageProps) {
+export default async function EditPage({ params, searchParams }: EditPageProps) {
   const { path: segments } = await params;
+  const { from } = await searchParams;
   const path = segmentsToPath(segments);
 
-  return <EditorShell key={path} path={path} />;
+  return <EditorShell key={path} path={path} from={typeof from === "string" ? from : null} />;
 }
