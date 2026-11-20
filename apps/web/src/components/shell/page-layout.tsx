@@ -172,7 +172,10 @@ export function SettingRow({
       {children !== undefined && children !== null ? (
         <div
           data-slot="setting-control"
-          className={cn("min-w-0 text-sm", align === "end" ? "flex-none" : "flex-[1_1_320px]")}
+          className={cn(
+            "min-w-0 text-sm",
+            align === "end" ? "max-w-full flex-none" : "flex-[1_1_320px]",
+          )}
         >
           {children}
         </div>

@@ -89,7 +89,7 @@ describe("PageSection", () => {
     expect(content.classList.contains("p-3")).toBe(true);
   });
 
-  it("is only a header row without content, description or actions", () => {
+  it("is only a heading without content, description or actions", () => {
     const { container } = render(<PageSection title="Usage" />);
 
     const section = slot(container, "page-section");
@@ -122,9 +122,29 @@ describe("SettingRow", () => {
     expect(screen.getByText("Shown to others.")).toBeDefined();
     const row = slot(container, "setting-row");
     expect(row.classList.contains("py-4")).toBe(true);
-    // Two columns by the room its section has, not by the window's width.
-    expect(row.className).toContain("@2xl:grid-cols-");
-    expect(row.className).not.toContain("md:grid-cols-");
+    // The label and the control wrap by the room the row has, not by the window's width.
+    expect(row.classList.contains("flex-wrap")).toBe(true);
+    expect(row.className).not.toMatch(/\b(sm|md|lg):/);
+    // An input shares the row with its label and fills its half.
+    const control = slot(container, "setting-control");
+    expect(within(control).getByRole("textbox")).toBeDefined();
+    expect(control.classList.contains("flex-none")).toBe(false);
+  });
+
+  it("puts a control with a size of its own at the far end of the row", () => {
+    const { container } = render(
+      <SettingRow label="Thumbnails" description="Previews for images." align="end">
+        <button type="button">Rebuild</button>
+      </SettingRow>,
+    );
+
+    const row = slot(container, "setting-row");
+    expect(row.classList.contains("justify-between")).toBe(true);
+    const control = slot(container, "setting-control");
+    expect(control.classList.contains("flex-none")).toBe(true);
+    expect(within(control).getByRole("button", { name: "Rebuild" })).toBeDefined();
+    // The label comes first, so the control is the row's last child.
+    expect(row.lastElementChild).toBe(control);
   });
 
   it("shows a read-only value beside a plain label", () => {
@@ -133,22 +153,42 @@ describe("SettingRow", () => {
     const row = slot(container, "setting-row");
     expect(row.querySelector("label")).toBeNull();
     expect(within(row).getByText("Version").tagName).toBe("P");
-    expect(within(row).getByText("0.7.1")).toBeDefined();
+    expect(within(slot(container, "setting-control")).getByText("0.7.1")).toBeDefined();
     expect(row.querySelectorAll("p")).toHaveLength(1);
+  });
+
+  it("is a label alone when it has no control or value", () => {
+    const { container } = render(<SettingRow label="Backups" description="Not set up." />);
+
+    const row = slot(container, "setting-row");
+    expect(within(row).getByText("Backups")).toBeDefined();
+    expect(within(row).getByText("Not set up.")).toBeDefined();
+    expect(container.querySelector('[data-slot="setting-control"]')).toBeNull();
+    expect(row.children).toHaveLength(1);
   });
 });
 
 describe("SettingActions", () => {
-  it("holds a form's buttons in the row that ends it", () => {
+  it("ends a form with its buttons at the far end, any error ahead of them", () => {
     const { container } = render(
-      <SettingActions className="border-t">
+      <SettingActions className="mt-2" aria-label="Save changes">
+        <p role="alert">Too short.</p>
+        <button type="button">Cancel</button>
         <button type="submit">Save</button>
       </SettingActions>,
     );
 
     const actions = slot(container, "setting-actions");
-    expect(within(actions).getByRole("button", { name: "Save" })).toBeDefined();
-    expect(actions.classList.contains("border-t")).toBe(true);
+    expect(actions.classList.contains("mt-2")).toBe(true);
+    expect(actions.getAttribute("aria-label")).toBe("Save changes");
+    expect(actions.classList.contains("justify-end")).toBe(true);
+    // Its children are the row's own, in the order given: the primary button is the last one.
+    expect(Array.from(actions.children, (child) => child.textContent)).toEqual([
+      "Too short.",
+      "Cancel",
+      "Save",
+    ]);
+    expect(within(actions).getByRole("button", { name: "Save" })).toBe(actions.lastElementChild);
   });
 });
 

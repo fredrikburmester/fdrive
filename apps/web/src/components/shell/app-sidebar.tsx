@@ -19,6 +19,8 @@ import type { Route } from "next";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTheme } from "next-themes";
+import { useState } from "react";
+import { AboutDialog } from "@/components/about/about-dialog";
 import { FavoritesSection } from "@/components/shell/favorites-section";
 import { FolderTree } from "@/components/shell/folder-tree";
 import { useShellMe } from "@/components/shell/page-header";
@@ -89,6 +91,8 @@ const TRASH_ROUTE = "/trash" as Route;
 // Settings keeps the `/account` URL it had while it was called Account.
 const SETTINGS_ROUTE = "/account" as Route;
 const STORAGE_ROUTE = "/storage" as Route;
+// An administrator's About is the last System area. Everyone else opens it as a sheet.
+const SYSTEM_ABOUT_ROUTE = "/system/about" as Route;
 
 export function AppSidebar() {
   const { data: me } = useShellMe();
@@ -97,161 +101,179 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { isMobile, openMobile, setOpenMobile, toggleSidebar } = useSidebar();
   useSidebarSwipe(isMobile, openMobile, setOpenMobile);
+  const [aboutOpen, setAboutOpen] = useState(false);
 
   const username = me?.identity.username;
 
   return (
-    <Sidebar className="border-sidebar-border">
-      {/* As tall as the page header beside it, so the two line up. */}
-      <SidebarHeader className="h-12 flex-row items-center gap-1.5 px-3 py-0">
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Close sidebar"
-          className="rounded-sm text-sidebar-foreground/70"
-          onClick={toggleSidebar}
-        >
-          <PanelLeftIcon />
-        </Button>
-        {/* The wordmark returns to the root of Files, like a site logo. */}
-        <Link
-          href={FILES_ROUTE}
-          className="rounded-sm text-[24px] leading-none font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
-        >
-          fdrive
-        </Link>
-      </SidebarHeader>
-      <SidebarContent className="gap-4 pt-1 pb-3">
-        <SidebarGroup className="py-0">
-          <SidebarSectionLabel>Locations</SidebarSectionLabel>
-          <SidebarMenu className="mt-0.5">
-            <FolderTree />
-            <SharedWithMeItem />
-          </SidebarMenu>
-        </SidebarGroup>
-        <FavoritesSection />
-        <SidebarGroup className="py-0">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className={SIDEBAR_ROW}
-                isActive={pathname === "/photos"}
-                render={<Link href={"/photos" as Route} />}
-              >
-                <Images />
-                <span>Photos</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className={SIDEBAR_ROW}
-                isActive={pathname?.startsWith("/activity")}
-                render={<Link href={"/activity" as Route} />}
-              >
-                <Clock3 />
-                <span>My activity</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          </SidebarMenu>
-        </SidebarGroup>
-        <TagsSection />
-        <SavedSearchesSection />
-        <RecentsSection />
-        {/* Shares, Trash and, for administrators, System sit at the bottom of the navigation. */}
-        <SidebarGroup className="py-0">
-          <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className={SIDEBAR_ROW}
-                isActive={pathname === "/shares"}
-                render={<Link href={"/shares" as Route} />}
-              >
-                <Link2 />
-                <span>Shares</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                className={SIDEBAR_ROW}
-                isActive={isTrashRoute(pathname)}
-                render={<Link href={TRASH_ROUTE} />}
-              >
-                <Trash2 />
-                <span>Trash</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            {me?.isAdmin ? <SystemNav /> : null}
-          </SidebarMenu>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            render={
-              <SidebarMenuButton size="lg">
-                <Avatar className="size-6">
-                  <AvatarFallback>{username ? avatarInitials(username) : "?"}</AvatarFallback>
-                </Avatar>
-                <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
-                  <span className="truncate text-sm font-medium">{username ?? "..."}</span>
-                  <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
-                    {me && <HardDrive aria-hidden className="size-3.5 shrink-0" />}
-                    <span className="truncate">{me?.storageName ?? ""}</span>
-                  </span>
-                </div>
-                <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
-              </SidebarMenuButton>
-            }
-          />
-          <DropdownMenuContent align="start" className="w-56">
-            <DropdownMenuGroup>
-              <DropdownMenuLabel>{username ?? "Account"}</DropdownMenuLabel>
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger>
-                  <Monitor />
-                  Appearance
-                </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent>
-                  <DropdownMenuRadioGroup
-                    value={theme ?? "system"}
-                    onValueChange={(value) => setTheme(value)}
+    <>
+      <Sidebar className="border-sidebar-border">
+        {/* As tall as the page header beside it, so the two line up. */}
+        <SidebarHeader className="h-12 flex-row items-center gap-1.5 px-3 py-0">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Close sidebar"
+            className="rounded-sm text-sidebar-foreground/70"
+            onClick={toggleSidebar}
+          >
+            <PanelLeftIcon />
+          </Button>
+          {/* The wordmark returns to the root of Files, like a site logo. */}
+          <Link
+            href={FILES_ROUTE}
+            className="rounded-sm text-[24px] leading-none font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+          >
+            fdrive
+          </Link>
+        </SidebarHeader>
+        <SidebarContent className="gap-4 pt-1 pb-3">
+          <SidebarGroup className="py-0">
+            <SidebarSectionLabel>Locations</SidebarSectionLabel>
+            <SidebarMenu className="mt-0.5">
+              <FolderTree />
+              <SharedWithMeItem />
+            </SidebarMenu>
+          </SidebarGroup>
+          <FavoritesSection />
+          <SidebarGroup className="py-0">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className={SIDEBAR_ROW}
+                  isActive={pathname === "/photos"}
+                  render={<Link href={"/photos" as Route} />}
+                >
+                  <Images />
+                  <span>Photos</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className={SIDEBAR_ROW}
+                  isActive={pathname?.startsWith("/activity")}
+                  render={<Link href={"/activity" as Route} />}
+                >
+                  <Clock3 />
+                  <span>My activity</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroup>
+          <TagsSection />
+          <SavedSearchesSection />
+          <RecentsSection />
+          {/* Shares, Trash and, for administrators, System sit at the bottom of the navigation. */}
+          <SidebarGroup className="py-0">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className={SIDEBAR_ROW}
+                  isActive={pathname === "/shares"}
+                  render={<Link href={"/shares" as Route} />}
+                >
+                  <Link2 />
+                  <span>Shares</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className={SIDEBAR_ROW}
+                  isActive={isTrashRoute(pathname)}
+                  render={<Link href={TRASH_ROUTE} />}
+                >
+                  <Trash2 />
+                  <span>Trash</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              {me?.isAdmin ? <SystemNav /> : null}
+            </SidebarMenu>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <SidebarMenuButton size="lg">
+                  <Avatar className="size-6">
+                    <AvatarFallback>{username ? avatarInitials(username) : "?"}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
+                    <span className="truncate text-sm font-medium">{username ?? "..."}</span>
+                    <span className="flex items-center gap-1 truncate text-xs text-muted-foreground">
+                      {me && <HardDrive aria-hidden className="size-3.5 shrink-0" />}
+                      <span className="truncate">{me?.storageName ?? ""}</span>
+                    </span>
+                  </div>
+                  <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
+                </SidebarMenuButton>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{username ?? "Account"}</DropdownMenuLabel>
+                <DropdownMenuSub>
+                  <DropdownMenuSubTrigger>
+                    <Monitor />
+                    Appearance
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent>
+                    <DropdownMenuRadioGroup
+                      value={theme ?? "system"}
+                      onValueChange={(value) => setTheme(value)}
+                    >
+                      {THEME_OPTIONS.map(({ value, label, Icon }) => (
+                        <DropdownMenuRadioItem key={value} value={value}>
+                          <Icon />
+                          {label}
+                        </DropdownMenuRadioItem>
+                      ))}
+                    </DropdownMenuRadioGroup>
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem render={<Link href={SETTINGS_ROUTE} />}>
+                  <Settings />
+                  Settings
+                </DropdownMenuItem>
+                <DropdownMenuItem render={<Link href={STORAGE_ROUTE} />}>
+                  <HardDrive />
+                  Storage
+                </DropdownMenuItem>
+                {me?.isAdmin ? (
+                  <DropdownMenuItem render={<Link href={SYSTEM_ABOUT_ROUTE} />}>
+                    <Info />
+                    About
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem
+                    onClick={() => {
+                      // On a phone the sidebar is itself a sheet: it steps aside for this one.
+                      setOpenMobile(false);
+                      setAboutOpen(true);
+                    }}
                   >
-                    {THEME_OPTIONS.map(({ value, label, Icon }) => (
-                      <DropdownMenuRadioItem key={value} value={value}>
-                        <Icon />
-                        {label}
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem render={<Link href={SETTINGS_ROUTE} />}>
-                <Settings />
-                Settings
-              </DropdownMenuItem>
-              <DropdownMenuItem render={<Link href={STORAGE_ROUTE} />}>
-                <HardDrive />
-                Storage
-              </DropdownMenuItem>
-              <DropdownMenuItem render={<Link href={"/about" as Route} />}>
-                <Info />
-                About
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuGroup>
-              <DropdownMenuItem onClick={() => logout.mutate()}>
-                <LogOut />
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </SidebarFooter>
-      <SidebarResizeHandle />
-    </Sidebar>
+                    <Info />
+                    About
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuGroup>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={() => logout.mutate()}>
+                  <LogOut />
+                  Sign out
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SidebarFooter>
+        <SidebarResizeHandle />
+      </Sidebar>
+      {/* Beside the sidebar, not inside it: a phone unmounts the sidebar's content as it closes. */}
+      <AboutDialog open={aboutOpen} onOpenChange={setAboutOpen} />
+    </>
   );
 }

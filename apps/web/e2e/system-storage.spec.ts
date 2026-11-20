@@ -1,11 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
 import { dismissActivityPanel } from "./support/activity.js";
 
-/** The files folder's section on System > General. */
+/** The General sheet, which holds the files folder's rows among the installation's settings. */
 function storageCard(page: Page) {
-  return page
-    .locator('[data-slot="page-section"]')
-    .filter({ hasText: "Folder on this server, set by FDRIVE_STORAGE_ROOT." });
+  return page.getByRole("region", { name: "General" });
 }
 
 test("alice (admin) finds the files folder and its Trash on System > General, with nothing to add or remove", async ({
@@ -15,9 +13,11 @@ test("alice (admin) finds the files folder and its Trash on System > General, wi
   await dismissActivityPanel(page);
   const card = storageCard(page);
 
-  await expect(card.getByText("Storage", { exact: true })).toBeVisible();
-  await expect(card.getByLabel("Name", { exact: true })).toBeVisible();
-  // The e2e folder is healthy, so no health line competes for attention.
+  await expect(card.getByText("Files folder", { exact: true })).toBeVisible();
+  await expect(card.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
+  await expect(card.getByLabel("Storage name", { exact: true })).toBeVisible();
+  // The e2e folder is healthy: it says so in a word, and no health line competes for attention.
+  await expect(card.getByText("Healthy", { exact: true })).toBeVisible();
   await expect(card.getByText("Unavailable")).toHaveCount(0);
   await expect(card.getByRole("alert")).toHaveCount(0);
   // Trash is always on: its one setting is how long it keeps items.
@@ -27,8 +27,8 @@ test("alice (admin) finds the files folder and its Trash on System > General, wi
     await expect(page.getByRole("button", { name })).toHaveCount(0);
   }
   // Only the name changes: no type, no address.
-  await expect(card.getByLabel("Address")).toHaveCount(0);
-  await expect(card.getByLabel("Type")).toHaveCount(0);
+  await expect(card.getByLabel("Address", { exact: true })).toHaveCount(0);
+  await expect(card.getByLabel("Type", { exact: true })).toHaveCount(0);
 });
 
 test("alice (admin) renames the files folder on System > General and the name sticks", async ({
@@ -37,7 +37,7 @@ test("alice (admin) renames the files folder on System > General and the name st
   await page.goto("/system/general");
   await dismissActivityPanel(page);
   const card = storageCard(page);
-  const name = card.getByLabel("Name", { exact: true });
+  const name = card.getByLabel("Storage name", { exact: true });
   const save = card.getByRole("button", { name: "Save name" });
   await expect(name).not.toHaveValue("");
   const originalName = await name.inputValue();
@@ -49,13 +49,15 @@ test("alice (admin) renames the files folder on System > General and the name st
 
     await name.fill("  Home server  ");
     // Dispatched: the Activity panel, fixed bottom-right, can reappear over
-    // the card's bottom-right button after earlier specs left jobs in it.
+    // a button of the sheet after earlier specs left jobs in it.
     await save.dispatchEvent("click");
     await expect(name).toHaveValue("Home server");
     await expect(save).toBeDisabled();
 
     await page.reload();
-    await expect(storageCard(page).getByLabel("Name", { exact: true })).toHaveValue("Home server");
+    await expect(storageCard(page).getByLabel("Storage name", { exact: true })).toHaveValue(
+      "Home server",
+    );
     // The sidebar names the signed-in login's storage beneath the username.
     await page.goto("/account");
     await expect(
@@ -66,7 +68,7 @@ test("alice (admin) renames the files folder on System > General and the name st
     // repeated local runs against the same environment.
     await page.goto("/system/general");
     await dismissActivityPanel(page);
-    const restore = storageCard(page).getByLabel("Name", { exact: true });
+    const restore = storageCard(page).getByLabel("Storage name", { exact: true });
     await expect(restore).not.toHaveValue("");
     if ((await restore.inputValue()) !== originalName) {
       await restore.fill(originalName);

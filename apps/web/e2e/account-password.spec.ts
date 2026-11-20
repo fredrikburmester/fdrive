@@ -6,9 +6,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const NEW_PASSWORD = "password-user-new-password";
 
-/** Settings > Password: the section with the three password fields. */
+/** Settings > Password: the sheet with the three password fields. */
 function passwordSection(page: Page): Locator {
-  return page.locator('[data-slot="page-section"]').filter({ hasText: "Current password" });
+  return page.getByRole("region", { name: "Password", exact: true });
 }
 
 /** Fills the Password section's form and submits it. */

@@ -79,6 +79,24 @@ describe("SegmentedControl", () => {
     expect(screen.getByRole("button", { name: "Lunch" }).querySelector("svg")).toBeNull();
     expect(screen.getByRole("button", { name: "Dinner" }).querySelector("svg")).not.toBeNull();
   });
+
+  it("takes a class for where it sits, and wraps its segments where there is no room", () => {
+    render(
+      <SegmentedControl
+        label="Meal"
+        value="lunch"
+        options={MEALS}
+        labels={MEAL_LABELS}
+        onChange={vi.fn()}
+        className="self-start"
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "Meal" });
+    expect(group.classList.contains("self-start")).toBe(true);
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.classList.contains("max-w-full")).toBe(true);
+  });
 });
 
 describe("ChoiceRow", () => {
@@ -98,7 +116,15 @@ describe("ChoiceRow", () => {
     const row = container.querySelector('[data-slot="setting-row"]') as HTMLElement;
     expect(within(row).getByText("Meal")).toBeDefined();
     expect(within(row).getByText("Eaten at noon.")).toBeDefined();
-    fireEvent.click(within(row).getByRole("button", { name: "Breakfast" }));
+    // The segments sit at the row's far end, named after the setting.
+    const control = row.querySelector('[data-slot="setting-control"]') as HTMLElement;
+    expect(control.classList.contains("flex-none")).toBe(true);
+    expect(row.lastElementChild).toBe(control);
+    const group = within(control).getByRole("group", { name: "Meal" });
+    expect(within(group).getByRole("button", { name: "Lunch" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    fireEvent.click(within(group).getByRole("button", { name: "Breakfast" }));
     expect(onChange).toHaveBeenCalledWith("breakfast");
   });
 });

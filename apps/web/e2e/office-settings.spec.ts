@@ -35,14 +35,15 @@ test("Office onboarding saves and resumes its choice before entering files", asy
     expect(saved.configuration.enabled).toBe(true);
     await page.getByRole("button", { name: "Finish setup" }).click();
     await expect(page).toHaveURL(/\/files$/);
-    await page.goto("/system/features");
-    await expect(page.getByRole("switch", { name: "Enable ONLYOFFICE" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    await page.getByRole("switch", { name: "Enable ONLYOFFICE" }).click();
+    // Office is turned off where it is administered: the switch in the Office sheet's header,
+    // which saves at once and leaves the sheet saying what turning it on does.
+    await page.goto("/system/office");
     await dismissActivityPanel(page);
-    await page.getByRole("button", { name: "Save ONLYOFFICE settings" }).click();
+    const sheet = page.getByRole("region", { name: "Office", exact: true });
+    const enable = sheet.getByRole("switch", { name: "Enable ONLYOFFICE" });
+    await expect(enable).toHaveAttribute("aria-checked", "true");
+    await expect(sheet.getByText("On", { exact: true })).toBeVisible();
+    await enable.click();
     await expect
       .poll(
         async () =>
@@ -50,6 +51,9 @@ test("Office onboarding saves and resumes its choice before entering files", asy
             .enabled,
       )
       .toBe(false);
+    await expect(enable).toHaveAttribute("aria-checked", "false");
+    await expect(sheet.getByText("Office is off")).toBeVisible();
+    await expect(sheet.getByRole("switch", { name: "Allow document editing" })).toHaveCount(0);
   } finally {
     const currentOffice = (await (
       await page.request.get(officeUrl)
@@ -88,7 +92,7 @@ test("System > Office chooses editors from fdrive's users", async ({ page }) => 
     ((await (await page.request.get(officeUrl)).json()) as SystemOfficeResponse).configuration;
   const office = await read();
   try {
-    // The page offers its settings while Office is on.
+    // The sheet offers its settings while Office is on.
     expect(
       (
         await page.request.put(officeUrl, {
@@ -99,21 +103,28 @@ test("System > Office chooses editors from fdrive's users", async ({ page }) => 
     ).toBe(true);
     await page.goto("/system/office");
     await dismissActivityPanel(page);
-    await page.getByRole("button", { name: "Settings" }).click();
-    await page.getByRole("switch", { name: "Allow document editing" }).click();
+    const sheet = page.getByRole("region", { name: "Office", exact: true });
+    const save = sheet.getByRole("button", { name: "Save", exact: true });
+    await expect(sheet.getByRole("checkbox")).toHaveCount(0);
+    await sheet.getByRole("switch", { name: "Allow document editing" }).click();
     // Every user is offered, and nothing can be saved until one is chosen.
+    const editors = sheet.getByRole("group", { name: "Users allowed to edit" });
     for (const username of ["alice", "bob", "carol"])
-      await expect(page.getByRole("checkbox", { name: username, exact: true })).toBeVisible();
+      await expect(editors.getByRole("checkbox", { name: username, exact: true })).toBeVisible();
     await expect(
-      page.getByText("When editing is enabled, choose at least one user."),
+      sheet.getByText("When editing is enabled, choose at least one user."),
     ).toBeVisible();
-    await page.getByRole("checkbox", { name: "bob", exact: true }).click();
-    await page.getByRole("checkbox", { name: "carol", exact: true }).click();
-    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(save).toBeDisabled();
+    await editors.getByRole("checkbox", { name: "bob", exact: true }).click();
+    await editors.getByRole("checkbox", { name: "carol", exact: true }).click();
+    await save.click();
     await expect.poll(async () => (await read()).editorUsernames).toEqual(["bob", "carol"]);
-    // The sheet closes and the page lists the editors.
-    await expect(page.getByRole("checkbox")).toHaveCount(0);
-    await expect(page.getByText("carol", { exact: true })).toBeVisible();
+    // The rows now show what was saved, with nothing left to save.
+    await expect(page.getByText("ONLYOFFICE settings saved.")).toBeVisible();
+    await expect(save).toBeDisabled();
+    await expect(editors.getByRole("checkbox", { name: "carol", exact: true })).toBeChecked();
+    await expect(editors.getByRole("checkbox", { name: "bob", exact: true })).toBeChecked();
+    await expect(editors.getByRole("checkbox", { name: "alice", exact: true })).not.toBeChecked();
   } finally {
     const current = await read();
     expect(

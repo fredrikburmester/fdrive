@@ -21,21 +21,45 @@ describe("SystemErrorState", () => {
     expect(screen.getByText("Something went wrong. Please try again.")).toBeTruthy();
   });
 
-  it("is one flat row on a page and a card in the setup walkthrough", () => {
-    const page = render(<SystemErrorState error={new Error("boom")} onRetry={vi.fn()} />);
-    expect(page.container.querySelector('[data-slot="system-error"]')).not.toBeNull();
-    expect(page.container.querySelector('[data-slot="card"]')).toBeNull();
-    expect(screen.getByRole("alert").textContent).toContain("Couldn't load this page");
-    page.unmount();
+  it("says what failed in the destructive colour, with no card or box around it", () => {
+    const { container } = render(<SystemErrorState error={new Error("boom")} onRetry={vi.fn()} />);
 
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("Couldn't load this page");
+    expect(alert.textContent).toContain("boom");
+    expect(alert.className).toContain("text-destructive");
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    expect(container.querySelector('[data-slot="alert"]')).toBeNull();
+    const state = container.querySelector('[data-slot="system-error"]') as HTMLElement;
+    expect(state.className).not.toContain("border");
+  });
+
+  it("stands as a row among setting rows when asked to, and names the setting that failed", () => {
+    const { container } = render(
+      <SystemErrorState
+        row
+        title="Couldn't load the server address"
+        error={new Error("boom")}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    const state = container.querySelector('[data-slot="system-error"]') as HTMLElement;
+    expect(state.className).toContain("border-t");
+    expect(screen.getByRole("alert").textContent).toContain("Couldn't load the server address");
+    expect(screen.queryByText("Couldn't load this page")).toBeNull();
+  });
+
+  it("stays flat inside the setup walkthrough's cards, and still retries", () => {
     const onRetry = vi.fn();
-    const card = render(
+    const { container } = render(
       <SystemCardSurface>
         <SystemErrorState error={new Error("boom")} onRetry={onRetry} />
       </SystemCardSurface>,
     );
-    expect(card.container.querySelector('[data-slot="card"]')).not.toBeNull();
-    expect(card.container.querySelector('[data-slot="system-error"]')).toBeNull();
+
+    expect(container.querySelector('[data-slot="card"]')).toBeNull();
+    expect(container.querySelector('[data-slot="system-error"]')).not.toBeNull();
     expect(screen.getByText("boom")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);

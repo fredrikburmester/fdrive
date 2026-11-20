@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { SettingRow } from "@/components/shell/page-layout";
-import { Badge } from "@/components/ui/badge";
+import { Code, type Fact, FactList } from "@/components/shell/sheet-data";
+import { StatusBadge } from "@/components/shell/status";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,7 +14,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldLabel } from "@/components/ui/field";
 import { Switch } from "@/components/ui/switch";
 import {
   useClearImageSearch,
@@ -26,10 +26,10 @@ import { sidecarStatus } from "@/lib/system/status";
 import { LogSheet } from "./log-sheet";
 import { MaintenanceProgress } from "./maintenance-progress";
 import { StatGrid } from "./stat-grid";
-import { StatusBadge } from "./status-badge";
+import { StatusBadge as SidecarBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemLine, SystemNote, SystemSection } from "./system-section";
+import { SystemLine, SystemSection } from "./system-section";
 
 /** Admin controls for image-content (thumbnail embedding) search maintenance. */
 export function ImageSearchPage() {
@@ -87,32 +87,57 @@ export function ImageSearchPage() {
     });
   }
 
+  const modelFacts: Fact[] = [];
+  if (data?.model !== undefined) modelFacts.push({ label: "Model", value: data.model });
+  if (data?.dim !== undefined) {
+    modelFacts.push({ label: "Dimensions", value: data.dim.toLocaleString() });
+  }
+  modelFacts.push({ label: "Embedded with", value: data?.embeddedModel ?? "None yet" });
+
   return (
     <SystemPage
       title="Image search"
       description="Search images by what they show, not just their name."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="imageSearch"
+      badges={
+        data === undefined || error !== null ? null : (
+          <>
+            <SidecarBadge status={status} />
+            {data.model !== undefined ? <StatusBadge>{data.model}</StatusBadge> : null}
+            {modelMismatch ? <StatusBadge tone="warning">Model mismatch</StatusBadge> : null}
+          </>
+        )
+      }
       actions={
         <>
+          <LogSheet subsystem="image-search" />
           <Button
             type="button"
-            variant="outline"
-            size="sm"
-            disabled={unavailable || busy}
-            onClick={() => setClearOpen(true)}
-          >
-            Clear embeddings
-          </Button>
-          <Button
-            type="button"
-            size="sm"
+            size="lg"
             disabled={unavailable || busy}
             onClick={() => setRebuildOpen(true)}
           >
             Rebuild
           </Button>
-          <LogSheet subsystem="image-search" />
+        </>
+      }
+      footer={
+        <>
+          <p className="min-w-0 flex-[1_1_16rem] text-muted-foreground">
+            Clearing removes every image embedding. Your files, thumbnails and text search are not
+            touched.
+          </p>
+          <Button
+            type="button"
+            variant="destructive"
+            size="lg"
+            className="ml-auto sheet:px-2"
+            disabled={unavailable || busy}
+            onClick={() => setClearOpen(true)}
+          >
+            Clear embeddings
+          </Button>
         </>
       }
     >
@@ -122,59 +147,35 @@ export function ImageSearchPage() {
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Status">
-            <SettingRow
-              label="Image search model"
-              description={
-                status === "loading"
-                  ? "The image search model is loading."
-                  : status === "ok"
-                    ? `Reachable. Model ${data.model ?? "unknown"}, dimension ${data.dim ?? "unknown"}.`
-                    : status === "unreachable"
-                      ? "The image search model is unreachable."
-                      : "Not configured: set FDRIVE_ML_URL."
-              }
-            >
-              <StatusBadge status={status} />
-            </SettingRow>
-            <MaintenanceProgress title="Image embedding rebuild" job={data.rebuild} />
-            <MaintenanceProgress title="Image embedding clear" job={data.clear} />
-            <SystemNote>
-              <p>
-                Image search matches a thumbnail's contents to a text query using a SigLIP 2
-                embedding sidecar. Rebuild fills missing embeddings for photos with a thumbnail.
-                Force rebuild replaces embeddings written by a different model. Clear removes every
-                embedding. Original files, thumbnails, and text search data stay unchanged.
+          <MaintenanceProgress title="Image embedding rebuild" job={data.rebuild} />
+          <MaintenanceProgress title="Image embedding clear" job={data.clear} />
+          <StatGrid
+            stats={[{ label: "Embedded thumbnails", value: data.embedded.toLocaleString() }]}
+          />
+          <SystemSection
+            title="Embeddings"
+            description={
+              status === "loading" ? (
+                "The image search model is loading."
+              ) : status === "unreachable" ? (
+                "The image search model is unreachable."
+              ) : status === "not_configured" ? (
+                <>
+                  Not configured: set <Code>FDRIVE_ML_URL</Code>.
+                </>
+              ) : (
+                "Each thumbnail becomes a vector, so a search in words can match what a picture shows."
+              )
+            }
+            padded
+          >
+            <FactList facts={modelFacts} />
+            {modelMismatch ? (
+              <p className="max-w-prose text-warning">
+                The model is now {data.model}. Rebuild with Replace rows from other models turned on
+                to re-embed these thumbnails.
               </p>
-            </SystemNote>
-          </SystemSection>
-          <SystemSection title="Embeddings">
-            <StatGrid
-              stats={[
-                { label: "Embedded thumbnails", value: data.embedded.toLocaleString() },
-                {
-                  label: "Embedding model",
-                  value: (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <span className="min-w-0">{data.embeddedModel ?? "None yet"}</span>
-                      {modelMismatch ? (
-                        <Badge
-                          variant="destructive"
-                          className="h-auto min-h-5 max-w-full whitespace-normal"
-                        >
-                          Model mismatch
-                        </Badge>
-                      ) : null}
-                    </span>
-                  ),
-                  ...(modelMismatch
-                    ? {
-                        hint: `The sidecar now runs ${data.model}. Force rebuild to replace these rows.`,
-                      }
-                    : {}),
-                },
-              ]}
-            />
+            ) : null}
           </SystemSection>
         </>
       )}
@@ -187,21 +188,29 @@ export function ImageSearchPage() {
               not touched.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex flex-col gap-4 py-2">
-            <Field orientation="horizontal">
-              <FieldLabel htmlFor="image-search-force">Replace rows from other models</FieldLabel>
-              <Switch id="image-search-force" checked={force} onCheckedChange={setForce} />
-            </Field>
-            <FieldDescription>
-              Off fills missing embeddings only; on also re-embeds rows written by a different
-              model.
-            </FieldDescription>
-          </div>
+          <SettingRow
+            label="Replace rows from other models"
+            description="Off fills missing embeddings only. On also re-embeds rows written by a different model."
+            htmlFor="image-search-force"
+            align="end"
+          >
+            <Switch id="image-search-force" checked={force} onCheckedChange={setForce} />
+          </SettingRow>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setRebuildOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              className="max-md:min-h-11"
+              onClick={() => setRebuildOpen(false)}
+            >
               Cancel
             </Button>
-            <Button type="button" disabled={unavailable || busy} onClick={handleRebuildConfirm}>
+            <Button
+              type="button"
+              className="max-md:min-h-11"
+              disabled={unavailable || busy}
+              onClick={handleRebuildConfirm}
+            >
               Rebuild
             </Button>
           </DialogFooter>
@@ -217,12 +226,18 @@ export function ImageSearchPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setClearOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              className="max-md:min-h-11"
+              onClick={() => setClearOpen(false)}
+            >
               Cancel
             </Button>
             <Button
               type="button"
               variant="destructive"
+              className="max-md:min-h-11"
               disabled={unavailable || busy}
               onClick={handleClearConfirm}
             >

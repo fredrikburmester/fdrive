@@ -18,9 +18,8 @@ test("turns encryption on, keeps names and files encrypted on the server, and op
 
   // Settings > Encryption: a password, then the recovery key pasted back.
   await page.goto("/account/encryption");
-  const section = page
-    .locator('[data-slot="page-section"]')
-    .filter({ hasText: "Encryption password" });
+  const section = page.getByRole("region", { name: "Encryption", exact: true });
+  await expect(section.getByText("Off", { exact: true })).toBeVisible();
   await section.getByLabel("Encryption password", { exact: true }).fill(ENCRYPTION_PASSWORD);
   await section.getByLabel("Confirm encryption password").fill(ENCRYPTION_PASSWORD);
   await section.getByLabel("Sign-in password").fill(password);
@@ -33,6 +32,8 @@ test("turns encryption on, keeps names and files encrypted on the server, and op
   await expect(page.getByRole("button", { name: "Lock this browser" })).toBeVisible({
     timeout: 30_000,
   });
+  await expect(section.getByText("On", { exact: true })).toBeVisible();
+  await expect(section.getByText("Unlocked in this browser")).toBeVisible();
 
   // A new encrypted folder, and a file uploaded into it.
   await page.goto("/files");

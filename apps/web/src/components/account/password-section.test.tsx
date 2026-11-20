@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiClientError, type MeResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 
@@ -42,8 +42,13 @@ describe("PasswordSection", () => {
     mocks.me = makeMe({ identity: makeIdentity({ id: "two", username: "bob" }) });
     render(<PasswordSection />);
 
-    expect(screen.getByRole("heading", { level: 2, name: "Password" })).toBeTruthy();
-    expect(screen.getByText(/The password bob signs in with/)).toBeTruthy();
+    // The section is its own sheet, and its name is the page's heading.
+    const sheet = screen.getByRole("region", { name: "Password" });
+    expect(within(sheet).getByRole("heading", { level: 1, name: "Password" })).toBeTruthy();
+    expect(within(sheet).getByText(/The password bob signs in with/)).toBeTruthy();
+    // The form's one button changes the password.
+    expect(within(sheet).getAllByRole("button")).toHaveLength(1);
+    expect(within(sheet).getByRole("button", { name: "Change password" })).toBeTruthy();
   });
 
   it("says in one line what each field is for", () => {
@@ -118,6 +123,10 @@ describe("PasswordSection", () => {
     );
     render(<PasswordSection />);
 
-    expect(screen.getByText("The current password is not right.")).toBeTruthy();
+    // The error stands in the row that ends the form, ahead of its button.
+    const error = screen.getByText("The current password is not right.");
+    const actions = error.closest('[data-slot="setting-actions"]') as HTMLElement;
+    expect(actions.lastElementChild).toBe(screen.getByRole("button", { name: "Change password" }));
+    expect(actions.firstElementChild?.contains(error)).toBe(true);
   });
 });

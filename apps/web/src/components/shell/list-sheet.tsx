@@ -212,7 +212,7 @@ export interface DetailSheetProps extends Omit<ComponentProps<"section">, "title
   badges?: ReactNode;
   /** Right of the title: the sheet's buttons, the one primary button last. */
   actions?: ReactNode;
-  /** Closes a sheet that is docked beside a table or a file list. Adds the close button. */
+  /** Closes a sheet that is docked beside a table. Adds the close button in its corner. */
   onClose?: () => void;
   /**
    * The last row, pushed to the bottom: a note on the left, and at the far end the destructive
@@ -245,25 +245,43 @@ export function DetailSheet({
   ...props
 }: DetailSheetProps) {
   const id = useId();
-  const hasActions = (actions !== undefined && actions !== null) || onClose !== undefined;
+  const hasActions = actions !== undefined && actions !== null;
+  const closable = onClose !== undefined;
   return (
     <section
       data-slot="detail-sheet"
       data-width={width}
       aria-labelledby={`${id}-title`}
       className={cn(
-        "@container flex min-w-0 flex-1 flex-col gap-6 border-border bg-panel px-4 py-5 md:border-l md:px-8 md:py-7",
-        // Docked: its own column that stays under the page header and scrolls by itself. On a
-        // phone it covers the page, and its close button is the way back.
-        width === "docked" &&
-          "max-md:fixed max-md:inset-0 max-md:z-40 max-md:overflow-y-auto md:sticky md:top-12 md:h-[calc(100svh-3rem)] md:w-[460px] md:max-w-[50%] md:flex-none md:self-start md:overflow-y-auto md:px-6",
+        "@container relative flex min-w-0 flex-1 flex-col gap-6 border-border bg-panel px-4 py-5 md:border-l md:px-8 md:py-7",
+        // Docked, by the room there is. Wide: its own column that stays under the page header
+        // and scrolls by itself. Narrower: it floats over the right of the page, so the rows
+        // keep their width. Phone: it covers the page, and its close button is the way back.
+        width === "docked" && [
+          "overflow-y-auto md:px-6",
+          "max-md:fixed max-md:inset-0 max-md:z-40",
+          "md:max-xl:fixed md:max-xl:top-12 md:max-xl:right-0 md:max-xl:bottom-0 md:max-xl:z-30 md:max-xl:w-[460px] md:max-xl:shadow-floating",
+          "xl:sticky xl:top-12 xl:h-[calc(100svh-3rem)] xl:w-[460px] xl:max-w-[50%] xl:flex-none xl:self-start",
+        ],
         className,
       )}
       {...props}
     >
+      {closable ? (
+        // In the sheet's corner, so it stays put whatever the title and the actions do.
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Close"
+          className="absolute top-3 right-2 size-11 rounded-full text-muted-foreground md:top-5 md:right-4"
+          onClick={onClose}
+        >
+          <X aria-hidden="true" />
+        </Button>
+      ) : null}
       <header
         data-slot="detail-sheet-header"
-        className="flex flex-wrap items-start justify-between gap-4"
+        className={cn("flex flex-wrap items-start justify-between gap-4", closable && "pr-11")}
       >
         <div className="min-w-0 flex-[1_1_16rem]">
           <Title
@@ -287,20 +305,9 @@ export function DetailSheet({
         {hasActions ? (
           <div
             data-slot="detail-sheet-actions"
-            className="flex max-w-full flex-wrap items-center gap-2 [&>[data-slot=button]]:h-11 [&>[data-slot=button]]:px-4.5"
+            className="flex max-w-full flex-wrap items-center gap-2 [&_[data-slot=button]]:h-11 [&_[data-slot=button]]:px-4.5"
           >
             {actions}
-            {onClose !== undefined ? (
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label="Close"
-                className="size-11! rounded-full px-0! text-muted-foreground"
-                onClick={onClose}
-              >
-                <X aria-hidden="true" />
-              </Button>
-            ) : null}
           </div>
         ) : null}
       </header>

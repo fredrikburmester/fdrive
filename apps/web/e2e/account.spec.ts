@@ -1,13 +1,18 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
-/** The list of Settings sections (`SettingsNav` in `components/account/settings-nav.tsx`). */
+/** The list of Settings sections (the `AreaList` in `components/account/settings-shell.tsx`). */
 function settingsNav(page: Page): Locator {
   return page.getByRole("navigation", { name: "Settings sections" });
 }
 
-/** The header's title: the open section on a wide screen, "Settings" over the list on a phone. */
+/** The page's heading: the open section's sheet title, or "Settings" over the list on a phone. */
 function title(page: Page, name: string): Locator {
   return page.getByRole("heading", { level: 1, name, exact: true });
+}
+
+/** The open section's sheet, named by its title. */
+function sheet(page: Page, name: string): Locator {
+  return page.getByRole("region", { name, exact: true });
 }
 
 test("each Settings section opens at its own URL, and reload and Back keep their place", async ({
@@ -15,24 +20,20 @@ test("each Settings section opens at its own URL, and reload and Back keep their
 }) => {
   await page.goto("/account");
 
-  // /account itself lands on the first section, with the list beside it.
+  // /account itself lands on the first section's sheet, with the list beside it.
   await expect(title(page, "Appearance")).toBeVisible();
   await expect(settingsNav(page).getByRole("link", { name: "Appearance" })).toHaveAttribute(
     "aria-current",
     "page",
   );
-  await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "File list" })).toBeVisible();
+  await expect(sheet(page, "Appearance").getByRole("group", { name: "Theme" })).toBeVisible();
+  await expect(sheet(page, "Appearance").getByRole("group", { name: "File list" })).toBeVisible();
 
   const sections = [
     ["Browsing", "browsing", page.getByRole("group", { name: "Row click" })],
     ["Formats", "formats", page.getByRole("group", { name: "Sizes" })],
     ["Password", "password", page.getByLabel("Current password")],
-    [
-      "Encryption",
-      "encryption",
-      page.getByRole("heading", { level: 2, name: "Encryption", exact: true }),
-    ],
+    ["Encryption", "encryption", page.getByText("Folders only your own devices can open.")],
     ["API tokens", "tokens", page.getByRole("button", { name: "Create token" })],
     ["Appearance", "appearance", page.getByRole("group", { name: "Theme" })],
   ] as const;
@@ -43,6 +44,9 @@ test("each Settings section opens at its own URL, and reload and Back keep their
     await expect(title(page, name)).toBeVisible();
     await expect(link).toHaveAttribute("aria-current", "page");
     await expect(content).toBeVisible();
+    // One section shows at a time: its sheet, whose title is the page's only heading.
+    await expect(sheet(page, name)).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
   }
 
   // A section's URL opens that section directly, and survives a reload.
@@ -59,13 +63,10 @@ test("each Settings section opens at its own URL, and reload and Back keep their
   await expect(page).toHaveURL(/\/account\/formats$/);
   await expect(title(page, "Formats")).toBeVisible();
 
-  // The header's trail leads back to /account.
-  await page
-    .getByRole("navigation", { name: "breadcrumb" })
-    .getByRole("link", { name: "Settings", exact: true })
-    .click();
-  await expect(page).toHaveURL(/\/account$/);
-  await expect(title(page, "Appearance")).toBeVisible();
+  // On a wide screen the list stays beside the sheet, so the header only names the frame.
+  await expect(page.locator('[data-slot="list-sheet-trail"]')).toContainText("Settings");
+  await expect(page.getByRole("link", { name: "Back to Settings" })).toBeHidden();
+  await expect(settingsNav(page)).toBeVisible();
 });
 
 test("the theme chosen in Settings applies at once and survives a reload", async ({ page }) => {
@@ -118,7 +119,7 @@ test("on a phone the section list is a screen of its own, and a section has a wa
   await settingsNav(page).getByRole("link", { name: "Formats", exact: true }).click();
   await expect(page).toHaveURL(/\/account\/formats$/);
   await expect(title(page, "Formats")).toBeVisible();
-  await expect(page.getByRole("group", { name: "Sizes" })).toBeVisible();
+  await expect(sheet(page, "Formats").getByRole("group", { name: "Sizes" })).toBeVisible();
   await expect(settingsNav(page)).toBeHidden();
   expect(
     await page.evaluate(
@@ -212,7 +213,7 @@ test("alice creates an API token, sees it once, the list shows it, and can revok
   // The list shows it (without the secret).
   const row = page.getByRole("row", { name: new RegExp(tokenName) });
   await expect(row).toBeVisible();
-  await expect(row.getByText("Full management")).toBeVisible();
+  await expect(row.getByRole("cell", { name: "Full management", exact: true })).toBeVisible();
   await expect(row.getByText("/docs", { exact: true })).toBeVisible();
   await expect(row.getByText(tokenValue)).toHaveCount(0);
 

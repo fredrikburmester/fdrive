@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
 
@@ -17,6 +18,10 @@ vi.mock("@/lib/api/server", () => ({
     me: mocks.me,
   }),
 }));
+// The frame needs the router and the query client; its own parts are tested where they live.
+vi.mock("@/components/system/system-shell", () => ({
+  SystemShell: ({ children }: { children: ReactNode }) => <div data-frame="system">{children}</div>,
+}));
 
 import SystemLayout from "./layout";
 
@@ -25,12 +30,12 @@ beforeEach(() => {
   mocks.me.mockImplementation(async () => ({ userId: "fixture", isAdmin: mocks.isAdmin }));
 });
 
-it("renders the page for an administrator", async () => {
+it("renders the page inside the System frame for an administrator", async () => {
   mocks.isAdmin = true;
   const html = renderToStaticMarkup(
     await SystemLayout({ children: <section>General settings</section> }),
   );
-  expect(html).toContain("General settings");
+  expect(html).toBe('<div data-frame="system"><section>General settings</section></div>');
 });
 
 it("sends a signed-in non-administrator to /files instead of rendering the page", async () => {

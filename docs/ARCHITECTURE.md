@@ -225,16 +225,23 @@ worker's, or main when the API runs the worker itself (`FDRIVE_BACKUP_WORKER`).
 - Feature activation is persisted through onboarding/System settings. Optional processing
   begins disabled; the ml service and the Office controller expose starting, ready and failed
   states.
-- System pages are installation-wide and independent of the signed-in login, and every page
-  header says so. System > General holds the server address, the files folder's name and
-  health, and how long Trash keeps an item.
-- Settings holds the signed-in login's own preferences, one page per section under `/account`:
-  Appearance, Browsing, Formats, Password, Encryption and API tokens (`/account` opens the
-  first). A wide screen lists the sections beside the open one; on a phone `/account` is the
-  list and a section's URL is that section alone, decided in CSS from the URL. The routes keep
-  the `/account` prefix from when the page was called Account.
-- The admin sidebar shows live processing activity and percentages only for fixed workloads.
-  Lightweight worker snapshots and one shared poll drive it; see [System activity](SYSTEM-ACTIVITY.md).
+- Outside the file list the web app follows one layout, [Quiet](DESIGN.md): a short list of
+  areas beside a wide sheet that shows the chosen one. System (`/system`) and Settings
+  (`/account`) are that frame, each area or section at its own URL, with the frame's own URL
+  opening the first. A wide screen shows list and sheet side by side; on a phone the frame's
+  URL is the list and an area's URL is its sheet alone, decided in CSS from the URL. Shares,
+  Trash and My activity keep their table and dock the chosen row's sheet beside it.
+- System is installation-wide and independent of the signed-in login, and its list of areas
+  says so. Administrators reach it from one sidebar row. Each optional feature is an area
+  whose sheet carries its on/off switch, which saves at once. System > General holds the
+  server address, the files folder's name and health, how long Trash keeps an item, and the
+  way back into the setup walkthrough.
+- Settings holds the signed-in login's own preferences: Appearance, Browsing, Formats,
+  Password, Encryption and API tokens. The routes keep the `/account` prefix from when the
+  page was called Account.
+- The System row and the areas' rows show live processing activity, with percentages only
+  for fixed workloads. Lightweight worker snapshots and one shared poll drive it; see
+  [System activity](SYSTEM-ACTIVITY.md).
 - Search combines text/filename and available visual results, with separate failure states.
   Image similarity by perceptual hash is not the shipped text-to-image search feature.
 - Folder view mode and sort are pinned per identity/path in `app.folder_views`, with no

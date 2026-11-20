@@ -1,37 +1,93 @@
 "use client";
 
-import { useState } from "react";
+import type { Route } from "next";
+import Link from "next/link";
 import { toast } from "sonner";
-import { SettingRow } from "@/components/shell/page-layout";
-import { Badge } from "@/components/ui/badge";
+import { SettingActions, SettingRow } from "@/components/shell/page-layout";
+import { StatusBadge as Badge } from "@/components/shell/status";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { describeApiError } from "@/lib/api/errors";
 import { officeStatus } from "@/lib/system/status";
 import { LogSheet } from "./log-sheet";
-import { OfficeSettingsFields, useOfficeSettingsDraft } from "./office-settings-card";
-import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
-import { StatGrid } from "./stat-grid";
+import {
+  OFFICE_ADDRESS_NOTE,
+  OFFICE_CLOSE_NOTE,
+  OFFICE_EDITING_NOTE,
+  OFFICE_EDITORS_LABEL,
+  OFFICE_EDITORS_NOTE,
+  OFFICE_GUIDE_URL,
+  OfficeEditorChoices,
+  type OfficeSettingsDraft,
+  useOfficeSettingsDraft,
+} from "./office-settings-card";
+import { SettingsFormActions } from "./settings-form";
 import { StatusBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemAlert, SystemLine, SystemNote, SystemSection } from "./system-section";
+import { SystemAlert, SystemLine, SystemSection } from "./system-section";
+
+const GENERAL_ROUTE = "/system/general" as Route;
+
+const linkClassName = "underline underline-offset-4";
+
+function GuideLink() {
+  return (
+    <a className={linkClassName} href={OFFICE_GUIDE_URL} target="_blank" rel="noreferrer">
+      Office setup instructions
+    </a>
+  );
+}
+
+/** The editor has nowhere to send people without a server address: say so, and where to set it. */
+function AddressAlert() {
+  return (
+    <SystemAlert>
+      {OFFICE_ADDRESS_NOTE}{" "}
+      <Link href={GENERAL_ROUTE} className={linkClassName}>
+        Open General
+      </Link>
+    </SystemAlert>
+  );
+}
+
+/** A save the server refused, with the way back to what is saved. */
+function SaveAlert({ draft }: { draft: OfficeSettingsDraft }) {
+  const { query, update } = draft;
+  return (
+    <SystemAlert>
+      {describeApiError(update.error)}
+      <Button
+        variant="link"
+        onClick={() => {
+          draft.reset();
+          update.reset();
+          void query.refetch();
+        }}
+      >
+        Reload saved settings
+      </Button>
+    </SystemAlert>
+  );
+}
 
 /**
  * Admin page: `System > Office`. Named `OfficeSystemPage` so it does not
  * clash with the reader/editor components under `components/office`.
+ *
+ * Office is not a `FeatureId`: it keeps its own settings record. Its switch
+ * sits in the sheet's header where a feature's does and saves at once, and
+ * who may edit is a short form under it with its own Save.
  */
 export function OfficeSystemPage() {
   const draft = useOfficeSettingsDraft();
-  const { query, update, product, values, parsed, dirty, addressMissing } = draft;
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const status = query.data ? officeStatus(query.data.status) : null;
-  const editors = values?.editingEnabled === true ? values.editorUsernames : [];
+  const { query, update, product, saved, values, parsed, dirty, addressMissing } = draft;
+  const service = query.data?.status;
+  const busy = update.isPending;
 
   function handleSave() {
     if (!parsed.success) return;
-    draft.commit(parsed.data, () => {
-      toast.success(`${product} settings saved.`);
-      setSettingsOpen(false);
-    });
+    draft.commit(parsed.data, () => toast.success(`${product} settings saved.`));
   }
 
   return (
@@ -39,106 +95,109 @@ export function OfficeSystemPage() {
       title="Office"
       description="Browser editing for documents, spreadsheets, and presentations."
       lastUpdated={query.dataUpdatedAt > 0 ? new Date(query.dataUpdatedAt) : null}
-      enabled={query.data?.configuration.enabled ?? true}
-      actions={
-        <>
-          <SystemSettingsButton
-            onClick={() => setSettingsOpen(true)}
-            disabled={values === undefined}
+      // Neither On nor Off until the settings have loaded.
+      {...(saved ? { enabled: saved.enabled } : {})}
+      toggle={
+        saved ? (
+          <Switch
+            aria-label={`Enable ${product}`}
+            title="Documents stay in your storage. The bundled editor uses additional memory while enabled."
+            checked={saved.enabled}
+            // Without a server address the API refuses to turn Office on; the off state says why.
+            disabled={busy || (!saved.enabled && addressMissing)}
+            onCheckedChange={draft.saveEnabled}
           />
-          <LogSheet subsystem="office" />
+        ) : undefined
+      }
+      offNote={
+        <div className="flex flex-col gap-2">
+          <p>
+            Turning it on starts the bundled {product} editor, so documents, spreadsheets and
+            presentations open in the browser. Documents stay in your storage, and the editor uses
+            additional memory while enabled.
+          </p>
+          {addressMissing ? <AddressAlert /> : null}
+          {update.isError ? <SaveAlert draft={draft} /> : null}
+          <p>
+            <GuideLink />
+          </p>
+        </div>
+      }
+      badges={
+        <>
+          {service !== undefined ? <StatusBadge status={officeStatus(service)} /> : null}
+          {query.data !== undefined ? <Badge>{product}</Badge> : null}
+        </>
+      }
+      actions={<LogSheet subsystem="office" />}
+      footer={
+        <>
+          <p className="min-w-0 flex-[1_1_16rem] text-muted-foreground">{OFFICE_CLOSE_NOTE}</p>
+          <GuideLink />
         </>
       }
     >
       {query.isError ? (
         <SystemErrorState error={query.error} onRetry={() => void query.refetch()} />
-      ) : query.data === undefined ? (
+      ) : values === undefined ? (
         <SystemLine role="status">Loading Office settings…</SystemLine>
       ) : (
         <>
-          <SystemSection title="Status">
+          {update.isError ? <SaveAlert draft={draft} /> : null}
+          {addressMissing ? <AddressAlert /> : null}
+          {service === "starting" ? (
+            <SystemLine role="status">
+              {product} is starting. This resolves on its own once the container is up.
+            </SystemLine>
+          ) : service === "unavailable" ? (
+            <SystemAlert>
+              Unable to reach {product}. Check its container and the setup guide.
+            </SystemAlert>
+          ) : null}
+
+          <SystemSection title="Editing">
             <SettingRow
-              label={product}
-              description={
-                query.data.status === "ready"
-                  ? `${product} is ready.`
-                  : query.data.status === "starting"
-                    ? `${product} is starting. This resolves on its own once the container is up.`
-                    : query.data.status === "off"
-                      ? `${product} is turned off.`
-                      : `Unable to reach ${product}. Check its container and the setup guide.`
-              }
+              label="Allow document editing"
+              htmlFor="office-editing"
+              description={OFFICE_EDITING_NOTE}
+              align="end"
             >
-              {status !== null ? <StatusBadge status={status} /> : null}
+              <Switch
+                id="office-editing"
+                checked={values.editingEnabled}
+                disabled={busy}
+                onCheckedChange={(editingEnabled) => draft.change({ editingEnabled })}
+              />
             </SettingRow>
-            {addressMissing ? (
-              <SystemAlert row>
-                Set the fdrive server address first: the editor opens documents through it.
-              </SystemAlert>
+            {values.editingEnabled ? (
+              <SettingRow label={OFFICE_EDITORS_LABEL} description={OFFICE_EDITORS_NOTE}>
+                <OfficeEditorChoices
+                  draft={draft}
+                  values={values}
+                  disabled={busy}
+                  label={OFFICE_EDITORS_LABEL}
+                />
+              </SettingRow>
             ) : null}
-            <SettingRow label="Editors" description="The users who may open documents for editing.">
-              {editors.length === 0 ? (
-                <p className="text-muted-foreground">Everyone opens documents view-only.</p>
-              ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {editors.map((username) => (
-                    <Badge key={username} variant="secondary">
-                      {username}
-                    </Badge>
-                  ))}
-                </div>
-              )}
-            </SettingRow>
-            <SystemNote>
-              <p>
-                Close open documents before disabling the editor to avoid interrupting unsaved work.
-              </p>
-              <a
-                className="self-start underline underline-offset-4"
-                href="https://github.com/fredrikburmester/fdrive/blob/main/docs/OFFICE.md"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Office setup instructions
-              </a>
-            </SystemNote>
+            <SettingActions>
+              {dirty && !parsed.success ? (
+                <SystemAlert className="mr-auto min-w-0 flex-[1_1_16rem]">
+                  When editing is enabled, choose at least one user.
+                </SystemAlert>
+              ) : null}
+              <div className="flex flex-none items-center gap-2">
+                <SettingsFormActions
+                  dirty={dirty}
+                  invalid={!parsed.success || addressMissing}
+                  pending={busy}
+                  onSave={handleSave}
+                  onReset={draft.reset}
+                />
+              </div>
+            </SettingActions>
           </SystemSection>
-
-          <SystemSection title="Configuration">
-            <StatGrid
-              stats={[
-                { label: "Product", value: product },
-                {
-                  label: "Editing",
-                  value: query.data.configuration.editingEnabled ? "On" : "Off",
-                },
-                { label: "Editors", value: editors.length.toLocaleString() },
-              ]}
-            />
-          </SystemSection>
-
-          {update.isError ? <SystemAlert row>{describeApiError(update.error)}</SystemAlert> : null}
         </>
       )}
-
-      <SettingsSheet
-        title={`${product} settings`}
-        description="Who may edit documents, and whether the editor runs at all."
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        dirty={dirty}
-        invalid={!parsed.success || (values?.enabled === true && addressMissing)}
-        pending={update.isPending}
-        onSave={handleSave}
-        onReset={draft.reset}
-        validationMessages={
-          values?.enabled === true && addressMissing
-            ? ["Set the server address on System > General before enabling Office."]
-            : []
-        }
-      >
-        <OfficeSettingsFields draft={draft} disabled={update.isPending} />
-      </SettingsSheet>
     </SystemPage>
   );
 }

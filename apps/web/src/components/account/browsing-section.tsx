@@ -1,6 +1,7 @@
 "use client";
 
 import { LayoutGridIcon, ListIcon, ListTreeIcon } from "lucide-react";
+import { DetailSheet } from "@/components/shell/list-sheet";
 import { PageSection, SettingRow } from "@/components/shell/page-layout";
 import { ChoiceRow } from "@/components/shell/setting-controls";
 import { Button } from "@/components/ui/button";
@@ -38,8 +39,11 @@ export function BrowsingSection() {
   const [mode, setMode] = useDefaultView();
   const reset = useResetFolderViews();
   return (
-    <>
-      <PageSection title="Browsing" description="How listings respond to clicks in this browser.">
+    <DetailSheet
+      title="Browsing"
+      lede="How listings respond to clicks, and the view a folder opens in."
+    >
+      <div data-slot="setting-rows">
         <ChoiceRow
           label="Row click"
           hint={ROW_CLICK_HINTS[rowClick]}
@@ -48,7 +52,7 @@ export function BrowsingSection() {
           labels={ROW_CLICK_LABELS}
           onChange={setRowClick}
         />
-      </PageSection>
+      </div>
       <PageSection
         title="Folder views"
         description="Changing View or Sort in a folder remembers it for that login across devices."
@@ -65,12 +69,18 @@ export function BrowsingSection() {
         <SettingRow
           label="Saved views"
           description="Remove every saved view and sort. All folders will follow the defaults."
+          align="end"
         >
-          <Button variant="outline" disabled={reset.isPending} onClick={() => reset.mutate()}>
+          <Button
+            variant="outline"
+            className="max-md:min-h-11"
+            disabled={reset.isPending}
+            onClick={() => reset.mutate()}
+          >
             {reset.isPending ? "Resetting…" : "Reset all folder views"}
           </Button>
         </SettingRow>
       </PageSection>
-    </>
+    </DetailSheet>
   );
 }

@@ -35,10 +35,15 @@ afterEach(() => {
 const days = () => screen.getByLabelText("Days in Trash") as HTMLInputElement;
 const save = () => screen.getByRole("button", { name: "Save Trash settings" }) as HTMLButtonElement;
 
-it("shows how long Trash keeps an item, with no switch and no folder to choose", () => {
-  render(<TrashSettingsCard />);
+it("shows how long Trash keeps an item as one row, with no switch and no folder to choose", () => {
+  const { container } = render(<TrashSettingsCard />);
 
-  expect(screen.getByText("Trash")).toBeTruthy();
+  const row = container.querySelector('[data-slot="setting-row"]') as HTMLElement;
+  expect(row.contains(days())).toBe(true);
+  expect(row.contains(save())).toBe(true);
+  // The button reads Save; its name says which of the sheet's Saves it is.
+  expect(save().textContent).toBe("Save");
+  expect(container.querySelector('[data-slot="page-section"]')).toBeNull();
   expect(days().value).toBe("30");
   expect(screen.getByText("Items in Trash longer than this are deleted permanently.")).toBeTruthy();
   expect(screen.queryByRole("switch")).toBeNull();
@@ -94,6 +99,7 @@ it("waits for the setting and offers a retry when it cannot be read", () => {
     refetch: mocks.refetch,
   });
   render(<TrashSettingsCard />);
+  expect(screen.getByRole("alert").textContent).toBe("Couldn't load the Trash settingoffline");
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(mocks.refetch).toHaveBeenCalled();
 });

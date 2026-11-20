@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemImageSearchResponse } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,15 +31,19 @@ vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
     description: string;
+    badges?: ReactNode;
     actions?: ReactNode;
+    footer?: ReactNode;
     feature?: string | readonly string[];
     children: ReactNode;
   }) => (
     <div data-testid="system-page" data-feature={[props.feature ?? []].flat().join(",")}>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
+      <div data-testid="badges">{props.badges}</div>
       <div data-testid="actions">{props.actions}</div>
       <div>{props.children}</div>
+      <div data-testid="footer">{props.footer}</div>
     </div>
   ),
 }));
@@ -63,6 +67,16 @@ function mockHealthy(overrides: Partial<SystemImageSearchResponse> = {}) {
     dataUpdatedAt: Date.parse("2026-09-07T12:00:00Z"),
     refetch: vi.fn(),
   });
+}
+
+/** The value a `FactList` shows beside a label. */
+function fact(label: string): string | null | undefined {
+  return screen.getByText(label, { selector: "dt" }).nextElementSibling?.textContent;
+}
+
+/** The sheet's status badges, which sit in its header. */
+function badges() {
+  return within(screen.getByTestId("badges"));
 }
 
 beforeEach(() => {
@@ -121,8 +135,10 @@ describe("ImageSearchPage", () => {
       refetch: vi.fn(),
     });
     render(<ImageSearchPage />);
-    expect(screen.getByText("Not configured", { exact: true })).toBeTruthy();
-    expect(screen.getByText("Not configured: set FDRIVE_ML_URL.")).toBeTruthy();
+    expect(badges().getByText("Not configured")).toBeTruthy();
+    expect(
+      screen.getByText((_, node) => node?.textContent === "Not configured: set FDRIVE_ML_URL."),
+    ).toBeTruthy();
   });
 
   it("renders Unreachable when configured but the sidecar cannot be reached", () => {
@@ -134,24 +150,35 @@ describe("ImageSearchPage", () => {
       refetch: vi.fn(),
     });
     render(<ImageSearchPage />);
-    expect(screen.getByText("Unreachable")).toBeTruthy();
+    expect(badges().getByText("Unreachable")).toBeTruthy();
     expect(screen.getByText("The image search model is unreachable.")).toBeTruthy();
+    expect(screen.queryByText("Model", { selector: "dt" })).toBeNull();
+    expect(fact("Embedded with")).toBe("None yet");
   });
 
   it("renders Reachable with the model and dimension when healthy", () => {
     mockHealthy();
     render(<ImageSearchPage />);
-    expect(screen.getByText("Reachable")).toBeTruthy();
-    expect(screen.getByText("Reachable. Model siglip2-base, dimension 1024.")).toBeTruthy();
+    expect(badges().getByText("Reachable")).toBeTruthy();
+    expect(badges().getByText("siglip2-base")).toBeTruthy();
+    expect(fact("Model")).toBe("siglip2-base");
+    // Grouped by the runtime's own locale, so only the digits are fixed.
+    expect(fact("Dimensions")).toMatch(/^1\D?024$/);
+    expect(fact("Embedded with")).toBe("siglip2-base");
+    expect(screen.getByText("Embedded thumbnails")).toBeTruthy();
     expect(screen.getByText("42")).toBeTruthy();
   });
 
   it("flags a model mismatch between the sidecar's model and the embedded rows", () => {
     mockHealthy({ model: "siglip2-large", embeddedModel: "siglip2-base" });
     render(<ImageSearchPage />);
-    expect(screen.getByText("Model mismatch")).toBeTruthy();
+    expect(badges().getByText("Model mismatch")).toBeTruthy();
+    expect(fact("Model")).toBe("siglip2-large");
+    expect(fact("Embedded with")).toBe("siglip2-base");
     expect(
-      screen.getByText("The sidecar now runs siglip2-large. Force rebuild to replace these rows."),
+      screen.getByText(
+        "The model is now siglip2-large. Rebuild with Replace rows from other models turned on to re-embed these thumbnails.",
+      ),
     ).toBeTruthy();
   });
 
@@ -159,6 +186,22 @@ describe("ImageSearchPage", () => {
     mockHealthy({ embeddedModel: null });
     render(<ImageSearchPage />);
     expect(screen.queryByText("Model mismatch")).toBeNull();
+    expect(fact("Embedded with")).toBe("None yet");
+  });
+
+  it("keeps clearing apart from the other actions, beside what it leaves alone", () => {
+    mockHealthy();
+    render(<ImageSearchPage />);
+    const footer = within(screen.getByTestId("footer"));
+    expect(footer.getByRole("button", { name: "Clear embeddings" })).toBeTruthy();
+    expect(
+      footer.getByText(
+        "Clearing removes every image embedding. Your files, thumbnails and text search are not touched.",
+      ),
+    ).toBeTruthy();
+    expect(
+      within(screen.getByTestId("actions")).queryByRole("button", { name: "Clear embeddings" }),
+    ).toBeNull();
   });
 
   it("rebuilds missing embeddings by default and force is opt in", async () => {
@@ -274,7 +317,8 @@ describe("ImageSearchPage", () => {
 it("shows model warm-up as loading and blocks maintenance", () => {
   mockHealthy({ healthy: false, status: "loading" });
   render(<ImageSearchPage />);
-  expect(screen.getByText("Loading")).toBeTruthy();
+  expect(badges().getByText("Loading")).toBeTruthy();
+  expect(screen.getByText("The image search model is loading.")).toBeTruthy();
   expect(screen.queryByText("Unreachable")).toBeNull();
   expect(screen.getByRole("button", { name: "Rebuild" }).hasAttribute("disabled")).toBe(true);
 });

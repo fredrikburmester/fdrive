@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { apiClient } from "@/lib/api/client";
 import { SearchShortcutProvider } from "@/lib/search/shortcut";
 import { makeIdentity, makeMe } from "@/test-fixtures/identity";
 import { AppSidebar } from "./app-sidebar";
@@ -26,9 +27,18 @@ vi.mock("@/components/shell/folder-tree", () => ({
   ),
 }));
 
+// The About sheet asks the API for the server's version when it opens; its own test covers that.
+vi.mock("@/components/about/about-dialog", () => ({
+  AboutDialog: ({ open }: { open: boolean }) =>
+    open ? <div role="dialog" aria-label="About fdrive" /> : null,
+}));
+
 const ada: MeResponse["identity"] = makeIdentity();
 
 const me = makeMe({ identity: ada });
+
+/** What the administrator's System row polls for: nothing running in any area. */
+const IDLE = { observedAt: new Date().toISOString(), items: [] };
 
 function renderSidebar(account: MeResponse = me) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -38,6 +48,7 @@ function renderSidebar(account: MeResponse = me) {
   client.setQueryData(["tags", "list"], []);
   client.setQueryData(["saved-searches", "list"], []);
   client.setQueryData(["grants", "list"], { owned: [], received: [] });
+  client.setQueryData(["system", "activity"], IDLE);
   return render(
     <QueryClientProvider client={client}>
       <SearchShortcutProvider>
@@ -50,6 +61,7 @@ function renderSidebar(account: MeResponse = me) {
 }
 
 beforeEach(() => {
+  vi.spyOn(apiClient, "systemActivity").mockResolvedValue(IDLE);
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: false,
     media: query,
@@ -112,8 +124,32 @@ it("opens Settings from the account menu, beside Appearance, Storage and About",
   expect(screen.queryByRole("menuitem", { name: "Account" })).toBeNull();
   expect(screen.getByRole("menuitem", { name: "Appearance" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Storage" }).getAttribute("href")).toBe("/storage");
-  expect(screen.getByRole("menuitem", { name: "About" }).getAttribute("href")).toBe("/about");
+  expect(screen.getByRole("menuitem", { name: "About" })).toBeTruthy();
   expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeTruthy();
+});
+
+it("opens About as a sheet over the page for someone who is not an administrator", async () => {
+  renderSidebar();
+  fireEvent.click(await screen.findByRole("button", { name: /ada/ }));
+  expect(screen.queryByRole("dialog", { name: "About fdrive" })).toBeNull();
+
+  const about = await screen.findByRole("menuitem", { name: "About" });
+  // Not a link: there is no page to go to, the sheet opens where they are.
+  expect(about.getAttribute("href")).toBeNull();
+  fireEvent.click(about);
+
+  expect(await screen.findByRole("dialog", { name: "About fdrive" })).toBeTruthy();
+});
+
+it("links an administrator's About to the last System area instead of opening the sheet", async () => {
+  renderSidebar({ ...me, isAdmin: true });
+  fireEvent.click(await screen.findByRole("button", { name: /ada/ }));
+
+  // A link to a page of its own, where the other one is a button that opens the sheet.
+  const about = await screen.findByRole("menuitem", { name: "About" });
+  expect(about.tagName).toBe("A");
+  expect(about.getAttribute("href")).toBe("/system/about");
+  expect(screen.queryByRole("dialog", { name: "About fdrive" })).toBeNull();
 });
 
 it("closes from its own header button, beside the wordmark", async () => {
@@ -125,44 +161,23 @@ it("closes from its own header button, beside the wordmark", async () => {
   expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
 });
 
-it("nests feature pages beneath Features and keeps other System pages separate", async () => {
+it("gives an administrator one System row, with its areas left to the System page", async () => {
   renderSidebar({ ...me, isAdmin: true });
 
-  const expected = [
-    ["General", "/system/general"],
-    ["Users", "/system/users"],
-    ["Features", "/system/features"],
-    ["Thumbnails", "/system/thumbnails"],
-    ["Full-text search", "/system/indexer"],
-    ["Semantic search", "/system/search"],
-    ["Searchable PDFs", "/system/ocr"],
-    ["Image search", "/system/image-search"],
-    ["Office", "/system/office"],
-  ] as const;
-
-  const links = await Promise.all(
-    expected.map(([label]) => screen.findByRole("link", { name: label })),
-  );
-  const featuresItem = links[2]?.closest("li");
-  for (const [index, link] of links.entries()) {
-    expect(link.getAttribute("href")).toBe(expected[index]?.[1]);
-    expect(link.closest("li")).not.toBeNull();
-    expect(featuresItem?.contains(link)).toBe(index >= 2);
-    if (index > 0) {
-      const previous = links[index - 1];
-      expect(previous !== undefined && isBefore(previous, link)).toBe(true);
-    }
+  const system = await screen.findByRole("link", { name: "System" });
+  expect(system.getAttribute("href")).toBe("/system");
+  // Last in the navigation, after Trash.
+  expect(isBefore(screen.getByRole("link", { name: "Trash" }), system)).toBe(true);
+  for (const area of ["General", "Users", "Features", "Thumbnails", "Full-text search", "Office"]) {
+    expect(screen.queryByRole("link", { name: area })).toBeNull();
   }
-  expect(screen.queryByRole("link", { name: "Connection" })).toBeNull();
   expect(screen.queryByRole("link", { name: "Storage" })).toBeNull();
-  expect(screen.getByText("Admins only")).toBeTruthy();
 });
 
-it("hides the System group from a non-admin", async () => {
+it("hides System from a non-admin", async () => {
   renderSidebar();
   await screen.findByRole("link", { name: "Shares" });
 
-  expect(screen.queryByRole("link", { name: "Features" })).toBeNull();
+  expect(screen.queryByRole("link", { name: "System" })).toBeNull();
   expect(screen.queryByRole("link", { name: "General" })).toBeNull();
-  expect(screen.queryByText("Admins only")).toBeNull();
 });

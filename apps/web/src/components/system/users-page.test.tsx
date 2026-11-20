@@ -58,13 +58,15 @@ vi.mock("./system-page", () => ({
   SystemPage: (props: {
     title: string;
     description: string;
+    badges?: ReactNode;
     actions?: ReactNode;
     children: ReactNode;
   }) => (
     <div>
       <h1>{props.title}</h1>
       <p>{props.description}</p>
-      <div>{props.actions}</div>
+      <div data-testid="badges">{props.badges}</div>
+      <div data-testid="actions">{props.actions}</div>
       <div>{props.children}</div>
     </div>
   ),
@@ -120,13 +122,14 @@ describe("the list", () => {
   it("shows each user with their badges, last sign-in and when they were added", () => {
     renderPage([ME, { ...GRACE, disabled: true }]);
 
-    expect(screen.getByText("2 users")).toBeTruthy();
+    // The count is a neutral badge in the sheet's header, not a heading over the table.
+    expect(within(screen.getByTestId("badges")).getByText("2 users").dataset.tone).toBe("neutral");
     const ada = screen.getByText("ada").closest("tr") as HTMLElement;
-    expect(within(ada).getByText("You")).toBeTruthy();
-    expect(within(ada).getByText("Admin")).toBeTruthy();
+    expect(within(ada).getByText("You").dataset.tone).toBe("neutral");
+    expect(within(ada).getByText("Admin").dataset.tone).toBe("neutral");
     expect(within(ada).getByText("2026-11-10")).toBeTruthy();
     const grace = screen.getByText("grace").closest("tr") as HTMLElement;
-    expect(within(grace).getByText("Disabled")).toBeTruthy();
+    expect(within(grace).getByText("Disabled").dataset.tone).toBe("off");
     expect(within(grace).queryByText("Admin")).toBeNull();
     expect(within(grace).getByText("Never")).toBeTruthy();
     expect(within(grace).getByText("2026-02-03")).toBeTruthy();
@@ -152,10 +155,20 @@ describe("the list", () => {
     expect(screen.getByText(/You can't disable, demote or remove yourself/)).toBeTruthy();
   });
 
+  it("keeps a row's actions in its menu and adding a user as the sheet's one action", () => {
+    renderPage([ME, GRACE]);
+
+    const actions = within(screen.getByTestId("actions")).getAllByRole("button");
+    expect(actions.map((button) => button.textContent)).toEqual(["Add user"]);
+    const grace = screen.getByText("grace").closest("tr") as HTMLElement;
+    expect(within(grace).getAllByRole("button")).toHaveLength(1);
+    expect(screen.getByText(/signs them out everywhere/)).toBeTruthy();
+  });
+
   it("counts a single user in the singular", () => {
     renderPage([GRACE]);
 
-    expect(screen.getByText("1 user")).toBeTruthy();
+    expect(within(screen.getByTestId("badges")).getByText("1 user")).toBeTruthy();
     expect(screen.queryByText(/You can't disable/)).toBeNull();
   });
 
@@ -184,6 +197,10 @@ describe("the list", () => {
 
     expect(container.querySelector('[data-slot="skeleton"]')).not.toBeNull();
     expect(screen.queryByRole("table")).toBeNull();
+    expect(screen.getByTestId("badges").textContent).toBe("");
+    expect((screen.getByRole("button", { name: "Add user" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
   });
 });
 

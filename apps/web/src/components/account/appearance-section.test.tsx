@@ -32,7 +32,11 @@ it("shows the stored theme and sets another", () => {
   mocks.theme = "dark";
   render(<AppearanceSection />);
 
-  expect(screen.getByRole("heading", { level: 2, name: "Appearance" })).toBeDefined();
+  // The section is its own sheet, and its name is the page's heading.
+  const sheet = screen.getByRole("region", { name: "Appearance" });
+  expect(within(sheet).getByRole("heading", { level: 1, name: "Appearance" })).toBeDefined();
+  expect(within(sheet).getByText("How fdrive looks in this browser.")).toBeDefined();
+  expect(within(sheet).getByRole("group", { name: "Theme" })).toBeDefined();
   expect(pressed("Theme", "Dark")).toBe("true");
   expect(pressed("Theme", "Light")).toBe("false");
   expect(pressed("Theme", "System")).toBe("false");

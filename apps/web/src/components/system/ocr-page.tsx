@@ -1,10 +1,12 @@
 "use client";
 
 import type { OcrSettingsValue } from "@fdrive/contracts";
-import { ScanText } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { PageEmpty, SettingRow } from "@/components/shell/page-layout";
+import { SheetColumns } from "@/components/shell/list-sheet";
+import { SettingRow } from "@/components/shell/page-layout";
+import { BarList, Code, type Fact, FactList } from "@/components/shell/sheet-data";
+import { StatusBadge } from "@/components/shell/status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,10 +44,10 @@ import { OcrOriginalsSheet } from "./ocr-originals-sheet";
 import { GlobsField } from "./settings-form";
 import { SettingsSheet, SystemSettingsButton } from "./settings-sheet";
 import { StatGrid } from "./stat-grid";
-import { StatusBadge } from "./status-badge";
+import { StatusBadge as SidecarBadge } from "./status-badge";
 import { SystemErrorState } from "./system-error-state";
 import { SystemPage } from "./system-page";
-import { SystemLine, SystemSection } from "./system-section";
+import { SystemLine, SystemNote, SystemSection } from "./system-section";
 
 interface SettingsDraft {
   hour: string;
@@ -83,7 +85,10 @@ const HOUR_ITEMS = Array.from({ length: 24 }, (_, hour) => ({
   label: `${hour.toString().padStart(2, "0")}:00`,
 }));
 
-/** Admin page: `System > OCR`. Schedule, last run, originals, settings, and run-now. */
+/**
+ * Admin page: `System > Searchable PDFs`. The OCR service's state, its last run, the originals
+ * it keeps, its settings and a run-now action.
+ */
 export function OcrPage() {
   const { formatBytes } = useFormatters();
   const { data, isLoading, error, dataUpdatedAt, refetch } = useSystemOcr();
@@ -95,6 +100,8 @@ export function OcrPage() {
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const status = data !== undefined ? sidecarStatus(data.configured, data.reachable) : null;
+  const stats = data?.stats;
+  const lastRun = stats?.lastRun ?? null;
   const draftValues = draft !== null ? valuesFromDraft(draft) : null;
   const dirty =
     draftValues !== null &&
@@ -144,19 +151,35 @@ export function OcrPage() {
         description="Scheduled OCR for scanned PDFs."
         lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
         feature="pdfOcr"
+        badges={<SidecarBadge status="not_configured" />}
       >
-        <PageEmpty
-          icon={ScanText}
-          title="Not configured"
-          description={
-            <>
-              Set <code className="font-mono">FDRIVE_OCR_URL</code> and bring the compose stack up
-              with the <code className="font-mono">ocr</code> profile to enable this page.
-            </>
-          }
-        />
+        <SystemNote>
+          <p>
+            Set <Code>FDRIVE_OCR_URL</Code> and bring the compose stack up with the <Code>ocr</Code>{" "}
+            profile to enable this page.
+          </p>
+        </SystemNote>
       </SystemPage>
     );
+  }
+
+  const lastRunSummary =
+    lastRun === null
+      ? "OCR has not run yet."
+      : `Started ${formatRelativeTime(new Date(lastRun.startedAt), new Date())} · ${lastRun.seen.toLocaleString()} ${lastRun.seen === 1 ? "PDF" : "PDFs"} seen`;
+
+  const scheduleFacts: Fact[] = [];
+  if (data !== undefined) {
+    scheduleFacts.push({
+      label: "Runs",
+      value: `Nightly at ${data.settings.values.hour.toString().padStart(2, "0")}:00`,
+    });
+  }
+  if (stats?.nextRunAt !== null && stats?.nextRunAt !== undefined) {
+    scheduleFacts.push({
+      label: "Next run",
+      value: formatRelativeTime(new Date(stats.nextRunAt), new Date()),
+    });
   }
 
   return (
@@ -165,74 +188,82 @@ export function OcrPage() {
       description="Scheduled OCR for scanned PDFs."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
       feature="pdfOcr"
+      badges={
+        status === null || error !== null ? null : (
+          <>
+            <SidecarBadge status={status} />
+            {stats?.running === true ? <StatusBadge>Running now</StatusBadge> : null}
+          </>
+        )
+      }
       actions={
         <>
+          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
+          <LogSheet subsystem="ocr" />
           <Button
             type="button"
-            size="sm"
+            size="lg"
             onClick={() => setRunOpen(true)}
             disabled={data === undefined}
           >
-            Run now
+            Run OCR
           </Button>
-          <SystemSettingsButton onClick={() => setSettingsOpen(true)} disabled={draft === null} />
-          <LogSheet subsystem="ocr" />
         </>
       }
     >
       {isLoading ? (
-        <SystemLine>Loading…</SystemLine>
+        <SystemLine role="status">Loading…</SystemLine>
       ) : error ? (
         <SystemErrorState error={error} onRetry={() => void refetch()} />
       ) : data === undefined ? null : (
         <>
-          <SystemSection title="Schedule">
-            <SettingRow label="OCR service">
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                {status !== null ? <StatusBadge status={status} /> : null}
-                <span className="text-muted-foreground">
-                  Runs nightly at {data.settings.values.hour.toString().padStart(2, "0")}:00
-                  {data.stats?.nextRunAt !== null && data.stats?.nextRunAt !== undefined
-                    ? ` · next run ${formatRelativeTime(new Date(data.stats.nextRunAt), new Date())}`
-                    : ""}
-                  {data.stats?.running === true ? " · running now" : ""}
-                </span>
-              </div>
-            </SettingRow>
-          </SystemSection>
+          {stats === undefined ? (
+            <SystemNote>
+              <p>
+                The OCR service is not reporting. Its last run and the originals it keeps show here
+                when it answers again.
+              </p>
+            </SystemNote>
+          ) : (
+            <StatGrid
+              stats={[
+                { label: "Originals kept", value: stats.originalsCount.toLocaleString() },
+                { label: "Originals size", value: formatBytes(stats.originalsBytes) },
+              ]}
+            />
+          )}
 
-          {data.stats?.lastRun !== null && data.stats?.lastRun !== undefined ? (
-            <SystemSection title="Last run">
-              <StatGrid
-                stats={[
-                  { label: "Seen", value: data.stats.lastRun.seen.toLocaleString() },
-                  { label: "OCR'd", value: data.stats.lastRun.ocred.toLocaleString() },
-                  { label: "Skipped", value: data.stats.lastRun.skipped.toLocaleString() },
-                  { label: "Failed", value: data.stats.lastRun.failed.toLocaleString() },
-                ]}
-              />
+          <SheetColumns>
+            {stats === undefined ? null : (
+              <SystemSection title="Last run" description={lastRunSummary}>
+                {lastRun === null ? null : (
+                  <BarList
+                    total={lastRun.seen}
+                    items={[
+                      { label: "OCR'd", value: lastRun.ocred, tone: "success" },
+                      { label: "Skipped", value: lastRun.skipped },
+                      { label: "Failed", value: lastRun.failed, tone: "danger" },
+                    ]}
+                  />
+                )}
+              </SystemSection>
+            )}
+            <SystemSection title="Schedule">
+              <FactList facts={scheduleFacts} />
             </SystemSection>
-          ) : null}
+          </SheetColumns>
 
-          <SystemSection
-            title="Kept originals"
+          <SettingRow
+            label="Kept originals"
             description={
               data.settings.values.keepOriginals
                 ? "The file each rewrite replaced, kept so a rewrite can be undone."
                 : "Originals are not being kept, so rewrites from now on cannot be undone."
             }
-            actions={<OcrOriginalsSheet disabled={!data.reachable} />}
+            align="end"
           >
-            <StatGrid
-              stats={[
-                {
-                  label: "Originals kept",
-                  value: (data.stats?.originalsCount ?? 0).toLocaleString(),
-                },
-                { label: "Originals size", value: formatBytes(data.stats?.originalsBytes ?? 0) },
-              ]}
-            />
-          </SystemSection>
+            <OcrOriginalsSheet disabled={!data.reachable} />
+          </SettingRow>
         </>
       )}
 
@@ -345,9 +376,13 @@ export function OcrPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction disabled={runNow.isPending} onClick={handleRunConfirm}>
-              Run now
+            <AlertDialogCancel className="max-md:min-h-11">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="max-md:min-h-11"
+              disabled={runNow.isPending}
+              onClick={handleRunConfirm}
+            >
+              Run OCR
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

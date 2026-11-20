@@ -23,10 +23,7 @@ export function registerFeatureAdmission(authed: AuthedHono, service: FeatureSer
         ([route, enabled]) => !enabled && (path === route || path === withoutApiV1Prefix(route)),
       )
     ) {
-      throw new ApiHttpError(
-        "conflict",
-        "Enable this feature in System > Features before starting work.",
-      );
+      throw new ApiHttpError("conflict", "Turn this feature on under System before starting work.");
     }
     return next();
   });

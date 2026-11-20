@@ -1,6 +1,18 @@
 import { SystemIndexerResponse } from "@fdrive/contracts";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 import { loginAs } from "./support/login.js";
+import { sidebar } from "./support/regions.js";
+
+/** A named value in a sheet: the `dd` beside the `dt` with that label. */
+function fact(scope: Locator, label: string): Locator {
+  return scope.locator(`dt:text-is("${label}") + dd`);
+}
+
+/** The list of areas on the System page: General, Users, each feature, About. */
+function systemAreas(page: Page): Locator {
+  return page.getByRole("navigation", { name: "System areas" });
+}
 
 /**
  * Clicks a settings sheet's Save button by dispatching the click event
@@ -18,33 +30,65 @@ async function clickSave(page: Page): Promise<void> {
 test("alice (admin) finds the files folder under System > General", async ({ page }) => {
   await page.goto("/files");
 
-  // The files folder is the only storage, so System has no Storage page.
-  await expect(page.getByRole("link", { name: "General" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Storage", exact: true })).toHaveCount(0);
-  await page.getByRole("link", { name: "General" }).click();
+  // System is one row in the sidebar. Its areas are listed on the System page itself, which
+  // opens on the first of them.
+  await expect(sidebar(page).getByRole("link", { name: "General" })).toHaveCount(0);
+  await sidebar(page).getByRole("link", { name: "System", exact: true }).click();
+  await expect(page).toHaveURL(/\/system$/);
+  await expect(page.getByRole("heading", { level: 1, name: "General" })).toBeVisible();
+  // The files folder is the only storage, so System has no Storage area.
+  await expect(systemAreas(page).getByRole("link", { name: "Storage", exact: true })).toHaveCount(
+    0,
+  );
+  await systemAreas(page).getByRole("link", { name: "General", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/general$/);
   await expect(page.getByText("Folder on this server, set by FDRIVE_STORAGE_ROOT.")).toBeVisible();
+});
+
+test("alice (admin) sees every System area in order, with General first and About last", async ({
+  page,
+}) => {
+  await page.goto("/system");
+
+  await expect(systemAreas(page).getByRole("link")).toHaveText([
+    /^General/,
+    /^Users/,
+    /^Backups/,
+    /^Thumbnails/,
+    /^Full-text search/,
+    /^Semantic search/,
+    /^Searchable PDFs/,
+    /^Image search/,
+    /^Office/,
+    /^AI/,
+    /^About/,
+  ]);
+  // The Features page is gone: each feature is switched in its own area.
+  await expect(systemAreas(page).getByRole("link", { name: "Features" })).toHaveCount(0);
+  await expect(
+    systemAreas(page).getByRole("link", { name: "General", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
 });
 
 test("alice (admin) sees the Search embedding server and OCR as not configured in the e2e stack", async ({
   page,
 }) => {
-  await page.goto("/files");
+  await page.goto("/system");
 
   for (const label of ["Full-text search", "Semantic search", "Searchable PDFs", "Thumbnails"]) {
-    await expect(page.getByRole("link", { name: label, exact: true })).toBeVisible();
+    await expect(systemAreas(page).getByRole("link", { name: label, exact: true })).toBeVisible();
   }
 
   // No embedding server or OCR sidecar runs in the e2e stack (unlike the
   // indexer, which `global-setup.ts` fakes; see the "configured and
   // reachable" tests below), so their own "not configured" state should
   // render rather than an error, naming exactly which variable to set.
-  await page.getByRole("link", { name: "Semantic search", exact: true }).click();
+  await systemAreas(page).getByRole("link", { name: "Semantic search", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/search$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
   await expect(page.getByText("Not configured: set FDRIVE_ML_URL.")).toBeVisible();
 
-  await page.getByRole("link", { name: "Searchable PDFs" }).click();
+  await systemAreas(page).getByRole("link", { name: "Searchable PDFs", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/ocr$/);
   await expect(page.getByText("Not configured", { exact: true })).toBeVisible();
 });
@@ -53,21 +97,22 @@ test("alice (admin) sees the Indexer page render the fake indexer's watcher, cou
   page,
 }) => {
   await page.goto("/system/indexer");
+  const sheet = page.getByRole("region", { name: "Full-text search", exact: true });
 
-  await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
-  await expect(page.getByText("Watcher on", { exact: true })).toBeVisible();
+  await expect(sheet.getByText("Reachable", { exact: true })).toBeVisible();
+  await expect(sheet.getByText("Watcher on", { exact: true })).toBeVisible();
 
-  // Counts by status: one row per status from the fake's `GET /stats`,
-  // including the "indexed" row this bug's symptom curl showed.
-  const indexedRow = page.getByRole("row", { name: /^indexed/ });
-  await expect(indexedRow).toBeVisible();
-  await expect(indexedRow.getByText("10", { exact: true })).toBeVisible();
+  // Files by status: one bar per status from the fake's `GET /stats`,
+  // including the "indexed" count this bug's symptom curl showed.
+  const indexedBar = sheet.locator('[data-slot="bar-list"] li').filter({ hasText: /^Indexed/ });
+  await expect(indexedBar).toBeVisible();
+  await expect(indexedBar.getByText("10", { exact: true })).toBeVisible();
 
-  // Last scan.
-  await expect(page.getByText("Last scan")).toBeVisible();
-  await expect(page.getByText(/16 seen/)).toBeVisible();
-  await expect(page.getByText(/0 changed/)).toBeVisible();
-  await expect(page.getByText(/0 deleted/)).toBeVisible();
+  // Last scan, as named values.
+  await expect(sheet.getByRole("heading", { name: "Last scan" })).toBeVisible();
+  await expect(fact(sheet, "Seen")).toHaveText("16");
+  await expect(fact(sheet, "Changed")).toHaveText("0");
+  await expect(fact(sheet, "Deleted")).toHaveText("0");
 
   // The error sample now lives in the Logs sheet rather than inline.
   await expect(page.getByText("Recent errors")).toHaveCount(0);
@@ -195,12 +240,13 @@ test.describe("bob (not admin)", () => {
   // otherwise applies by default.
   test.use({ storageState: { cookies: [], origins: [] } });
 
-  test("sees no System sidebar group and gets 403 from the admin connection and system routes", async ({
+  test("sees no System row in the sidebar and gets 403 from the admin connection and system routes", async ({
     page,
   }) => {
     await loginAs(page, "bob", "bob-password");
 
     await expect(page.getByText("Locations")).toBeVisible();
+    await expect(sidebar(page).getByRole("link", { name: "System", exact: true })).toHaveCount(0);
     await expect(page.getByText("System")).toBeHidden();
     await expect(page.getByRole("link", { name: "General" })).toBeHidden();
     await expect(page.getByRole("link", { name: "Indexer" })).toBeHidden();
@@ -227,7 +273,13 @@ test.describe("bob (not admin)", () => {
   test("is sent back to /files when typing a System page's address directly", async ({ page }) => {
     await loginAs(page, "bob", "bob-password");
 
-    for (const path of ["/system/general", "/system/features", "/system/users"]) {
+    for (const path of [
+      "/system",
+      "/system/general",
+      "/system/features",
+      "/system/users",
+      "/system/about",
+    ]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/files$/);
       await expect(page.getByRole("heading", { name: "General" })).toHaveCount(0);
@@ -242,8 +294,10 @@ for (const scope of ["index", "thumbnails"] as const) {
   }) => {
     const isIndex = scope === "index";
     const endpoint = isIndex ? "/api/v1/system/indexer/clear" : "/api/v1/system/thumbnails/clear";
-    const trigger = isIndex ? "Clear index" : "Clear cache";
-    const action = isIndex ? "Clear index" : "Clear cache";
+    // The destructive action sits at the far end of the sheet's footer, and its dialog confirms
+    // with the same words.
+    const trigger = isIndex ? "Clear index" : "Clear thumbnails";
+    const action = trigger;
     const progressKey = isIndex ? "indexClear" : "thumbnailClear";
     let started = false;
     let completed = false;
@@ -276,6 +330,11 @@ for (const scope of ["index", "thumbnails"] as const) {
       await route.fulfill({ response, json });
     });
     await page.goto(isIndex ? "/system/indexer" : "/system/thumbnails");
+    // The footer's far end is where the Activity panel sits; earlier specs can leave it open.
+    await expect(
+      page.getByRole("main").getByRole("button", { name: trigger, exact: true }),
+    ).toBeEnabled();
+    await dismissActivityPanel(page);
     await page.getByRole("main").getByRole("button", { name: trigger, exact: true }).click();
     let dialog = page.getByRole("dialog");
     await expect(dialog.getByText(/Original files/)).toBeVisible();

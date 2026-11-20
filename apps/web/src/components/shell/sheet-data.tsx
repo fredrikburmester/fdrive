@@ -23,7 +23,16 @@ export interface BarListProps extends Omit<ComponentProps<"ul">, "children"> {
 export function BarList({ items, total, className, ...props }: BarListProps) {
   const whole = total ?? items.reduce((sum, item) => sum + item.value, 0);
   return (
-    <ul data-slot="bar-list" className={cn("flex flex-col gap-3 text-sm", className)} {...props}>
+    <ul
+      data-slot="bar-list"
+      // One grid for the whole list, so every bar starts and ends at the same place whatever the
+      // labels and numbers beside it measure.
+      className={cn(
+        "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-3 text-sm",
+        className,
+      )}
+      {...props}
+    >
       {items.map((item) => {
         const share = whole > 0 ? Math.min(item.value / whole, 1) : 0;
         return (
@@ -31,7 +40,7 @@ export function BarList({ items, total, className, ...props }: BarListProps) {
             key={item.label}
             data-tone={item.tone ?? "neutral"}
             className={cn(
-              "grid grid-cols-[minmax(5rem,auto)_minmax(0,1fr)_minmax(4rem,auto)] items-center gap-3",
+              "col-span-3 grid grid-cols-subgrid items-center",
               item.tone === "danger" && item.value > 0 && "text-destructive",
             )}
           >

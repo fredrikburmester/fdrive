@@ -6,8 +6,8 @@ services report their availability independently.
 
 ## Enable and manage
 
-Administrators enable optional processing during onboarding or under System > Features.
-Open each feature's page for its settings and status. The bundled runtime starts selected
+Administrators enable optional processing during onboarding or under System, where each
+feature is an area with its own switch, settings and status. The bundled runtime starts selected
 services and downloads models when needed; allow initialization to finish on first use.
 See [deployment](../deploy/README.md) for the current stack and network configuration.
 

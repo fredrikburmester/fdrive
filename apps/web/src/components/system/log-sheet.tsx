@@ -1,23 +1,13 @@
 "use client";
 
 import type { SystemLogEntry, SystemLogLevel, SystemLogSubsystem } from "@fdrive/contracts";
-import { ChevronRight, ScrollText } from "lucide-react";
+import { cn } from "cn";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
+import { SegmentedControl } from "@/components/shell/setting-controls";
 import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetClose,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Sheet, SheetContent, SheetFooter } from "@/components/ui/sheet";
 import { useSystemLogs } from "@/lib/api/system-logs-queries";
 import { adaptDocument, createAnchorDownloader, downloadObjectUrl } from "@/lib/files/download";
 import {
@@ -27,6 +17,7 @@ import {
   logFileName,
   toNdjson,
 } from "@/lib/system/logs";
+import { SYSTEM_SHEET, SystemSheetHeader } from "./settings-sheet";
 
 export interface LogSheetProps {
   subsystem: SystemLogSubsystem;
@@ -43,24 +34,55 @@ export function LogSheet({ subsystem, title }: LogSheetProps) {
   const [open, setOpen] = useState(false);
   return (
     <Sheet open={open} onOpenChange={setOpen}>
-      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
-        <ScrollText />
+      <Button type="button" variant="outline" size="lg" onClick={() => setOpen(true)}>
         Logs
       </Button>
-      <SheetContent side="right" className="gap-0 sm:max-w-xl">
-        {open ? <LogSheetBody subsystem={subsystem} title={title ?? `${subsystem} log`} /> : null}
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className={cn(SYSTEM_SHEET, "data-[side=right]:sm:max-w-xl")}
+      >
+        {open ? (
+          <LogSheetBody
+            subsystem={subsystem}
+            title={title ?? `${subsystem} log`}
+            onClose={() => setOpen(false)}
+          />
+        ) : null}
       </SheetContent>
     </Sheet>
   );
 }
 
-const LEVEL_BADGE: Record<SystemLogLevel, "outline" | "secondary" | "destructive"> = {
-  info: "outline",
-  warn: "secondary",
-  error: "destructive",
+/** The subsystems whose System area also keeps a per-file failure history. */
+const WITH_FAILURE_HISTORY: readonly SystemLogSubsystem[] = [
+  "thumbnails",
+  "indexer",
+  "search",
+  "image-search",
+];
+
+const LEVELS = LOG_LEVEL_FILTERS.map((filter) => filter.value);
+const LEVEL_LABELS = Object.fromEntries(
+  LOG_LEVEL_FILTERS.map((filter) => [filter.value, filter.label]),
+) as Record<SystemLogLevel, string>;
+
+/** A level is its word; the color only repeats what a warning or an error already says. */
+const LEVEL_TONES: Record<SystemLogLevel, string> = {
+  info: "text-muted-foreground",
+  warn: "text-warning",
+  error: "text-destructive",
 };
 
-function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; title: string }) {
+function LogSheetBody({
+  subsystem,
+  title,
+  onClose,
+}: {
+  subsystem: SystemLogSubsystem;
+  title: string;
+  onClose: () => void;
+}) {
   const [level, setLevel] = useState<SystemLogLevel>("info");
   const logs = useSystemLogs(subsystem, { level, enabled: true });
   const entries = logs.data?.pages.flatMap((page) => page.entries) ?? [];
@@ -92,48 +114,49 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
 
   return (
     <>
-      <SheetHeader className="border-b pr-12">
-        <SheetTitle className="capitalize">{title}</SheetTitle>
-        <SheetDescription>Newest first. Refreshes every 5 seconds while open.</SheetDescription>
-        {["thumbnails", "indexer", "search", "image-search"].includes(subsystem) ? (
-          <SheetClose render={<a href="#processing-failures" className="text-sm underline" />}>
+      <SystemSheetHeader
+        title={title}
+        titleClassName="first-letter:uppercase"
+        description="Newest first. Refreshes every 5 seconds while open."
+      >
+        {WITH_FAILURE_HISTORY.includes(subsystem) ? (
+          // The failure line is on the sheet under this one: close, and bring it into view.
+          <button
+            type="button"
+            className="w-fit rounded-sm text-left text-muted-foreground text-sm underline underline-offset-4 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring max-md:-my-2 max-md:py-3"
+            onClick={() => {
+              onClose();
+              document.getElementById("processing-failures")?.scrollIntoView({ block: "nearest" });
+            }}
+          >
             View per-file failure history
-          </SheetClose>
+          </button>
         ) : null}
-      </SheetHeader>
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-2">
-        <ToggleGroup
-          aria-label="Minimum level"
-          size="sm"
-          variant="outline"
-          value={[level]}
-          onValueChange={(next: unknown[]) => {
-            const chosen = next[0];
-            if (typeof chosen === "string") setLevel(chosen as SystemLogLevel);
-          }}
-        >
-          {LOG_LEVEL_FILTERS.map((filter) => (
-            <ToggleGroupItem key={filter.value} value={filter.value}>
-              {filter.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <span className="text-xs text-muted-foreground">
+      </SystemSheetHeader>
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-border border-b px-5 py-3">
+        <SegmentedControl
+          label="Minimum level"
+          value={level}
+          options={LEVELS}
+          labels={LEVEL_LABELS}
+          onChange={setLevel}
+        />
+        <span className="text-muted-foreground text-xs tabular-nums">
           {logs.isFetching && !logs.isFetchingNextPage
             ? "Refreshing…"
             : `${entries.length} entries`}
         </span>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col p-2">
+        <div className="flex flex-col px-5 py-3">
           {logs.isError ? (
-            <p className="p-2 text-sm text-destructive">
+            <p role="alert" className="py-1 text-destructive text-sm">
               Could not load the log: {logs.error.message}
             </p>
           ) : logs.isPending ? (
-            <p className="p-2 text-sm text-muted-foreground">Loading…</p>
+            <p className="py-1 text-muted-foreground text-sm">Loading…</p>
           ) : entries.length === 0 ? (
-            <p className="p-2 text-sm text-muted-foreground">No entries at this level yet.</p>
+            <p className="py-1 text-muted-foreground text-sm">No entries at this level yet.</p>
           ) : (
             <ul className="flex flex-col font-mono text-xs" aria-label="Log entries">
               {entries.map((entry) => (
@@ -144,9 +167,8 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
           {logs.hasNextPage ? (
             <Button
               type="button"
-              variant="ghost"
-              size="sm"
-              className="mt-2 self-center"
+              variant="secondary"
+              className="mt-3 h-10 self-center px-3.5 max-md:h-11"
               disabled={logs.isFetchingNextPage}
               onClick={() => void logs.fetchNextPage()}
             >
@@ -155,12 +177,11 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
           ) : null}
         </div>
       </ScrollArea>
-      <SheetFooter className="shrink-0 border-t sm:flex-row sm:justify-end">
+      <SheetFooter className="shrink-0 flex-row flex-wrap justify-end gap-2 border-border border-t px-5 py-4">
         <Button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-11 sm:h-7"
+          variant="secondary"
+          className="h-11 px-4.5"
           disabled={entries.length === 0}
           onClick={() => void copy()}
         >
@@ -168,9 +189,8 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
         </Button>
         <Button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-11 sm:h-7"
+          variant="secondary"
+          className="h-11 px-4.5"
           disabled={entries.length === 0}
           onClick={() => download("txt")}
         >
@@ -178,9 +198,8 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
         </Button>
         <Button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-11 sm:h-7"
+          variant="secondary"
+          className="h-11 px-4.5"
           disabled={entries.length === 0}
           onClick={() => download("ndjson")}
         >
@@ -191,32 +210,21 @@ function LogSheetBody({ subsystem, title }: { subsystem: SystemLogSubsystem; tit
   );
 }
 
+/**
+ * One entry: when, its level, and what happened. Data attached to the entry sits under the
+ * message as one line of JSON, the same text the `.txt` download carries.
+ */
 function LogRow({ entry }: { entry: SystemLogEntry }) {
-  const line = (
-    <>
-      <span className="shrink-0 text-muted-foreground">{formatLogTime(entry.at)}</span>
-      <Badge variant={LEVEL_BADGE[entry.level]} className="w-14 shrink-0 justify-center font-mono">
-        {entry.level}
-      </Badge>
-      <span className="min-w-0 break-words">{entry.message}</span>
-    </>
-  );
-  if (entry.data === undefined) {
-    return <li className="flex items-start gap-2 px-2 py-1">{line}</li>;
-  }
   return (
-    <li className="px-2 py-1">
-      <Collapsible>
-        <CollapsibleTrigger className="group flex w-full items-start gap-2 text-left">
-          <ChevronRight className="mt-0.5 size-3 shrink-0 transition group-data-panel-open:rotate-90" />
-          {line}
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <pre className="mt-1 ml-5 overflow-x-auto rounded bg-muted p-2 text-[11px] whitespace-pre-wrap">
-            {JSON.stringify(entry.data, null, 2)}
-          </pre>
-        </CollapsibleContent>
-      </Collapsible>
+    <li className="grid grid-cols-[auto_2.75rem_minmax(0,1fr)] items-baseline gap-x-3 py-1.5">
+      <span className="text-muted-foreground tabular-nums">{formatLogTime(entry.at)}</span>
+      <span className={cn("font-medium", LEVEL_TONES[entry.level])}>{entry.level}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{entry.message}</span>
+      {entry.data !== undefined ? (
+        <span className="col-start-3 mt-0.5 min-w-0 text-muted-foreground [overflow-wrap:anywhere]">
+          {JSON.stringify(entry.data)}
+        </span>
+      ) : null}
     </li>
   );
 }

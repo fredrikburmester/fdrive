@@ -23,7 +23,7 @@ export const HttpOrigin = z
 
 /**
  * The address everyone opens fdrive at, chosen by the owner in onboarding
- * (System > Features afterwards). The bundled Office editor is told this is
+ * (System > General afterwards). The bundled Office editor is told this is
  * where fdrive lives, and MCP tool results link into it. `null` until set:
  * MCP links are then relative and Office cannot be enabled.
  */

@@ -1,14 +1,21 @@
 import type { PersonalActivityEvent } from "@fdrive/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  activityAction,
   activityFailed,
   activityFolder,
   activityItemName,
   activityOrigin,
   activityResult,
+  activityResultTone,
+  activitySource,
   dayLabel,
   eventCountLabel,
+  eventKey,
+  fileAvailability,
   groupByDay,
+  sentenceCase,
+  uncertaintyNotes,
 } from "./history-rows";
 
 const base: PersonalActivityEvent = {
@@ -125,11 +132,41 @@ describe("what a row shows", () => {
     expect(activityOrigin(same, "/docs/report.txt")).toBeNull();
   });
 
+  it("says what happened, and how often when it repeated", () => {
+    expect(activityAction(base)).toBe("Uploaded");
+    expect(activityAction({ ...base, action: "file.open", count: 3 })).toBe("Opened 3 times");
+  });
+
+  it("names the client an action came from", () => {
+    expect(activitySource("web")).toBe("Web");
+    expect(activitySource("api")).toBe("API");
+    expect(activitySource("native")).toBe("Native app");
+  });
+
+  it("writes a recorded value as words, the first one capitalized", () => {
+    expect(sentenceCase("server_confirmed")).toBe("Server confirmed");
+    expect(sentenceCase("failed")).toBe("Failed");
+    expect(sentenceCase("")).toBe("");
+  });
+
   it("reads the result from the outcome, a provisional read, or an action still under way", () => {
-    expect(activityResult(base)).toBe("success");
-    expect(activityResult({ ...base, outcome: "conflict" })).toBe("conflict");
+    expect(activityResult(base)).toBe("Success");
+    expect(activityResult({ ...base, outcome: "conflict" })).toBe("Conflict");
     expect(activityResult({ ...base, outcome: null })).toBe("Started");
     expect(activityResult({ ...base, provisional: true })).toBe("Recent");
+  });
+
+  it("colors the result by how the action ended", () => {
+    expect(activityResultTone(base)).toBe("success");
+    expect(activityResultTone({ ...base, outcome: "failed" })).toBe("danger");
+    expect(activityResultTone({ ...base, outcome: "denied" })).toBe("danger");
+    expect(activityResultTone({ ...base, outcome: "partial" })).toBe("warning");
+    expect(activityResultTone({ ...base, outcome: "conflict" })).toBe("warning");
+    // Nothing to judge yet, or nothing known: no color.
+    expect(activityResultTone({ ...base, outcome: null })).toBe("neutral");
+    expect(activityResultTone({ ...base, outcome: "unknown" })).toBe("neutral");
+    expect(activityResultTone({ ...base, outcome: "cancelled" })).toBe("neutral");
+    expect(activityResultTone({ ...base, provisional: true })).toBe("neutral");
   });
 
   it("flags only an action that did not go through", () => {
@@ -146,5 +183,57 @@ describe("what a row shows", () => {
     expect(eventCountLabel(12, false)).toBe("12 events");
     expect(eventCountLabel(1, true)).toBe("1+ events");
     expect(eventCountLabel(50, true)).toBe("50+ events");
+  });
+});
+
+describe("which row an event is", () => {
+  it("keeps an operation's row from its intent to its outcome", () => {
+    const operationId = "00000000-0000-4000-8000-0000000000c1";
+    const intent = { ...base, id: "00000000-0000-4000-8000-000000000011", operationId };
+    const outcome = { ...base, id: "00000000-0000-4000-8000-000000000012", operationId };
+    expect(eventKey(intent)).toBe(operationId);
+    expect(eventKey(outcome)).toBe(eventKey(intent));
+  });
+
+  it("falls back to the event itself when it belongs to no operation", () => {
+    expect(eventKey(base)).toBe(base.id);
+  });
+});
+
+describe("what an observation leaves uncertain", () => {
+  it("says nothing about a confirmed action", () => {
+    expect(uncertaintyNotes(base)).toEqual([]);
+  });
+
+  it("says the author of an observed change is unknown", () => {
+    const missing = {
+      ...base,
+      action: "observation.location_missing" as const,
+      class: "observation" as const,
+    };
+    expect(uncertaintyNotes(missing)).toEqual([
+      "Detected outside a confirmed fdrive action. Who made this change is unknown.",
+    ]);
+  });
+
+  it("adds that a resolved location may hold a different file", () => {
+    const resolved = {
+      ...base,
+      action: "observation.resolved" as const,
+      class: "observation" as const,
+    };
+    const notes = uncertaintyNotes(resolved);
+    expect(notes).toHaveLength(2);
+    expect(notes[1]).toMatch(/Whether this is the earlier file remains unknown/);
+  });
+});
+
+describe("whether a journey's file can be reached", () => {
+  it("gives each state a word and a tone", () => {
+    expect(fileAvailability("live")).toEqual({ label: "Live", tone: "success" });
+    expect(fileAvailability("trashed")).toEqual({ label: "In Trash", tone: "neutral" });
+    expect(fileAvailability("deleted")).toEqual({ label: "Deleted", tone: "off" });
+    expect(fileAvailability("unknown")).toEqual({ label: "Unknown", tone: "warning" });
+    expect(fileAvailability("unavailable")).toEqual({ label: "Unavailable", tone: "warning" });
   });
 });

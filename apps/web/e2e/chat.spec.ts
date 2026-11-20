@@ -39,15 +39,18 @@ test("chat opens from the toolbar as a short overlay, follows the person between
   try {
     await page.goto("/system/ai");
     await dismissActivityPanel(page);
-    await page.getByRole("button", { name: "Settings" }).click();
-    const sheet = page.getByRole("dialog").filter({ hasText: "AI settings" });
+    // The AI sheet's own rows hold the settings, and one Save at their end saves them together.
+    const sheet = page.getByRole("region", { name: "AI", exact: true });
     await sheet.getByRole("switch", { name: "Chat" }).click();
-    await sheet.getByLabel("Provider").click();
-    await page.getByRole("option", { name: "OpenAI-compatible server" }).click();
+    await sheet
+      .getByRole("group", { name: "Provider" })
+      .getByRole("button", { name: "OpenAI-compatible" })
+      .click();
     await sheet.getByLabel("Base URL").fill(fakeAi.baseUrl);
     await sheet.getByLabel("Model").fill(FAKE_AI_MODEL);
-    await sheet.getByRole("button", { name: "Save" }).click();
-    await expect(sheet).toBeHidden();
+    await sheet.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("AI settings saved.")).toBeVisible();
+    await expect(sheet.getByText("On", { exact: true })).toBeVisible();
 
     const sandbox = await openSandbox(page, "chat");
     await uploadFiles(page, [

@@ -1,9 +1,17 @@
 "use client";
 
-import { buildRequestUrl, type OcrOriginal, ROUTES } from "@fdrive/contracts";
-import { Archive, Download, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
+import {
+  buildRequestUrl,
+  type OcrOriginal,
+  type OcrOriginalState,
+  ROUTES,
+} from "@fdrive/contracts";
+import { cn } from "cn";
+import { Download, MoreHorizontal, RotateCcw, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { Code } from "@/components/shell/sheet-data";
+import { StatusBadge, type StatusTone } from "@/components/shell/status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +22,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -24,14 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
+import { Sheet, SheetContent, SheetFooter } from "@/components/ui/sheet";
 import { describeApiError } from "@/lib/api/errors";
 import {
   OCR_ORIGINALS_PAGE_SIZE,
@@ -50,13 +50,31 @@ import {
   restoreOptIns,
 } from "@/lib/system/ocr-originals";
 import { useFormatters } from "@/lib/use-format-preferences";
+import { SYSTEM_SHEET, SystemSheetHeader } from "./settings-sheet";
 
 function downloadHref(id: string): string {
   return buildRequestUrl("", ROUTES.system.ocrOriginalDownload, { id });
 }
 
 /**
- * The "Manage" button on `System > OCR` and the sheet it opens: the inventory
+ * `ORIGINAL_STATE_TONE` names its tones as badge variants. A status badge takes these instead:
+ * the ordinary states are plain facts, and the two where a restore destroys something ask for
+ * attention.
+ */
+const STATE_TONES: Record<(typeof ORIGINAL_STATE_TONE)[OcrOriginalState], StatusTone> = {
+  outline: "neutral",
+  secondary: "neutral",
+  destructive: "warning",
+};
+
+/**
+ * The columns of a row where the sheet has room for them: the file, its state, its size, when
+ * it was kept, and the row's menu. On a phone a row is the path over one line of those details.
+ */
+const COLUMNS = "sm:grid-cols-[minmax(0,1fr)_9.5rem_4.5rem_4.5rem_2.5rem]";
+
+/**
+ * The "Manage" button on `System > Searchable PDFs` and the sheet it opens: the inventory
  * of originals kept before each rewrite, with restore, download and delete.
  * The body only mounts while open, so a closed sheet issues no request.
  */
@@ -67,15 +85,17 @@ export function OcrOriginalsSheet({ disabled }: { disabled?: boolean }) {
       <Button
         type="button"
         variant="outline"
-        size="sm"
         className="max-md:min-h-11"
         disabled={disabled}
         onClick={() => setOpen(true)}
       >
-        <Archive />
         Manage
       </Button>
-      <SheetContent side="right" className="gap-0 sm:max-w-2xl">
+      <SheetContent
+        side="right"
+        showCloseButton={false}
+        className={cn(SYSTEM_SHEET, "data-[side=right]:sm:max-w-2xl")}
+      >
         {open ? <OcrOriginalsSheetBody /> : null}
       </SheetContent>
     </Sheet>
@@ -134,58 +154,71 @@ function OcrOriginalsSheetBody() {
 
   return (
     <>
-      <SheetHeader className="border-b pr-12">
-        <SheetTitle>Kept originals</SheetTitle>
-        <SheetDescription>
-          The file each OCR rewrite replaced, newest first. Restoring puts one back over the
-          searchable PDF.
-        </SheetDescription>
-      </SheetHeader>
-      <div className="border-b px-4 py-2">
+      <SystemSheetHeader
+        title="Kept originals"
+        description="The file each OCR rewrite replaced, newest first. Restoring puts one back over the searchable PDF."
+      />
+      <div className="border-border border-b px-5 py-3">
         <Input
           aria-label="Search kept originals"
-          placeholder="Search by path…"
+          placeholder="Search by path"
+          className="h-10 bg-background px-3 max-md:h-11"
           value={query}
           onChange={(event) => search(event.target.value)}
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className="flex flex-col p-2">
+        <div className="px-5 py-2">
           {originals.isError ? (
-            <p className="p-2 text-sm text-destructive">
+            <p role="alert" className="py-2 text-destructive text-sm">
               Could not load kept originals: {describeApiError(originals.error)}
             </p>
           ) : originals.isPending ? (
-            <p className="p-2 text-sm text-muted-foreground">Loading…</p>
+            <p className="py-2 text-muted-foreground text-sm">Loading…</p>
           ) : items.length === 0 ? (
-            <p className="p-2 text-sm text-muted-foreground">
+            <p className="py-2 text-muted-foreground text-sm">
               {query === ""
                 ? "No originals are kept yet. One is kept each time OCR rewrites a PDF."
                 : "No kept original matches that search."}
             </p>
           ) : (
-            <ul className="flex flex-col gap-1" aria-label="Kept originals">
-              {items.map((original) => (
-                <OriginalRow
-                  key={original.id}
-                  original={original}
-                  onRestore={() => setPending({ kind: "restore", original })}
-                  onDelete={() => setPending({ kind: "delete", original })}
-                />
-              ))}
-            </ul>
+            <>
+              {/* Column heads for the eye. Each row says the same in words to a screen reader. */}
+              <div
+                aria-hidden="true"
+                className={cn(
+                  "hidden h-10 items-center gap-x-4 border-border border-b font-medium text-muted-foreground text-xs sm:grid",
+                  COLUMNS,
+                )}
+              >
+                <span>File</span>
+                <span>State</span>
+                <span className="text-right">Size</span>
+                <span>Kept</span>
+              </div>
+              <ul aria-label="Kept originals" className="flex flex-col">
+                {items.map((original) => (
+                  <OriginalRow
+                    key={original.id}
+                    original={original}
+                    onRestore={() => setPending({ kind: "restore", original })}
+                    onDelete={() => setPending({ kind: "delete", original })}
+                  />
+                ))}
+              </ul>
+            </>
           )}
         </div>
       </ScrollArea>
-      <SheetFooter className="shrink-0 flex-row items-center justify-between border-t">
-        <span className="text-xs text-muted-foreground">
+      <SheetFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-2 border-border border-t px-5 py-4">
+        <span className="text-muted-foreground text-xs tabular-nums">
           {pageSummary(total, offset, items.length)}
         </span>
         <div className="flex gap-2">
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="secondary"
+            className="h-11 px-4.5"
             disabled={offset === 0}
             onClick={() => setOffset(Math.max(0, offset - OCR_ORIGINALS_PAGE_SIZE))}
           >
@@ -193,8 +226,8 @@ function OcrOriginalsSheetBody() {
           </Button>
           <Button
             type="button"
-            variant="outline"
-            size="sm"
+            variant="secondary"
+            className="h-11 px-4.5"
             disabled={offset + items.length >= total}
             onClick={() => setOffset(offset + OCR_ORIGINALS_PAGE_SIZE)}
           >
@@ -221,13 +254,17 @@ function OcrOriginalsSheetBody() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           {pending !== null ? (
-            <p className="font-mono text-xs break-all text-muted-foreground">
+            <Code className="break-all text-muted-foreground text-xs">
               {originalTitle(pending.original)}
-            </p>
+            </Code>
           ) : null}
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel className="max-md:min-h-11">Cancel</AlertDialogCancel>
             <AlertDialogAction
+              className="max-md:min-h-11"
+              variant={
+                pending?.kind === "delete" || confirmation?.destructive ? "destructive" : "default"
+              }
               disabled={restore.isPending || remove.isPending}
               onClick={(event) => {
                 event.preventDefault();
@@ -243,6 +280,7 @@ function OcrOriginalsSheetBody() {
   );
 }
 
+/** One kept original: its source path, what is at that path now, and what can be done with it. */
 function OriginalRow({
   original,
   onRestore,
@@ -254,50 +292,66 @@ function OriginalRow({
 }) {
   const { formatBytes } = useFormatters();
   return (
-    <li className="flex items-start gap-2 rounded-md px-2 py-2 hover:bg-muted/50">
-      <div className="min-w-0 flex-1">
-        <p className="font-mono text-xs break-all">{originalTitle(original)}</p>
-        <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          {original.state !== null ? (
-            <Badge variant={ORIGINAL_STATE_TONE[original.state]}>
-              {ORIGINAL_STATE_LABEL[original.state]}
-            </Badge>
-          ) : (
-            <Badge variant="secondary">Source unknown</Badge>
-          )}
-          <span>{formatBytes(original.size)}</span>
-          <span>kept {formatRelativeTime(new Date(original.keptAt), new Date())}</span>
-          {original.root !== null ? <span>in {original.root}</span> : null}
-        </p>
+    <li
+      className={cn(
+        "grid min-h-13 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 border-border border-b py-2.5 last:border-b-0",
+        COLUMNS,
+      )}
+    >
+      <div className="min-w-0">
+        <Code className="block break-all">{originalTitle(original)}</Code>
+        {original.root !== null ? (
+          <p className="mt-0.5 text-muted-foreground text-xs">in {original.root}</p>
+        ) : null}
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              aria-label={`Actions for ${originalTitle(original)}`}
-            />
-          }
-        >
-          <MoreHorizontal />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem disabled={!isRestorable(original)} onClick={onRestore}>
-            <RotateCcw />
-            Restore
-          </DropdownMenuItem>
-          <DropdownMenuItem render={<a href={downloadHref(original.id)} download />}>
-            <Download />
-            Download
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={onDelete}>
-            <Trash2 />
-            Delete
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      {/* One line under the path on a phone; from `sm` up its parts are the row's columns. */}
+      <div className="col-start-1 row-start-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground text-xs sm:contents sm:text-sm">
+        <span>
+          {original.state !== null ? (
+            <StatusBadge tone={STATE_TONES[ORIGINAL_STATE_TONE[original.state]]}>
+              {ORIGINAL_STATE_LABEL[original.state]}
+            </StatusBadge>
+          ) : (
+            <StatusBadge tone="off">Source unknown</StatusBadge>
+          )}
+        </span>
+        <span className="tabular-nums sm:text-right">{formatBytes(original.size)}</span>
+        <span>
+          <span className="sm:sr-only">kept </span>
+          {formatRelativeTime(new Date(original.keptAt), new Date())}
+        </span>
+      </div>
+      <div className="col-start-2 row-span-2 row-start-1 sm:col-start-auto sm:row-span-1 sm:row-start-auto">
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground max-md:size-11"
+                aria-label={`Actions for ${originalTitle(original)}`}
+              />
+            }
+          >
+            <MoreHorizontal />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem disabled={!isRestorable(original)} onClick={onRestore}>
+              <RotateCcw />
+              Restore
+            </DropdownMenuItem>
+            <DropdownMenuItem render={<a href={downloadHref(original.id)} download />}>
+              <Download />
+              Download
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" onClick={onDelete}>
+              <Trash2 />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </li>
   );
 }

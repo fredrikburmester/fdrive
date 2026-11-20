@@ -1,56 +1,60 @@
 // @vitest-environment jsdom
 import type { AboutResponse } from "@fdrive/contracts";
-import { cleanup, render, screen, within } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const about = vi.fn<() => Promise<AboutResponse>>();
-vi.mock("@/lib/api/server", () => ({ serverApiClient: async () => ({ about }) }));
+const mocks = vi.hoisted(() => ({ isAdmin: false, about: vi.fn<() => Promise<AboutResponse>>() }));
+vi.mock("next/navigation", () => ({
+  redirect: (path: string) => {
+    throw new Error(`redirect:${path}`);
+  },
+}));
+vi.mock("@/lib/api/server", () => ({
+  serverApiClient: async () => ({
+    about: mocks.about,
+    me: async () => ({ userId: "fixture", isAdmin: mocks.isAdmin }),
+  }),
+}));
 // The header needs the shell's sidebar and query providers; its own tests cover it.
 vi.mock("@/components/shell/page-header", () => ({ PageHeader: () => null }));
 
 import AboutPage from "./page";
 
+const revision = "0123456789abcdef0123456789abcdef01234567";
+
+beforeEach(() => {
+  mocks.isAdmin = false;
+  mocks.about.mockReset();
+  mocks.about.mockResolvedValue({
+    version: revision,
+    release: "0.1.0",
+    revision,
+    uptimeSeconds: 90,
+    setupRequired: false,
+  });
+});
 afterEach(cleanup);
 
-const revision = "0123456789abcdef0123456789abcdef01234567";
-const short = revision.slice(0, 12);
-
-/** Renders the page for this build and returns its Server version value. */
-async function serverVersion(build: Pick<AboutResponse, "version" | "release" | "revision">) {
-  about.mockResolvedValue({ ...build, uptimeSeconds: 90, setupRequired: false });
+it("shows About as the whole page to someone who is not an administrator", async () => {
   render(await AboutPage());
-  // A detail row: the label in the left column, its value in the right one.
-  const value = screen
-    .getByText("Server version")
-    .closest('[data-slot="setting-row"]')?.lastElementChild;
-  if (!(value instanceof HTMLElement)) throw new Error("Server version has no value");
-  return value;
-}
 
-it("shows the release with its commit linked beside it", async () => {
-  const value = await serverVersion({ version: revision, release: "0.1.0", revision });
-
-  expect(value.textContent).toBe(`0.1.0${short}`);
-  const commit = within(value).getByRole("link", { name: short });
-  expect(commit.getAttribute("href")).toBe(
+  const sheet = screen.getByRole("region", { name: "About fdrive" });
+  expect(sheet.getAttribute("data-slot")).toBe("detail-sheet");
+  expect(screen.getByRole("heading", { level: 1, name: "About fdrive" })).toBeTruthy();
+  // The running API, read on the server for this render.
+  expect(screen.getByText("Version").nextElementSibling?.textContent).toBe("0.1.0");
+  expect(screen.getByRole("link", { name: revision.slice(0, 12) }).getAttribute("href")).toBe(
     `https://github.com/fredrikburmester/fdrive/commit/${revision}`,
   );
-  expect(commit.getAttribute("title")).toBe(revision);
-  expect(commit.className).toContain("text-muted-foreground");
+  expect(screen.getByText("API uptime").nextElementSibling?.textContent).toBe("1m");
+  // The page's own sheet: nothing to close it into.
+  expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
 });
 
-it("labels a development build without a commit", async () => {
-  const value = await serverVersion({ version: "development" });
+it("sends an administrator to About in System", async () => {
+  mocks.isAdmin = true;
 
-  expect(value.textContent).toBe("Development (version unavailable)");
-  expect(within(value).queryByRole("link")).toBeNull();
-});
-
-it("labels a development build with its commit linked beside it", async () => {
-  const value = await serverVersion({ version: revision, revision });
-
-  expect(value.textContent).toBe(`Development${short}`);
-  expect(within(value).getByRole("link", { name: short }).getAttribute("href")).toBe(
-    `https://github.com/fredrikburmester/fdrive/commit/${revision}`,
-  );
+  await expect(AboutPage()).rejects.toThrow("redirect:/system/about");
+  // Only the shell's own setup check asked the API: the page stopped before reading the server.
+  expect(mocks.about).toHaveBeenCalledTimes(1);
 });

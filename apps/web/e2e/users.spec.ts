@@ -18,6 +18,11 @@ async function personPage(browser: Browser, page: Page): Promise<Page> {
   return context.newPage();
 }
 
+/** The list of System areas beside the chosen area's sheet. */
+function systemAreas(page: Page) {
+  return page.getByRole("navigation", { name: "System areas" });
+}
+
 function row(page: Page, username: string) {
   return page.getByRole("row").filter({ has: page.getByText(username, { exact: true }) });
 }
@@ -59,9 +64,15 @@ test("an administrator adds a user who signs in to a folder of their own, then r
   const replaced = "second-password-2";
 
   await page.goto("/files");
-  await sidebar(page).getByRole("link", { name: "Users", exact: true }).click();
+  // System is one row in the sidebar; its areas are listed on the System page itself.
+  await sidebar(page).getByRole("link", { name: "System", exact: true }).click();
+  await systemAreas(page).getByRole("link", { name: "Users", exact: true }).click();
   await expect(page).toHaveURL(/\/system\/users$/);
   await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+  // The sheet's header counts the users and holds its one action.
+  await expect(
+    page.locator('[data-slot="detail-sheet-badges"]').getByText(/^\d+ users$/),
+  ).toBeVisible();
   // alice is listed as herself; nobody can disable or remove themselves.
   const alice = row(page, "alice");
   await expect(alice.getByText("You", { exact: true })).toBeVisible();
@@ -90,7 +101,7 @@ test("an administrator adds a user who signs in to a folder of their own, then r
     await expect
       .poll(async () => (await stat(homePath(username)).catch(() => null))?.isDirectory())
       .toBe(true);
-    await expect(sidebar(person).getByRole("link", { name: "Users", exact: true })).toHaveCount(0);
+    await expect(sidebar(person).getByRole("link", { name: "System", exact: true })).toHaveCount(0);
     expect((await person.request.get("/api/v1/admin/users")).status()).toBe(403);
     await page.reload();
     await expect(row(page, username).getByText("Never", { exact: true })).toHaveCount(0);
@@ -112,7 +123,10 @@ test("an administrator adds a user who signs in to a folder of their own, then r
     await expect(row(page, username).getByText("Admin", { exact: true })).toBeVisible();
     await person.goto("/system/users");
     await expect(person).toHaveURL(/\/system\/users$/);
-    await expect(sidebar(person).getByRole("link", { name: "Users", exact: true })).toBeVisible();
+    await expect(sidebar(person).getByRole("link", { name: "System", exact: true })).toBeVisible();
+    await expect(
+      systemAreas(person).getByRole("link", { name: "Users", exact: true }),
+    ).toBeVisible();
     await act(page, username, "Remove administrator");
     await expect(page.getByText(`${username} is no longer an administrator.`)).toBeVisible();
     await expect(row(page, username).getByText("Admin", { exact: true })).toHaveCount(0);

@@ -1,5 +1,6 @@
 import type { OcrOriginal, OcrOriginalsResponse, SystemOcrResponse } from "@fdrive/contracts";
 import { expect, type Page, test } from "@playwright/test";
+import { dismissActivityPanel } from "./support/activity.js";
 
 /**
  * `System > Searchable PDFs` against a stubbed OCR service. The real service
@@ -98,14 +99,25 @@ test("an administrator restores an original and is warned before overwriting a c
   await stubOcr(page, (body) => restores.push(body));
 
   await page.goto("/system/ocr");
+  // The sheet's header says the service answers; the originals have a row of their own.
+  await expect(page.getByText("Reachable", { exact: true })).toBeVisible();
   await expect(page.getByText("Kept originals")).toBeVisible();
   await expect(
     page.getByText("The file each rewrite replaced, kept so a rewrite can be undone."),
   ).toBeVisible();
 
+  // Manage sits at the right of the sheet, where the Activity panel can cover it.
+  await dismissActivityPanel(page);
   await page.getByRole("button", { name: "Manage", exact: true }).click();
-  await expect(page.getByText("alice/docs/invoice.pdf")).toBeVisible();
-  await expect(page.getByText("Changed since OCR")).toBeVisible();
+  const rows = page
+    .getByRole("dialog", { name: "Kept originals" })
+    .getByRole("list", { name: "Kept originals" })
+    .getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.filter({ hasText: "alice/docs/invoice.pdf" })).toContainText("OCR'd");
+  await expect(rows.filter({ hasText: "alice/docs/receipt.pdf" })).toContainText(
+    "Changed since OCR",
+  );
   await page.screenshot({ path: test.info().outputPath("ocr-originals.png"), fullPage: true });
 
   // The changed file is the one that must not be overwritten silently.

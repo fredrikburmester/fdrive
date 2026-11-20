@@ -181,15 +181,17 @@ export function SystemPage({
         <div data-slot="system-page-off" className="flex max-w-prose flex-col gap-2 text-sm">
           <p className="font-medium">{title} is off</p>
           {own !== undefined ? (
-            <p className="text-muted-foreground">
-              {FEATURE_DESCRIPTIONS[own].description} {featureNote(own)}
-            </p>
+            <>
+              <p className="text-muted-foreground">
+                {FEATURE_DESCRIPTIONS[own].description} {featureNote(own)}
+              </p>
+              <p className="text-muted-foreground">
+                Processing is inactive. Existing index and cache data are retained.
+              </p>
+            </>
           ) : offNote !== undefined && offNote !== null ? (
             <div className="text-muted-foreground">{offNote}</div>
           ) : null}
-          <p className="text-muted-foreground">
-            Processing is inactive. Existing index and cache data are retained.
-          </p>
         </div>
       ) : (
         children

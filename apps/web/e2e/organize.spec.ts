@@ -34,18 +34,25 @@ test("Organize suggests other folders, keeps both on a clash, moves what is kept
   try {
     await page.goto("/system/ai");
     await dismissActivityPanel(page);
-    await page.getByRole("button", { name: "Settings" }).click();
-    const sheet = page.getByRole("dialog").filter({ hasText: "AI settings" });
+    // The AI sheet's own rows hold the settings, and one Save at their end saves them together.
+    const sheet = page.getByRole("region", { name: "AI", exact: true });
     await sheet.getByRole("switch", { name: "Organize" }).click();
-    await sheet.getByLabel("Provider").click();
-    await page.getByRole("option", { name: "OpenAI-compatible server" }).click();
+    await sheet
+      .getByRole("group", { name: "Provider" })
+      .getByRole("button", { name: "OpenAI-compatible" })
+      .click();
     await sheet.getByLabel("Base URL").fill(fakeAi.baseUrl);
     await sheet.getByLabel("Model").fill(FAKE_AI_MODEL);
-    await sheet.getByRole("button", { name: "Save" }).click();
-    await expect(sheet).toBeHidden();
-    await expect(page.getByText("Organize is available to everyone signed in.")).toBeVisible();
-    await page.getByRole("button", { name: "Check connection" }).click();
-    await expect(page.getByText(`${FAKE_AI_MODEL} is available.`)).toBeVisible();
+    await sheet.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(page.getByText("AI settings saved.")).toBeVisible();
+    await expect(sheet.getByText("On", { exact: true })).toBeVisible();
+    await expect(sheet.getByRole("switch", { name: "Organize" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await sheet.getByRole("button", { name: "Test connection" }).click();
+    await expect(sheet.getByText(`${FAKE_AI_MODEL} is available.`)).toBeVisible();
+    await expect(sheet.getByText("Reachable", { exact: true })).toBeVisible();
 
     const sandbox = await openSandbox(page, "organize");
     await createFolder(page, "Finance");

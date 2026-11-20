@@ -560,7 +560,7 @@ full; it is not repeated here.
 ## Compose
 
 Production starts the processing services with the core stack. Enable
-processing through onboarding or System > Features:
+processing through onboarding or each feature's switch under System:
 
 ```sh
 docker compose up -d

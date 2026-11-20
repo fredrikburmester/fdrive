@@ -3,8 +3,9 @@
 import { LOCAL_PASSWORD_MIN_LENGTH } from "@fdrive/contracts";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
+import { DetailSheet } from "@/components/shell/list-sheet";
 import { useShellMe } from "@/components/shell/page-header";
-import { PageSection, SettingActions, SettingRow } from "@/components/shell/page-layout";
+import { SettingActions, SettingRow } from "@/components/shell/page-layout";
 import { Button } from "@/components/ui/button";
 import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -48,9 +49,9 @@ function PasswordForm({ username }: { username: string }) {
   }
 
   return (
-    <PageSection
+    <DetailSheet
       title="Password"
-      description={`The password ${username} signs in with. Changing it signs out your other sessions.`}
+      lede={`The password ${username} signs in with. Changing it signs out your other sessions.`}
     >
       <form onSubmit={submit}>
         {/* Lets password managers file the new password under the right account. */}
@@ -72,7 +73,7 @@ function PasswordForm({ username }: { username: string }) {
             type="password"
             autoComplete="current-password"
             maxLength={1024}
-            className="max-w-sm"
+            className="max-md:min-h-11"
             value={current}
             disabled={change.isPending}
             onChange={(event) => setCurrent(event.target.value)}
@@ -88,7 +89,7 @@ function PasswordForm({ username }: { username: string }) {
             type="password"
             autoComplete="new-password"
             maxLength={1024}
-            className="max-w-sm"
+            className="max-md:min-h-11"
             value={password}
             disabled={change.isPending}
             aria-invalid={errors.password !== null}
@@ -108,7 +109,7 @@ function PasswordForm({ username }: { username: string }) {
             type="password"
             autoComplete="new-password"
             maxLength={1024}
-            className="max-w-sm"
+            className="max-md:min-h-11"
             value={confirm}
             disabled={change.isPending}
             aria-invalid={errors.confirm !== null}
@@ -119,12 +120,12 @@ function PasswordForm({ username }: { username: string }) {
           ) : null}
         </SettingRow>
         <SettingActions>
-          <Button type="submit" disabled={!ready || change.isPending}>
+          {change.isError ? <FieldError>{describeCredentialError(change.error)}</FieldError> : null}
+          <Button type="submit" className="max-md:min-h-11" disabled={!ready || change.isPending}>
             {change.isPending ? "Changing…" : "Change password"}
           </Button>
-          {change.isError ? <FieldError>{describeCredentialError(change.error)}</FieldError> : null}
         </SettingActions>
       </form>
-    </PageSection>
+    </DetailSheet>
   );
 }

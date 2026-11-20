@@ -1,6 +1,6 @@
 "use client";
 
-import { PageSection } from "@/components/shell/page-layout";
+import { DetailSheet } from "@/components/shell/list-sheet";
 import { ChoiceRow } from "@/components/shell/setting-controls";
 import type { ClockFormat, DateStyle, SizeUnits } from "@/lib/format";
 import { CLOCK_FORMATS, DATE_STYLES, SIZE_UNITS } from "@/lib/format-preferences";
@@ -28,31 +28,33 @@ const CLOCK_HINTS: Record<ClockFormat, string> = {
 export function FormatsSection() {
   const [format, setFormat] = useFormatPreferences();
   return (
-    <PageSection title="Formats" description="How sizes, dates and times read in this browser.">
-      <ChoiceRow
-        label="Sizes"
-        hint={SIZE_HINTS[format.sizes]}
-        value={format.sizes}
-        options={SIZE_UNITS}
-        labels={SIZE_LABELS}
-        onChange={(value) => setFormat("sizes", value)}
-      />
-      <ChoiceRow
-        label="Dates"
-        hint={DATE_HINTS[format.dates]}
-        value={format.dates}
-        options={DATE_STYLES}
-        labels={DATE_LABELS}
-        onChange={(value) => setFormat("dates", value)}
-      />
-      <ChoiceRow
-        label="Time"
-        hint={CLOCK_HINTS[format.clock]}
-        value={format.clock}
-        options={CLOCK_FORMATS}
-        labels={CLOCK_LABELS}
-        onChange={(value) => setFormat("clock", value)}
-      />
-    </PageSection>
+    <DetailSheet title="Formats" lede="How sizes, dates and times read in this browser.">
+      <div data-slot="setting-rows">
+        <ChoiceRow
+          label="Sizes"
+          hint={SIZE_HINTS[format.sizes]}
+          value={format.sizes}
+          options={SIZE_UNITS}
+          labels={SIZE_LABELS}
+          onChange={(value) => setFormat("sizes", value)}
+        />
+        <ChoiceRow
+          label="Dates"
+          hint={DATE_HINTS[format.dates]}
+          value={format.dates}
+          options={DATE_STYLES}
+          labels={DATE_LABELS}
+          onChange={(value) => setFormat("dates", value)}
+        />
+        <ChoiceRow
+          label="Time"
+          hint={CLOCK_HINTS[format.clock]}
+          value={format.clock}
+          options={CLOCK_FORMATS}
+          labels={CLOCK_LABELS}
+          onChange={(value) => setFormat("clock", value)}
+        />
+      </div>
+    </DetailSheet>
   );
 }

@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import type { SystemFeaturesResponse } from "@fdrive/contracts";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -10,13 +9,11 @@ const mocks = vi.hoisted(() => ({
   mutate: vi.fn(),
   reset: vi.fn(),
   replace: vi.fn(),
+  refetch: vi.fn(),
 }));
 vi.mock("@/lib/api/system-queries", () => ({
   useSystemFeatures: () => mocks.query(),
   useUpdateFeatures: () => mocks.update(),
-}));
-vi.mock("./office-feature-card", () => ({
-  OfficeFeatureCard: () => <p>Office feature card</p>,
 }));
 vi.mock("./office-settings-card", () => ({
   OfficeSettingsCard: ({ onContinue }: { onContinue?: () => void }) => (
@@ -34,11 +31,8 @@ vi.mock("./public-url-card", () => ({
   ),
   PublicUrlReview: () => <span>Address review</span>,
 }));
-vi.mock("./system-page", () => ({
-  SystemPage: ({ children }: { children: ReactNode }) => <div>{children}</div>,
-}));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }) }));
-const { FeaturesPage } = await import("./features-page");
+const { SetupFeatures } = await import("./features-page");
 const off = {
   thumbnails: false,
   textSearch: false,
@@ -66,7 +60,7 @@ function mount(step: number, complete = false, values = off) {
     isPending: false,
     isError: false,
   });
-  return render(<FeaturesPage />);
+  return render(<SetupFeatures />);
 }
 afterEach(() => {
   cleanup();
@@ -134,28 +128,36 @@ describe("feature walkthrough", () => {
       expect.anything(),
     );
   });
-  it("shows all six controls after setup and supports restarting the walkthrough", () => {
+  it("has nothing left to choose once the walkthrough is finished", () => {
     mount(6, true);
-    expect(screen.getAllByRole("switch")).toHaveLength(6);
-    expect(screen.getByText("Office feature card")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Address settings" })).toBeNull();
-    expect(screen.getByRole("link", { name: "Open Thumbnails" }).getAttribute("href")).toBe(
-      "/system/thumbnails",
-    );
-    expect(screen.getByRole("link", { name: "Open Semantic search" }).getAttribute("href")).toBe(
-      "/system/search",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Run walkthrough" }));
-    expect(mocks.mutate).toHaveBeenCalledWith(
-      expect.objectContaining({ walkthroughStep: 0, walkthroughComplete: false }),
-      expect.anything(),
-    );
+
+    // The features' own System areas hold their switches from here on.
+    expect(screen.getByRole("status").textContent).toBe("Opening your files…");
+    expect(screen.queryByRole("switch")).toBeNull();
+    expect(screen.queryByRole("button")).toBeNull();
   });
-  it("keeps the walkthrough free of page links", () => {
+  it("keeps the walkthrough free of links out of the setup screen", () => {
     mount(0);
 
-    expect(screen.queryByRole("link", { name: /^Open / })).toBeNull();
-    expect(screen.queryByText("Office feature card")).toBeNull();
+    expect(screen.getByText("Set up fdrive")).toBeTruthy();
+    expect(screen.queryByRole("link")).toBeNull();
+  });
+  it("waits for the saved choices and offers a retry when they cannot be read", () => {
+    mocks.query.mockReturnValue({ data: undefined });
+    const view = render(<SetupFeatures />);
+    expect(screen.getByRole("status").textContent).toBe("Loading your setup…");
+    view.unmount();
+
+    mocks.query.mockReturnValue({
+      data: undefined,
+      isError: true,
+      error: new Error("offline"),
+      refetch: mocks.refetch,
+    });
+    render(<SetupFeatures />);
+    expect(screen.getByRole("alert").textContent).toContain("offline");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(mocks.refetch).toHaveBeenCalledOnce();
   });
 
   it("asks for the server address after the features, with no Trash step, and before Office", () => {
@@ -182,7 +184,9 @@ describe("feature walkthrough", () => {
     mount(8);
     expect(screen.getByText("Step 11 of 11 · Review")).toBeTruthy();
     expect(screen.getByText("Address review")).toBeTruthy();
-    expect(screen.getByText(/later under System: Features and General\./)).toBeTruthy();
+    // The Features page is gone: each feature is switched in its own System area.
+    expect(screen.getByText(/later under System: each feature has its own switch/)).toBeTruthy();
+    expect(screen.queryByText(/System: Features/)).toBeNull();
   });
   it("starts with features and hides storage work when everything is off", () => {
     mount(0);

@@ -1,7 +1,7 @@
 "use client";
 
 import { type AdminUser, ApiClientError, LOCAL_PASSWORD_MIN_LENGTH } from "@fdrive/contracts";
-import { MoreHorizontal, ShieldAlert, UserPlus } from "lucide-react";
+import { MoreHorizontal, ShieldAlert } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { toast } from "sonner";
 import {
@@ -13,6 +13,7 @@ import {
   DataTableRow,
   PageEmpty,
 } from "@/components/shell/page-layout";
+import { StatusBadge } from "@/components/shell/status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -55,7 +55,7 @@ import {
 import { localPasswordError, localUsernameError } from "@/lib/auth/local-account";
 import { useFormatters } from "@/lib/use-format-preferences";
 import { SystemPage } from "./system-page";
-import { SystemAlert, SystemNote, SystemSection } from "./system-section";
+import { SystemAlert, SystemNote } from "./system-section";
 
 /** A user error as a sentence; a taken name gets its own, since the generic one says "refresh". */
 function describeUserError(error: unknown): string {
@@ -316,7 +316,10 @@ interface UserRowProps {
   readonly onRemove: (user: AdminUser) => void;
 }
 
-/** One user: name and badges, storage, last sign-in, when they were added, and what can change. */
+/**
+ * One user: the name with what marks the row (You, Admin, Disabled), storage, last sign-in, when
+ * they were added, and at the row's end the menu of what can change.
+ */
 function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowProps) {
   const update = useAdminUpdateUser();
   const { formatBytes } = useFormatters();
@@ -335,10 +338,10 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
     <DataTableRow>
       <DataTableCell className="@max-xl:whitespace-normal">
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="font-medium">{user.username}</span>
-          {user.isYou ? <Badge variant="outline">You</Badge> : null}
-          {user.isAdmin ? <Badge variant="secondary">Admin</Badge> : null}
-          {user.disabled ? <Badge variant="destructive">Disabled</Badge> : null}
+          <span>{user.username}</span>
+          {user.isYou ? <StatusBadge>You</StatusBadge> : null}
+          {user.isAdmin ? <StatusBadge>Admin</StatusBadge> : null}
+          {user.disabled ? <StatusBadge tone="off">Disabled</StatusBadge> : null}
         </div>
       </DataTableCell>
       <DataTableCell className="text-muted-foreground tabular-nums @max-xl:whitespace-normal">
@@ -351,7 +354,7 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
       <DataTableCell className="text-muted-foreground @max-xl:hidden">
         {formatShortDate(user.createdAt)}
       </DataTableCell>
-      <DataTableCell className="text-right">
+      <DataTableCell className="w-11 text-right">
         {user.isYou ? null : (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -359,7 +362,8 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
                 <Button
                   type="button"
                   variant="ghost"
-                  size="icon-sm"
+                  size="icon"
+                  className="rounded-full text-muted-foreground max-md:size-11"
                   aria-label={`Actions for ${user.username}`}
                   disabled={update.isPending}
                 />
@@ -367,7 +371,7 @@ function UserRow({ user, onResetPassword, onStorageLimit, onRemove }: UserRowPro
             >
               <MoreHorizontal />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
+            <DropdownMenuContent align="end" className="w-auto min-w-48">
               <DropdownMenuItem onClick={() => onResetPassword(user)}>
                 Reset password
               </DropdownMenuItem>
@@ -444,20 +448,24 @@ export function UsersPage() {
       title="Users"
       description="People who sign in to this server's local folder, each with a folder of their own."
       lastUpdated={dataUpdatedAt > 0 ? new Date(dataUpdatedAt) : null}
+      badges={
+        data !== undefined ? (
+          <StatusBadge>{users.length === 1 ? "1 user" : `${users.length} users`}</StatusBadge>
+        ) : null
+      }
       actions={
         <Button
           type="button"
-          size="sm"
+          size="lg"
           disabled={data === undefined}
           onClick={() => setAdding(true)}
         >
-          <UserPlus />
           Add user
         </Button>
       }
     >
       {isLoading ? (
-        <div className="flex flex-col gap-2 px-3 py-2.5">
+        <div className="flex flex-col gap-3">
           <Skeleton className="h-5 w-full" />
           <Skeleton className="h-5 w-full" />
           <Skeleton className="h-5 w-2/3" />
@@ -470,13 +478,10 @@ export function UsersPage() {
           description="Users can only be viewed and managed by an administrator."
         />
       ) : isError ? (
-        <SystemAlert row>{describeApiError(error)}</SystemAlert>
+        <SystemAlert>{describeApiError(error)}</SystemAlert>
       ) : null}
       {data !== undefined ? (
-        <SystemSection
-          title={users.length === 1 ? "1 user" : `${users.length} users`}
-          description="Removing a user, resetting their password or disabling them signs them out everywhere."
-        >
+        <>
           <DataTable>
             <DataTableHeader>
               <DataTableRow>
@@ -484,7 +489,7 @@ export function UsersPage() {
                 <DataTableHead>Storage</DataTableHead>
                 <DataTableHead className="@max-xl:hidden">Last sign-in</DataTableHead>
                 <DataTableHead className="@max-xl:hidden">Added</DataTableHead>
-                <DataTableHead className="w-12">
+                <DataTableHead className="w-11">
                   <span className="sr-only">Actions</span>
                 </DataTableHead>
               </DataTableRow>
@@ -501,14 +506,17 @@ export function UsersPage() {
               ))}
             </DataTableBody>
           </DataTable>
-          {users.some((user) => user.isYou) ? (
-            <SystemNote className="border-border/60 border-t">
+          <SystemNote>
+            <p>
+              Removing a user, resetting their password or disabling them signs them out everywhere.
+            </p>
+            {users.some((user) => user.isYou) ? (
               <p>
                 You can't disable, demote or remove yourself. Change your own password in Settings.
               </p>
-            </SystemNote>
-          ) : null}
-        </SystemSection>
+            ) : null}
+          </SystemNote>
+        </>
       ) : null}
 
       {adding ? <AddUserDialog open onClose={() => setAdding(false)} /> : null}

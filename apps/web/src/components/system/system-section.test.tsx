@@ -26,7 +26,7 @@ describe("SystemSection", () => {
     expect(screen.getByRole("heading", { name: "Status" })).toBeTruthy();
     expect(screen.getByText("How the sidecar is doing.")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Test" })).toBeTruthy();
-    // Rows bring their own padding, so the body sits edge to edge in a flat section.
+    // Rows bring their own hairlines, so the body sits straight in the section.
     const content = container.querySelector('[data-slot="page-section-content"]');
     expect(content?.firstElementChild).toBe(screen.getByText("Body"));
     expect(container.querySelector('[data-slot="card"]')).toBeNull();
@@ -42,16 +42,27 @@ describe("SystemSection", () => {
     expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
-  it("pads and stacks content that is not rows", () => {
+  it("stacks content that is not rows 12px apart, or as far as the section asks", () => {
     render(
-      <SystemSection title="Notes" padded contentClassName="gap-4">
-        <p>Body</p>
-      </SystemSection>,
+      <>
+        <SystemSection title="Notes" padded>
+          <p>Body</p>
+        </SystemSection>
+        <SystemSection title="Looser" padded contentClassName="gap-4">
+          <p>Other body</p>
+        </SystemSection>
+      </>,
     );
 
     const wrapper = screen.getByText("Body").parentElement;
-    expect(wrapper?.className).toContain("p-3");
-    expect(wrapper?.className).toContain("gap-4");
+    expect(wrapper?.className).toContain("flex-col");
+    expect(wrapper?.className).toContain("gap-3");
+    // The sheet pads its blocks, so the stack brings no padding of its own.
+    expect(wrapper?.className).not.toMatch(/(^|\s)p-\d/);
+    expect(wrapper?.parentElement?.dataset.slot).toBe("page-section-content");
+    const looser = screen.getByText("Other body").parentElement;
+    expect(looser?.className).toContain("gap-4");
+    expect(looser?.className).not.toContain("gap-3");
   });
 
   it("is a card inside the setup walkthrough", () => {
@@ -99,8 +110,11 @@ describe("the text blocks of a System page", () => {
     expect(screen.getByRole("status").textContent).toBe("Loading…");
     const [inline, row] = screen.getAllByRole("alert");
     expect(inline?.textContent).toBe("Something failed.");
-    expect(inline?.className).not.toContain("px-3");
-    // As a row of its own the alert is padded like the rows around it.
-    expect(row?.className).toContain("px-3");
+    expect(inline?.className).toContain("text-destructive");
+    expect(inline?.className).not.toContain("border-t");
+    // As a row of its own the alert takes the hairline and the padding of the rows around it.
+    expect(row?.className).toContain("text-destructive");
+    expect(row?.className).toContain("border-t");
+    expect(row?.className).toContain("py-4.5");
   });
 });

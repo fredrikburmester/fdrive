@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { FsEntry, ManagedShare } from "@fdrive/contracts";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { ShareDialog } from "./share-dialog";
 
@@ -104,6 +104,24 @@ it("shows friendly access and password labels for every selected option", async 
     "Keep without password",
   );
 }, 15000);
+it("saves an edit as it stands, closes on success, and closes without saving on Cancel", async () => {
+  calls.update.mockResolvedValue({ ...share, name: "Renamed" });
+  const close = vi.fn();
+  const view = render(<ShareDialog entries={[entry]} share={share} onClose={close} />);
+  // Unlike the Shares page's sheet, the dialog's Save does not wait for a change.
+  expect(screen.getByRole("button", { name: "Save changes" })).toHaveProperty("disabled", false);
+  fireEvent.change(screen.getByLabelText("Link name"), { target: { value: "Renamed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(calls.update).toHaveBeenCalledWith(share.id, expect.objectContaining({ name: "Renamed" }));
+  view.unmount();
+
+  render(<ShareDialog entries={[entry]} share={share} onClose={close} />);
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(close).toHaveBeenCalledTimes(2);
+  expect(calls.update).toHaveBeenCalledOnce();
+});
+
 it("shows a friendly Show as label for every presentation option", async () => {
   render(<ShareDialog entries={[entry]} share={share} onClose={vi.fn()} />);
   expect(screen.getByRole("combobox", { name: "Show as" }).textContent).toContain("Automatic");

@@ -77,20 +77,43 @@ test("upload completion leads to a durable journey, copies branch and exports ke
   await expect(history.getByText("Renamed", { exact: true })).toBeVisible();
   await expect(history.getByText("Uploaded", { exact: true })).toBeVisible();
   await expect(history.getByText("Finding the current location…", { exact: true })).toHaveCount(0);
-  // The journey is a table of rows under the day they happened on; a row opens into what was
-  // recorded about it and closes again.
+  // The journey is a table of rows under the day they happened on. Choosing a row docks what
+  // was recorded about it in a sheet beside the table, and Escape closes the sheet again.
   await expect(page.getByRole("heading", { name: "File journey", exact: true })).toBeVisible();
   await expect(history.locator('[data-slot="table-group-row"]').first()).toContainText("Today");
   await expect(history.getByRole("columnheader", { name: "Action", exact: true })).toBeVisible();
-  const renameDetails = history.getByRole("button", { name: /^Details for Renamed / });
-  await renameDetails.click();
-  const details = history.locator('[data-slot="activity-details"]');
-  await expect(details).toContainText(path);
-  await expect(details.getByRole("button", { name: "Show in folder", exact: true })).toBeEnabled();
-  await renameDetails.click();
-  await expect(details).toHaveCount(0);
-  await history.getByText("Related files", { exact: true }).click();
-  await expect(history.getByRole("link", { name: /copy.txt/ })).toBeVisible();
+  // Exact, since other rows name the file, and its name holds the same word.
+  const renamedRow = history
+    .locator('[data-slot="activity-row"]')
+    .filter({ has: page.getByText("Renamed", { exact: true }) });
+  await expect(renamedRow).toHaveAttribute("aria-selected", "false");
+  // The row's action, not its middle: the item's name there is a link that opens the file.
+  await renamedRow.getByText("Renamed", { exact: true }).click();
+  await expect(renamedRow).toHaveAttribute("aria-selected", "true");
+  const eventSheet = history.getByRole("region", { name: "Renamed", exact: true });
+  await expect(eventSheet).toContainText(path);
+  await expect(
+    eventSheet.getByRole("button", { name: "Show in folder", exact: true }),
+  ).toBeEnabled();
+  // Nothing opened in place: the table holds only its day rows and its events, and the page
+  // still fits its window.
+  await expect(
+    history.locator('tbody tr:not([data-slot="activity-row"]):not([data-slot="table-group-row"])'),
+  ).toHaveCount(0);
+  await expect(history.locator("details")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.keyboard.press("Escape");
+  await expect(eventSheet).toHaveCount(0);
+  await expect(renamedRow).toHaveAttribute("aria-selected", "false");
+  await expect(renamedRow).toBeFocused();
+  // The file's related files and revision records are in a sheet of its own.
+  await history.getByRole("button", { name: "File details", exact: true }).click();
+  const fileSheet = history.getByRole("region", { name: "renamed.txt", exact: true });
+  await expect(fileSheet.getByRole("link", { name: /copy.txt/ })).toBeVisible();
+  await fileSheet.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(fileSheet).toHaveCount(0);
   await page.reload();
   await expect(history.getByText("Uploaded", { exact: true })).toBeVisible();
   for (const width of [320, 393, 1280]) {

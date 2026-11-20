@@ -174,10 +174,10 @@ function lastFilters(): Record<string, unknown> {
   return mocks.historyCalls.at(-1)?.[0] as Record<string, unknown>;
 }
 
-/** The label and value pairs an open details row lists. */
-function factsOf(details: HTMLElement): Record<string, string | null | undefined> {
+/** The label and value pairs a sheet lists. */
+function factsOf(sheet: HTMLElement): Record<string, string | null | undefined> {
   return Object.fromEntries(
-    [...details.querySelectorAll("dt")].map((term) => [
+    [...sheet.querySelectorAll("dt")].map((term) => [
       term.textContent ?? "",
       term.nextElementSibling?.textContent,
     ]),
@@ -185,9 +185,22 @@ function factsOf(details: HTMLElement): Record<string, string | null | undefined
 }
 
 function rowOf(text: string): HTMLElement {
-  const row = screen.getByText(text).closest("tr");
+  const row = within(screen.getByRole("table")).getByText(text).closest("tr");
   if (row === null) throw new Error(`no row holds ${text}`);
   return row;
+}
+
+/** The sheet docked beside the table, or `null` while nothing is chosen. */
+function dockedSheet(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-slot="detail-sheet"]');
+}
+
+/** Chooses the row that holds `text` and returns the sheet it opens. */
+function choose(text: string): HTMLElement {
+  fireEvent.click(rowOf(text));
+  const sheet = dockedSheet();
+  if (sheet === null) throw new Error(`choosing ${text} opened no sheet`);
+  return sheet;
 }
 
 beforeEach(() => {
@@ -222,9 +235,13 @@ it("lists events as table rows grouped by the day they happened", () => {
 
   expect(screen.getByRole("heading", { name: "My activity" })).toBeTruthy();
   expect(screen.getByText("3 events")).toBeTruthy();
-  for (const column of ["Time", "Action", "Item", "Location", "Client", "Result"]) {
-    expect(screen.getByRole("columnheader", { name: column })).toBeTruthy();
-  }
+  const head = document.querySelector("thead");
+  if (head === null) throw new Error("the table has no header");
+  expect(
+    within(head)
+      .getAllByRole("columnheader")
+      .map((column) => column.textContent),
+  ).toEqual(["Time", "Action", "Item", "Location", "Client", "Result"]);
 
   const groups = [...document.querySelectorAll('[data-slot="table-group-row"]')];
   expect(groups.map((group) => group.textContent)).toEqual(["Today2", "Yesterday1"]);
@@ -245,14 +262,21 @@ it("lists events as table rows grouped by the day they happened", () => {
   expect(rename.getByText("renamed.txt")).toBeTruthy();
   expect(rename.getByText("from old.txt")).toBeTruthy();
   expect(rename.getByText("/docs")).toBeTruthy();
-  expect(rename.getByText("web")).toBeTruthy();
-  expect(rename.getByText("success")).toBeTruthy();
+  expect(rename.getByText("Web")).toBeTruthy();
+  expect(rename.getByText("Success")).toBeTruthy();
 
   // A top-level item is in Home, and a failed action stands out.
   expect(within(rowOf("Uploaded")).getByText("Home")).toBeTruthy();
-  const failed = within(rowOf("Moved to Trash")).getByText("failed");
+  const failed = within(rowOf("Moved to Trash")).getByText("Failed");
   expect(failed.className).toContain("text-destructive");
-  expect(within(rowOf("Moved to Trash")).getByText("native")).toBeTruthy();
+  expect(within(rowOf("Moved to Trash")).getByText("Native app")).toBeTruthy();
+
+  // Nothing is chosen until a row is, so no sheet is docked beside the table.
+  expect(dockedSheet()).toBeNull();
+  for (const row of document.querySelectorAll('[data-slot="activity-row"]')) {
+    expect(row.getAttribute("aria-selected")).toBe("false");
+    expect(row.hasAttribute("data-state")).toBe(false);
+  }
 });
 
 it("says how often a repeated action happened and marks a read that is not settled yet", () => {
@@ -266,19 +290,23 @@ it("says how often a repeated action happened and marks a read that is not settl
   expect(screen.getByText("1 event")).toBeTruthy();
 });
 
-it("opens a row into everything recorded about the event, and closes it again", () => {
+it("docks a chosen row's event in a sheet beside the table, and closes it again", () => {
   renderPage();
-  const toggle = screen.getByRole("button", { name: "Details for Renamed renamed.txt" });
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  expect(document.querySelector('[data-slot="activity-details"]')).toBeNull();
+  const row = rowOf("Renamed");
 
-  fireEvent.click(toggle);
+  const sheet = choose("Renamed");
 
-  expect(toggle.getAttribute("aria-expanded")).toBe("true");
-  const details = document.querySelector<HTMLElement>('[data-slot="activity-details"]');
-  if (details === null) throw new Error("the details row did not open");
-  expect(toggle.getAttribute("aria-controls")).toBe(details.id);
-  const panel = within(details);
+  expect(row.getAttribute("aria-selected")).toBe("true");
+  expect(row.getAttribute("data-state")).toBe("selected");
+  expect(rowOf("Uploaded").getAttribute("aria-selected")).toBe("false");
+  // The sheet is a column of the dock, after the rows, and says what happened as its title.
+  expect(sheet.getAttribute("data-width")).toBe("docked");
+  expect(sheet.parentElement?.getAttribute("data-slot")).toBe("sheet-dock");
+  expect(screen.getByRole("region", { name: "Renamed" })).toBe(sheet);
+  const panel = within(sheet);
+  expect(panel.getByRole("heading", { level: 2, name: "Renamed" })).toBeTruthy();
+  expect(panel.getByText("renamed.txt")).toBeTruthy();
+  expect(panel.getByText("Success").getAttribute("data-tone")).toBe("success");
   expect(panel.getByRole("button", { name: "Open" })).toBeTruthy();
   expect(panel.getByRole("button", { name: "Show in folder" })).toBeTruthy();
   expect(panel.getByRole("link", { name: "File journey" }).getAttribute("href")).toBe(
@@ -287,19 +315,134 @@ it("opens a row into everything recorded about the event, and closes it again", 
   expect(panel.getByRole("link", { name: "View batch" }).getAttribute("href")).toBe(
     `/activity/batches/${BATCH_ID}`,
   );
-  const facts = factsOf(details);
+  const facts = factsOf(sheet);
   expect(facts).toMatchObject({
     Path: "/docs/renamed.txt",
     From: "/docs/old.txt",
-    Client: "web",
-    Evidence: "server confirmed",
+    Client: "Web",
+    Evidence: "Server confirmed",
     Size: `${(2048).toLocaleString()} bytes`,
   });
   expect(facts.When).toBe(new Date(renamed.sortAt).toLocaleString());
+  // The file's journey is part of the event's sheet.
+  expect(panel.getByTestId("journey-details").textContent).toBe(FILE_ID);
 
-  fireEvent.click(toggle);
-  expect(document.querySelector('[data-slot="activity-details"]')).toBeNull();
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  // Nothing opened in place: the table has the rows it had, and no disclosure anywhere.
+  expect(document.querySelectorAll("tbody tr")).toHaveLength(5);
+  expect(document.querySelector("details")).toBeNull();
+  expect(screen.getByRole("table").querySelector("[aria-expanded]")).toBeNull();
+
+  // Choosing another row shows that event in the sheet's place.
+  const other = choose("Uploaded");
+  expect(screen.getByRole("region", { name: "Uploaded" })).toBe(other);
+  expect(document.querySelectorAll('[data-slot="detail-sheet"]')).toHaveLength(1);
+  expect(row.getAttribute("aria-selected")).toBe("false");
+
+  fireEvent.click(within(other).getByRole("button", { name: "Close" }));
+  expect(dockedSheet()).toBeNull();
+  expect(rowOf("Uploaded").getAttribute("aria-selected")).toBe("false");
+  // Focus goes back to the row the sheet was opened from.
+  expect(document.activeElement).toBe(rowOf("Uploaded"));
+});
+
+it("chooses a row from the keyboard and closes its sheet with Escape", () => {
+  renderPage();
+  const row = rowOf("Renamed");
+  expect(row.tabIndex).toBe(0);
+
+  row.focus();
+  fireEvent.keyDown(row, { key: "Enter" });
+  const sheet = dockedSheet();
+  if (sheet === null) throw new Error("Enter opened no sheet");
+  // Focus moves into the sheet, which is past every row in the tab order.
+  expect(document.activeElement).toBe(sheet);
+
+  fireEvent.keyDown(sheet, { key: "Escape" });
+  expect(dockedSheet()).toBeNull();
+  expect(document.activeElement).toBe(row);
+
+  fireEvent.keyDown(row, { key: " " });
+  expect(dockedSheet()).not.toBeNull();
+  // Escape inside the sheet closes it from wherever focus is.
+  const close = screen.getByRole("button", { name: "Close" });
+  close.focus();
+  fireEvent.keyDown(close, { key: "Escape" });
+  expect(dockedSheet()).toBeNull();
+  expect(document.activeElement).toBe(row);
+
+  // Escape on a row closes the sheet too, and other keys do nothing.
+  fireEvent.keyDown(row, { key: "Enter" });
+  const uploaded = rowOf("Uploaded");
+  uploaded.focus();
+  fireEvent.keyDown(uploaded, { key: "ArrowDown" });
+  expect(dockedSheet()).not.toBeNull();
+  fireEvent.keyDown(uploaded, { key: "Escape" });
+  expect(dockedSheet()).toBeNull();
+  expect(document.activeElement).toBe(uploaded);
+  // With nothing open, Escape has nothing to close.
+  fireEvent.keyDown(uploaded, { key: "Escape" });
+  expect(dockedSheet()).toBeNull();
+});
+
+it("leaves the keys of a link inside a row to that link", () => {
+  renderPage();
+
+  fireEvent.keyDown(within(rowOf("Renamed")).getByRole("button", { name: "renamed.txt" }), {
+    key: "Enter",
+  });
+
+  expect(dockedSheet()).toBeNull();
+});
+
+it("keeps the sheet on an operation while its outcome replaces its intent", () => {
+  const operationId = "00000000-0000-4000-8000-0000000000c1";
+  mocks.history = feed([
+    event({
+      id: "00000000-0000-4000-8000-000000000011",
+      operationId,
+      stage: "intent",
+      outcome: null,
+      after: { path: "/top.txt" },
+    }),
+  ]);
+  renderPage();
+  expect(within(choose("Uploaded")).getByText("Started")).toBeTruthy();
+
+  mocks.history = feed([
+    event({
+      id: "00000000-0000-4000-8000-000000000012",
+      operationId,
+      after: { path: "/top.txt" },
+    }),
+  ]);
+  // Anything that renders the page again reads the feed again.
+  fireEvent.change(screen.getByLabelText("Search activity by name or path"), {
+    target: { value: "t" },
+  });
+
+  const sheet = dockedSheet();
+  if (sheet === null) throw new Error("the sheet closed when the outcome arrived");
+  expect(within(sheet).getByText("Success")).toBeTruthy();
+  expect(rowOf("Uploaded").getAttribute("aria-selected")).toBe("true");
+});
+
+it("closes the sheet of an event the feed no longer shows, for good", () => {
+  renderPage();
+  choose("Renamed");
+
+  mocks.history = feed([uploaded]);
+  fireEvent.change(screen.getByLabelText("Search activity by name or path"), {
+    target: { value: "t" },
+  });
+  expect(dockedSheet()).toBeNull();
+
+  // The event coming back does not open its sheet again.
+  mocks.history = feed([renamed, uploaded]);
+  fireEvent.change(screen.getByLabelText("Search activity by name or path"), {
+    target: { value: "" },
+  });
+  expect(rowOf("Renamed").getAttribute("aria-selected")).toBe("false");
+  expect(dockedSheet()).toBeNull();
 });
 
 it("lists what a failed event recorded, and the files a larger one touched", () => {
@@ -307,6 +450,7 @@ it("lists what a failed event recorded, and the files a larger one touched", () 
     event({
       action: "share.update",
       evidence: "client_reported",
+      outcome: "failed",
       errorCode: "not_found",
       lastConfirmedAt: noon(0),
       firstAt: noon(0, 9),
@@ -343,23 +487,27 @@ it("lists what a failed event recorded, and the files a larger one touched", () 
   ]);
   renderPage();
 
-  fireEvent.click(screen.getByRole("button", { name: "Details for Updated share a.txt" }));
+  const sheet = choose("Updated share");
 
-  const details = document.querySelector<HTMLElement>('[data-slot="activity-details"]');
-  if (details === null) throw new Error("the details row did not open");
-  const panel = within(details);
+  const panel = within(sheet);
+  expect(panel.getByText("Failed").getAttribute("data-tone")).toBe("danger");
   expect(panel.getByText("Reported by your client")).toBeTruthy();
-  expect(panel.getByText("Files involved (2)")).toBeTruthy();
-  // Read from the markup: the list sits in a closed disclosure until it is opened. Scoped to
-  // that disclosure, since the row's own File journey button links to the same page.
-  expect(details.querySelector(`details a[href="/activity/files/${FILE_ID}"]`)?.textContent).toBe(
-    "/docs/a.txt",
+  // The files are listed in the open, each a link to its own journey where it has one.
+  const files = panel.getByRole("heading", { name: "Files involved (2)" }).closest("section");
+  if (files === null) throw new Error("the files have no block of their own");
+  const members = within(files).getAllByRole("listitem");
+  expect(members.map((member) => member.textContent)).toEqual([
+    "primary/docs/a.txt",
+    "affectedLocation unavailable",
+  ]);
+  expect(within(files).getByRole("link", { name: "/docs/a.txt" }).getAttribute("href")).toBe(
+    `/activity/files/${FILE_ID}`,
   );
-  expect(panel.getByText("Location unavailable")).toBeTruthy();
-  const facts = factsOf(details);
+  expect(sheet.querySelector("details")).toBeNull();
+  const facts = factsOf(sheet);
   expect(facts).toMatchObject({
-    Evidence: "client reported",
-    Result: "not found",
+    Evidence: "Client reported",
+    Result: "Not found",
     "Trash location": "/.trash/a",
     Before: "Favorite: no · Share permissions: read · Share expiry: none",
     After: "Tags: none · Favorite: yes · Folder view: grid · Completed: 2 · Failed: 1",
@@ -384,16 +532,23 @@ it("opens the file from its name and shows it in its folder from its location", 
   await waitFor(() => expect(row.getByRole("button", { name: "/docs" })).toBeTruthy());
   fireEvent.click(row.getByRole("button", { name: "/docs" }));
   await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/files/docs?select=renamed.txt"));
+  // Going to the file is not choosing its row.
+  expect(dockedSheet()).toBeNull();
 });
 
-it("opens a folder in the file browser from the details", async () => {
+it("opens a folder in the file browser, and shows a file in its folder, from the sheet", async () => {
   mocks.activityFile.mockResolvedValue({ currentPath: "/docs/kept", kind: "dir" });
   renderPage();
 
-  fireEvent.click(screen.getByRole("button", { name: "Details for Moved to Trash gone" }));
-  fireEvent.click(screen.getByRole("button", { name: "Open" }));
-
+  const panel = within(choose("Moved to Trash"));
+  fireEvent.click(panel.getByRole("button", { name: "Open" }));
   await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/files/docs/kept"));
+
+  await waitFor(() =>
+    expect(panel.getByRole("button", { name: "Show in folder" })).toHaveProperty("disabled", false),
+  );
+  fireEvent.click(panel.getByRole("button", { name: "Show in folder" }));
+  await waitFor(() => expect(mocks.push).toHaveBeenCalledWith("/files/docs?select=kept"));
 });
 
 it("says when a file can no longer be opened, keeping its journey", async () => {
@@ -437,20 +592,22 @@ it("does not offer to open a file another login recorded, or an event without on
   expect(theirs.getByText("theirs.txt")).toBeTruthy();
   expect(theirs.queryByRole("button", { name: "theirs.txt" })).toBeNull();
   expect(theirs.queryByRole("button", { name: "/docs" })).toBeNull();
-  fireEvent.click(theirs.getByRole("button", { name: "Details for Uploaded theirs.txt" }));
-  expect(screen.getByRole("button", { name: "Open" })).toHaveProperty("disabled", true);
-  expect(screen.getByRole("button", { name: "Show in folder" })).toHaveProperty("disabled", true);
-  fireEvent.click(theirs.getByRole("button", { name: "Details for Uploaded theirs.txt" }));
+  const sheet = within(choose("Uploaded"));
+  expect(sheet.getByRole("button", { name: "Open" })).toHaveProperty("disabled", true);
+  expect(sheet.getByRole("button", { name: "Show in folder" })).toHaveProperty("disabled", true);
 
-  // An event about no file has no item, no location, and nothing to open in its details.
+  // An event about no file has no item, no location, and nothing to open or follow in its sheet.
   const emptied = rowOf("Emptied Trash");
   expect(within(emptied).getAllByText("--")).toHaveLength(2);
-  fireEvent.click(within(emptied).getByRole("button", { name: "Details for Emptied Trash" }));
-  expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
-  expect(screen.queryByRole("link", { name: "File journey" })).toBeNull();
+  const empty = within(choose("Emptied Trash"));
+  expect(empty.getByRole("heading", { level: 2, name: "Emptied Trash" })).toBeTruthy();
+  expect(empty.queryByRole("button", { name: "Open" })).toBeNull();
+  expect(empty.queryByRole("link", { name: "File journey" })).toBeNull();
+  expect(empty.queryByTestId("journey-details")).toBeNull();
+  expect(empty.queryByText(/^Files involved/)).toBeNull();
 });
 
-it("keeps what an observation leaves uncertain in the row itself", () => {
+it("keeps what an observation leaves uncertain in the row itself, and in its sheet", () => {
   mocks.history = feed([
     event({
       id: "00000000-0000-4000-8000-000000000007",
@@ -469,6 +626,13 @@ it("keeps what an observation leaves uncertain in the row itself", () => {
   ).toBeTruthy();
   expect(row.getByText(/Whether this is the earlier file remains unknown/)).toBeTruthy();
   expect(row.getByText("Started")).toBeTruthy();
+
+  const sheet = within(choose("Unknown event resolved"));
+  expect(
+    sheet.getByText("Detected outside a confirmed fdrive action. Who made this change is unknown."),
+  ).toBeTruthy();
+  expect(sheet.getByText(/Whether this is the earlier file remains unknown/)).toBeTruthy();
+  expect(sheet.getByText("Started").getAttribute("data-tone")).toBe("neutral");
 });
 
 it("folds each row to two lines on a phone and puts the filters behind a button", () => {
@@ -482,8 +646,13 @@ it("folds each row to two lines on a phone and puts the filters behind a button"
   expect(rename.getByText("12:00")).toBeTruthy();
   expect(rename.getByText("· /docs")).toBeTruthy();
   // Only a result worth a look takes room on a phone.
-  expect(rename.queryByText(/success/)).toBeNull();
-  expect(within(rowOf("Moved to Trash")).getByText("· failed")).toBeTruthy();
+  expect(rename.queryByText(/Success/)).toBeNull();
+  expect(within(rowOf("Moved to Trash")).getByText("· Failed")).toBeTruthy();
+  // A row is chosen on a phone as anywhere else, and its sheet has the way back.
+  const sheet = choose("Renamed");
+  expect(within(sheet).getByRole("heading", { level: 2, name: "Renamed" })).toBeTruthy();
+  fireEvent.click(within(sheet).getByRole("button", { name: "Close" }));
+  expect(dockedSheet()).toBeNull();
 
   expect(screen.queryByRole("combobox", { name: "Action" })).toBeNull();
   const filters = screen.getByRole("button", { name: "Filters" });
@@ -516,7 +685,7 @@ it("searches and filters the feed, and clears the filters without losing the sea
   expect(lastFilters()).toEqual({ q: "report" });
 
   fireEvent.click(screen.getByRole("combobox", { name: "Source" }));
-  fireEvent.keyDown(await screen.findByRole("option", { name: "office" }), { key: "Enter" });
+  fireEvent.keyDown(await screen.findByRole("option", { name: "Office" }), { key: "Enter" });
   await waitFor(() => expect(lastFilters()).toMatchObject({ q: "report", source: "office" }));
 
   fireEvent.change(screen.getByLabelText("Activity from date"), {
@@ -648,7 +817,7 @@ it("shows one file's journey: where it is now, then what happened to it", async 
       lastKnownPath: "/docs/renamed.txt",
       currentPath: "/docs/renamed.txt",
       availability: "live",
-      lastConfirmedAt: null,
+      lastConfirmedAt: noon(1),
       revisionId: null,
     },
   };
@@ -659,18 +828,45 @@ it("shows one file's journey: where it is now, then what happened to it", async 
   expect(screen.getByRole("link", { name: "My activity" }).getAttribute("href")).toBe("/activity");
   expect(mocks.historyCalls.at(-1)?.[1]).toBe(`/files/${FILE_ID}/events`);
   expect(screen.getByRole("heading", { name: "renamed.txt" })).toBeTruthy();
-  expect(screen.getByText("live")).toBeTruthy();
+  expect(screen.getByText("Live").getAttribute("data-tone")).toBe("success");
   expect(
     screen.getByText(
       "ada · Revision records describe changes; earlier file contents are not stored.",
     ),
   ).toBeTruthy();
-  expect(screen.getByTestId("journey-details").textContent).toBe(FILE_ID);
+  // The file's related files and revisions wait in its sheet; nothing opens above the table.
+  expect(screen.queryByTestId("journey-details")).toBeNull();
+  expect(document.querySelector("details")).toBeNull();
 
-  // A row about this file needs no link to the journey it is already on.
-  fireEvent.click(screen.getByRole("button", { name: "Details for Renamed renamed.txt" }));
-  expect(screen.queryByRole("link", { name: "File journey" })).toBeNull();
-  expect(screen.getByRole("link", { name: "View batch" })).toBeTruthy();
+  const details = screen.getByRole("button", { name: "File details" });
+  expect(details.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(details);
+  expect(details.getAttribute("aria-expanded")).toBe("true");
+  const fileSheet = dockedSheet();
+  if (fileSheet === null) throw new Error("the file's sheet did not open");
+  expect(screen.getByRole("region", { name: "renamed.txt" })).toBe(fileSheet);
+  expect(document.activeElement).toBe(fileSheet);
+  expect(within(fileSheet).getByTestId("journey-details").textContent).toBe(FILE_ID);
+  expect(factsOf(fileSheet)).toEqual({
+    Location: "/docs/renamed.txt",
+    Kind: "File",
+    Login: "ada",
+    "Last confirmed": new Date(noon(1)).toLocaleString(),
+  });
+  fireEvent.keyDown(fileSheet, { key: "Escape" });
+  expect(dockedSheet()).toBeNull();
+  expect(document.activeElement).toBe(details);
+
+  // A row about this file needs no link to the journey it is already on, and its sheet does not
+  // repeat what the file's own sheet shows.
+  const eventSheet = within(choose("Renamed"));
+  expect(eventSheet.queryByRole("link", { name: "File journey" })).toBeNull();
+  expect(eventSheet.queryByTestId("journey-details")).toBeNull();
+  expect(eventSheet.getByRole("link", { name: "View batch" })).toBeTruthy();
+  // One sheet at a time: the file's takes the event's place.
+  fireEvent.click(details);
+  expect(document.querySelectorAll('[data-slot="detail-sheet"]')).toHaveLength(1);
+  expect(rowOf("Renamed").getAttribute("aria-selected")).toBe("false");
 
   // An export from here covers this file alone.
   fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
@@ -711,9 +907,23 @@ it("falls back to where a file was last seen, without a label", () => {
 
   expect(screen.getByRole("heading", { name: "lost.txt" })).toBeTruthy();
   expect(screen.getByText("/docs/lost.txt")).toBeTruthy();
+  expect(screen.getByText("Unknown").getAttribute("data-tone")).toBe("warning");
   expect(
     screen.getByText("Revision records describe changes; earlier file contents are not stored."),
   ).toBeTruthy();
+
+  // Its sheet says where it was last seen, since nowhere holds it now.
+  fireEvent.click(screen.getByRole("button", { name: "File details" }));
+  const sheet = dockedSheet();
+  if (sheet === null) throw new Error("the file's sheet did not open");
+  expect(factsOf(sheet)).toEqual({ "Last seen at": "/docs/lost.txt", Kind: "File" });
+});
+
+it("offers no sheet for a journey's file until the file is known", () => {
+  renderPage({ fileId: FILE_ID });
+
+  expect(screen.queryByRole("button", { name: "File details" })).toBeNull();
+  expect(dockedSheet()).toBeNull();
 });
 
 it("shows one batch's events with how its operations ended", () => {
