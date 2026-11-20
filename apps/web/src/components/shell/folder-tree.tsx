@@ -194,7 +194,7 @@ function FolderTreeRow({
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className="h-9 flex-1 data-[size=md]:text-[15px] data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
+            className="h-9 flex-1 data-[size=md]:text-[15px] data-[drop-target=true]:bg-ring/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-ring/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring"
           >
             <span className="truncate">{name}</span>
           </SidebarMenuSubButton>
@@ -432,7 +432,7 @@ export function FolderTree() {
             onDrop={handleRootDrop}
             className={cn(
               SIDEBAR_ROW,
-              "flex-1 data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
+              "flex-1 data-[drop-target=true]:bg-ring/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-ring/50 data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
             )}
           >
             <FolderIcon />

@@ -20,7 +20,7 @@ export function createDragImageElement(doc: Document, label: string, count: numb
   if (count > 1) {
     const badge = doc.createElement("span");
     badge.className =
-      "flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] text-primary-foreground";
+      "flex h-4 min-w-4 items-center justify-center rounded-full bg-ring px-1 text-[10px] text-white";
     badge.textContent = String(count);
     element.appendChild(badge);
   }

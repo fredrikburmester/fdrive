@@ -239,7 +239,7 @@ function SnippetText({ snippet }: { snippet: SearchSnippet }) {
       {segments.map((segment, index) =>
         segment.highlighted ? (
           // biome-ignore lint/suspicious/noArrayIndexKey: segments are a stable derived render of static props
-          <mark key={index} className="rounded-sm bg-primary/20 text-foreground">
+          <mark key={index} className="rounded-sm bg-ring/20 text-foreground">
             {segment.text}
           </mark>
         ) : (

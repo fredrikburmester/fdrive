@@ -453,7 +453,7 @@ export function TrashPage() {
                       <div
                         key={entry.id}
                         data-state={selected.has(entry.id) ? "selected" : undefined}
-                        className="flex min-w-0 items-start gap-3 border-border/60 border-r border-b px-3 py-2.5 hover:bg-muted/60 data-[state=selected]:bg-primary/10"
+                        className="flex min-w-0 items-start gap-3 border-border/60 border-r border-b px-3 py-2.5 hover:bg-muted/60 data-[state=selected]:bg-ring/10"
                       >
                         <Checkbox
                           className="mt-0.5"

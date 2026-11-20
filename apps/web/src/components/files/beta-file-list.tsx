@@ -442,7 +442,7 @@ export function BetaFileList({
             onClick={() => setSelecting((on) => !on)}
             className={cn(
               "absolute right-0 text-muted-foreground",
-              selecting && "font-medium text-primary hover:text-primary",
+              selecting && "font-medium text-ring hover:text-ring",
             )}
           >
             {selecting ? "Done" : "Select"}
@@ -574,7 +574,7 @@ export function BetaFileList({
                   if (inRow(event)) onEntryDoubleClick(entry);
                 }}
                 className={cn(
-                  "group/row absolute flex items-center pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-primary/15",
+                  "group/row absolute flex items-center pr-1 text-sm not-data-[selected=true]:hover:bg-muted/60 data-[focused=true]:not-data-[selected=true]:bg-muted data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground data-[drop-target=true]:bg-ring/15",
                   gap,
                   hoverControls ? "inset-x-2 rounded-md" : "inset-x-0 border-border/60 border-b",
                   hoverControls && joinsAbove && "rounded-t-none",

@@ -471,9 +471,9 @@ export function FileGrid({
                           onDoubleClick={() => onEntryDoubleClick(entry)}
                           className={cn(
                             "flex flex-col items-center gap-1.5 rounded-lg p-2 text-center outline-none hover:bg-muted/60",
-                            "data-[drop-target=true]:bg-primary/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-primary/50",
+                            "data-[drop-target=true]:bg-ring/5 data-[drop-target=true]:ring-2 data-[drop-target=true]:ring-ring/50",
                             "data-[focused=true]:ring-1 data-[focused=true]:ring-inset data-[focused=true]:ring-ring",
-                            "data-[selected=true]:bg-primary/10",
+                            "data-[selected=true]:bg-ring/10",
                           )}
                         >
                           <GridTileIcon

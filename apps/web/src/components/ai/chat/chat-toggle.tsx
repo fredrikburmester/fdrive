@@ -64,7 +64,7 @@ export function ChatToggle() {
             <Button
               variant={open ? "secondary" : "ghost"}
               size="icon-sm"
-              className={cn("relative max-md:size-11", dropping && "ring-2 ring-primary")}
+              className={cn("relative max-md:size-11", dropping && "ring-2 ring-ring")}
               aria-label="Chat"
               aria-expanded={open}
               aria-describedby={statusId}
@@ -87,7 +87,7 @@ export function ChatToggle() {
             <span
               aria-hidden="true"
               data-slot="chat-toggle-dot"
-              className="absolute top-1 right-1 size-1.5 rounded-full bg-primary max-md:top-2.5 max-md:right-2.5"
+              className="absolute top-1 right-1 size-1.5 rounded-full bg-ring max-md:top-2.5 max-md:right-2.5"
             />
           ) : null}
         </TooltipTrigger>

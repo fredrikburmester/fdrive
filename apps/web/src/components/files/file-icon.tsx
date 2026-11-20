@@ -25,7 +25,7 @@ import { cn } from "@/lib/utils";
  * tags use; plain text, code, archives and anything unknown stay muted.
  */
 const ICONS: Record<FileIconKind, { icon: LucideIcon; color: string }> = {
-  folder: { icon: FolderIcon, color: "text-primary" },
+  folder: { icon: FolderIcon, color: "text-ring" },
   image: { icon: ImageIcon, color: "text-tag-purple" },
   video: { icon: VideoIcon, color: "text-tag-orange" },
   audio: { icon: MusicIcon, color: "text-tag-red" },

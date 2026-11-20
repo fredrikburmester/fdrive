@@ -113,7 +113,7 @@ export function DropOverlay({ visible, destinationName }: DropOverlayProps) {
   return (
     <div
       role="presentation"
-      className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-primary/40 bg-background/85 backdrop-blur-sm duration-150 animate-in fade-in-0"
+      className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center rounded-xl border-2 border-dashed border-ring/40 bg-background/85 backdrop-blur-sm duration-150 animate-in fade-in-0"
     >
       <p className="text-sm font-medium text-foreground">
         Drop to upload to <span className="font-semibold">{destinationName}</span>

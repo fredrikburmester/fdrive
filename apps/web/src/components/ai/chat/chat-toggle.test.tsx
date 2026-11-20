@@ -180,13 +180,13 @@ it("takes items dragged from a listing, marked and hinted while they hover, and 
   act(() => startDragSession(["/Inbox/b.txt"]));
   fireEvent.dragOver(button, { dataTransfer });
   expect(button.getAttribute("data-dropping")).toBe("true");
-  expect(button.className).toContain("ring-primary");
+  expect(button.className).toContain("ring-ring");
   expect(dataTransfer.dropEffect).toBe("copy");
   expect((await screen.findAllByText("Drop to add to chat")).length).toBeGreaterThan(0);
 
   fireEvent.dragLeave(button);
   expect(button.getAttribute("data-dropping")).toBeNull();
-  expect(button.className).not.toContain("ring-primary");
+  expect(button.className).not.toContain("ring-ring");
 
   fireEvent.dragOver(button, { dataTransfer });
   fireEvent.drop(button, { dataTransfer });
